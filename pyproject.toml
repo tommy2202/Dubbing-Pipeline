@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anime-dubbing-v1"
+version = "1.0.0b0"
+authors = [{name="Your Name"}]
+description = "Offline anime dubbing suite - Version 1 slice 1"
+readme = "README.md"
+
+[project.scripts]
+anime-v1 = "anime_v1.cli:cli"
