@@ -5,6 +5,7 @@ from anime_v1.stages import (
     diarisation,
     transcription,
     tts,
+    separation,
     mkv_export,
 )
 from anime_v1.utils import logger
@@ -124,6 +125,13 @@ def cli(video, src_lang, tgt_lang, mode, voice, out_dir, lipsync_flag, keep_bg_f
         preference=defaults["tts_preference"],
         source_audio=wav,
     )
+
+    # 5.5) Optional source separation for background preservation
+    if defaults["keep_bg"]:
+        try:
+            separation.run(wav, ckpt_dir=ckpt)
+        except Exception as ex:  # pragma: no cover
+            logger.warning("Separation stage skipped (%s)", ex)
 
     # 6) Optional lip-sync stage (stubbed by default)
     video_for_mux = video

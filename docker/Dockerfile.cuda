@@ -1,0 +1,27 @@
+# CUDA-enabled image for GPU acceleration
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV COQUI_TOS_AGREED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv \
+    ffmpeg \
+    espeak-ng libespeak-ng1 \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Ensure python points to python3
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1 && \
+    python -m pip install --upgrade pip
+
+COPY docker/constraints.txt /tmp/constraints.txt
+# Install torch with CUDA; pin versions compatible with CUDA base
+RUN python -m pip install --no-cache-dir torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu121
+RUN python -m pip install --no-cache-dir -r /tmp/constraints.txt
+
+WORKDIR /app
+COPY . /app
+RUN python -m pip install --no-cache-dir -e .
+
+ENTRYPOINT ["anime-v1"]
