@@ -17,3 +17,5 @@ moviepy==1.0.3
 katna==0.2.3
 demucs==4.0.1
 vosk==0.3.45
+git+https://github.com/neonbjb/tortoise-tts.git
+pyannote.audio==3.2.0
