@@ -149,12 +149,22 @@ def cli(video, src_lang, tgt_lang, mode, voice, out_dir, lipsync_flag, keep_bg_f
             logger.warning("Lip-sync stage skipped (%s)", ex)
 
     # 7) Export/mux
-    mkv_export.run(
+    result = mkv_export.run(
         video_for_mux,
         ckpt_dir=ckpt,
         out_dir=pathlib.Path(out_dir),
         keep_bg=defaults["keep_bg"],
         transcript_override=pathlib.Path(transcript_for_tts),
+    )
+    # Emit final summary
+    logger.info(
+        "Summary: mode=%s lipsync=%s keep_bg=%s asr=%s tts=%s output=%s",
+        mode,
+        defaults["lipsync"],
+        defaults["keep_bg"],
+        defaults["asr_model"],
+        defaults["tts_preference"],
+        result,
     )
 
 if __name__ == '__main__':

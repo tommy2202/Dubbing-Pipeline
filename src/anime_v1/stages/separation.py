@@ -25,15 +25,18 @@ def run(audio_wav: pathlib.Path, ckpt_dir: pathlib.Path):
             str(audio_wav),
         ]
         subprocess.run(cmd, check=True)
-        # Find instrumental stem (assumes folder structure demucs_out/htdemucs/<file>/no_vocals.wav or similar)
-        # Fallback: if not found, skip silently
+        # Prefer 'no_vocals'/'instrumental' stems if present
+        candidates = []
         for p in out_dir.rglob("*.wav"):
             name = p.name.lower()
-            if "vocals" not in name:
-                # heuristic: pick non-vocals as background
-                logger.info("Using separated background: %s", p)
-                p.replace(bg)
-                return bg
+            if "no_vocals" in name or "instrumental" in name or ("vocals" not in name):
+                candidates.append(p)
+        if candidates:
+            # Choose the longest candidate as background
+            pick = max(candidates, key=lambda x: x.stat().st_size)
+            logger.info("Using separated background: %s", pick)
+            pick.replace(bg)
+            return bg
         logger.warning("Demucs finished but could not locate background stem.")
     except Exception as ex:  # pragma: no cover
         logger.warning("Demucs not available or failed (%s)", ex)
