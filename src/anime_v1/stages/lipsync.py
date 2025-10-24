@@ -4,7 +4,7 @@ from anime_v1.utils import logger
 
 
 def _find_models_base() -> pathlib.Path:
-    # Default location where scripts/download_models.py stores models
+    # Default location where scripts/download_models.py stores models & repo
     base = pathlib.Path("/models/Wav2Lip")
     return base
 

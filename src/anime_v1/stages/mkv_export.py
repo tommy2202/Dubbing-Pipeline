@@ -41,18 +41,35 @@ def run(
     logger.info("Muxing → %s (keep_bg=%s)", mkv_path, keep_bg)
 
     if keep_bg:
-        # Mix original audio at low volume under dubbed voice
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(video),
-            "-i", str(dubbed),
-            "-filter_complex",
-            "[0:a]volume=0.25[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[aout]",
-            "-map", "0:v:0", "-map", "[aout]",
-            "-c:v", "copy", "-c:a", "aac",
-            "-metadata:s:a:0", "language=eng",
-            str(mkv_path),
-        ]
+        bg = ckpt_dir / "background.wav"
+        if bg.exists():
+            logger.info("Using separated background for mixing → %s", bg)
+            # Mix separated background with dubbed voice (no original voice bleed)
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(video),
+                "-i", str(bg),
+                "-i", str(dubbed),
+                "-filter_complex",
+                "[1:a]volume=1.0[bg];[2:a]volume=1.0[vo];[bg][vo]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+                "-map", "0:v:0", "-map", "[aout]",
+                "-c:v", "copy", "-c:a", "aac",
+                "-metadata:s:a:0", "language=eng",
+                str(mkv_path),
+            ]
+        else:
+            # Mix original audio at low volume under dubbed voice
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(video),
+                "-i", str(dubbed),
+                "-filter_complex",
+                "[0:a]volume=0.25[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+                "-map", "0:v:0", "-map", "[aout]",
+                "-c:v", "copy", "-c:a", "aac",
+                "-metadata:s:a:0", "language=eng",
+                str(mkv_path),
+            ]
     else:
         # Replace audio with dubbed track only
         cmd = [
