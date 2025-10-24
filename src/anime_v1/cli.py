@@ -61,7 +61,7 @@ def _resolve_defaults(mode: str, lipsync: bool | None, keep_bg: bool | None, voi
 @click.option("--src-lang", default=None, help="Source language code (e.g. ja). Autodetect if omitted.")
 @click.option("--tgt-lang", default="en", show_default=True, help="Target language code (e.g. en)")
 @click.option("--mode", type=click.Choice(["high", "medium", "low"], case_sensitive=False), default="medium", show_default=True)
-@click.option("--voice", type=click.Choice(["auto", "default", "clone"], case_sensitive=False), default="auto", show_default=True, help="Voice preference")
+@click.option("--voice", type=click.Choice(["auto", "default", "clone"], case_sensitive=False), default="auto", show_default=True, help="Voice preference (clone tries XTTS/Tortoise)")
 @click.option("--out-dir", type=click.Path(file_okay=False), default="/data/out", show_default=True, help="Output directory for final file")
 @click.option("--lipsync", "lipsync_flag", flag_value=True, default=None, help="Enable lip-sync stage if available")
 @click.option("--no-lipsync", "lipsync_flag", flag_value=False, help="Disable lip-sync stage")

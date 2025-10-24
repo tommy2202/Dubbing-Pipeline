@@ -73,6 +73,42 @@ def _speak_with_espeak(text: str, outfile: pathlib.Path, lang: str = "en", speed
         return False
 
 
+def _speak_with_tortoise(text: str, outfile: pathlib.Path, *, speaker_wav: Optional[pathlib.Path] = None) -> bool:
+    """Try to synthesize using Tortoise-TTS if installed.
+
+    This supports optional cloning via a single reference WAV when provided.
+    """
+    try:
+        from tortoise.api import TextToSpeech  # type: ignore
+        import torchaudio  # type: ignore
+    except Exception as ex:  # pragma: no cover
+        logger.warning("Tortoise-TTS not available (%s)", ex)
+        return False
+    try:
+        use_gpu = bool(torch and torch.cuda.is_available())
+        tts = TextToSpeech(use_deepspeed=False, half=use_gpu)
+        voice_samples = None
+        conditioning_latents = None
+        if speaker_wav is not None and speaker_wav.exists():
+            try:
+                wav, sr = torchaudio.load(str(speaker_wav))
+                voice_samples = [wav]
+            except Exception as ex:  # pragma: no cover
+                logger.warning("Failed to load speaker reference for Tortoise (%s)", ex)
+        # Tortoise API: tts_to_file(text, voice_samples=[...], conditioning_latents=None, file_path=...)
+        tts.tts_to_file(
+            text=text,
+            voice_samples=voice_samples,
+            conditioning_latents=conditioning_latents,
+            file_path=str(outfile),
+            preset="fast",
+        )
+        return True
+    except Exception as ex:  # pragma: no cover
+        logger.warning("Tortoise synthesis failed (%s)", ex)
+        return False
+
+
 def _time_stretch_with_ffmpeg(in_wav: pathlib.Path, out_wav: pathlib.Path, tempo: float) -> bool:
     """Time-stretch using ffmpeg atempo (chain if out of range)."""
     try:
@@ -165,6 +201,9 @@ def run(
         if tts is not None:
             speaker_ref = source_audio if preference == "clone" else None
             ok = _speak_with_coqui(tts, txt, tmp, speaker_wav=speaker_ref)
+        # If Coqui path failed and we requested clone, try Tortoise before espeak
+        if not ok and preference == "clone":
+            ok = _speak_with_tortoise(txt, tmp, speaker_wav=source_audio)
         if not ok:
             # Fallback to espeak-ng
             logger.info("Using espeak-ng fallback for segment")

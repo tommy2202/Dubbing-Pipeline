@@ -19,8 +19,8 @@ def run(audio_wav: pathlib.Path, ckpt_dir: pathlib.Path, **_):
         return out
     try:
         logger.info("Running pyannote diarization…")
-        # NOTE: Requires a pretrained pipeline and HF token env, omitted here;
-        # keep robust fallback above.
+        # NOTE: You must provide authorization/token via env or config.
+        # Example: export HUGGING_FACE_HUB_TOKEN=... before running.
         pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization")
         diar = pipeline(str(audio_wav))
         segs = []
