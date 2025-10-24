@@ -5,14 +5,20 @@ import subprocess
 from typing import Optional, List
 from anime_v1.utils import logger, checkpoints
 from pydub import AudioSegment
+import importlib
+try:
+    import torch  # type: ignore
+except Exception:  # pragma: no cover
+    torch = None
 
 SAMPLE_RATE = 22050
 _tts_model = None
+_tts_model_name = None
 
 
 def _load_coqui(model_name: str = "tts_models/en/vctk/vits"):
-    global _tts_model
-    if _tts_model is not None:
+    global _tts_model, _tts_model_name
+    if _tts_model is not None and _tts_model_name == model_name:
         return _tts_model
     try:
         # Lazy import to allow environments without Coqui
@@ -22,7 +28,9 @@ def _load_coqui(model_name: str = "tts_models/en/vctk/vits"):
         return None
     try:
         logger.info("Loading Coqui TTS %s …", model_name)
-        _tts_model = TTS(model_name=model_name, progress_bar=False, gpu=False)
+        use_gpu = bool(torch and torch.cuda.is_available())
+        _tts_model = TTS(model_name=model_name, progress_bar=False, gpu=use_gpu)
+        _tts_model_name = model_name
         # Select a default speaker if available
         if getattr(_tts_model, "speakers", None):
             _tts_model.default_speaker = _tts_model.speakers[0]
@@ -32,12 +40,15 @@ def _load_coqui(model_name: str = "tts_models/en/vctk/vits"):
         return None
 
 
-def _speak_with_coqui(tts, text: str, outfile: pathlib.Path) -> bool:
+def _speak_with_coqui(tts, text: str, outfile: pathlib.Path, *, speaker_wav: Optional[pathlib.Path] = None) -> bool:
     try:
         kwargs = {"text": text, "file_path": str(outfile)}
         # Speaker (if model supports multi-speaker)
         if getattr(tts, "default_speaker", None):
             kwargs["speaker"] = tts.default_speaker
+        # XTTS voice cloning support: pass reference wav if available
+        if speaker_wav is not None:
+            kwargs["speaker_wav"] = str(speaker_wav)
         tts.tts_to_file(**kwargs)
         return True
     except Exception as ex:  # pragma: no cover
@@ -130,7 +141,12 @@ def run(
         AudioSegment.silent(duration=1000, frame_rate=SAMPLE_RATE).export(out, format="wav")
         return out
 
-    tts = _load_coqui()
+    # Pick model based on preference
+    model_name = "tts_models/en/vctk/vits"
+    if preference == "clone":
+        # Try XTTS voice cloning model if available
+        model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
+    tts = _load_coqui(model_name=model_name)
     combined = AudioSegment.silent(duration=0, frame_rate=SAMPLE_RATE)
     cursor_ms = 0
     produced_any = False
@@ -147,7 +163,8 @@ def run(
 
         ok = False
         if tts is not None:
-            ok = _speak_with_coqui(tts, txt, tmp)
+            speaker_ref = source_audio if preference == "clone" else None
+            ok = _speak_with_coqui(tts, txt, tmp, speaker_wav=speaker_ref)
         if not ok:
             # Fallback to espeak-ng
             logger.info("Using espeak-ng fallback for segment")
