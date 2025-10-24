@@ -7,6 +7,7 @@ from anime_v1.stages import (
     tts,
     separation,
     mkv_export,
+    downloader,
 )
 from anime_v1.utils import logger
 
@@ -56,7 +57,7 @@ def _resolve_defaults(mode: str, lipsync: bool | None, keep_bg: bool | None, voi
 
 
 @click.command()
-@click.argument("video", type=click.Path(exists=True))
+@click.argument("video", type=str)
 @click.option("--src-lang", default=None, help="Source language code (e.g. ja). Autodetect if omitted.")
 @click.option("--tgt-lang", default="en", show_default=True, help="Target language code (e.g. en)")
 @click.option("--mode", type=click.Choice(["high", "medium", "low"], case_sensitive=False), default="medium", show_default=True)
@@ -71,9 +72,12 @@ def cli(video, src_lang, tgt_lang, mode, voice, out_dir, lipsync_flag, keep_bg_f
 
     Example: anime-v1 <video.mp4> --src-lang ja --tgt-lang en --mode high
     """
-    video = pathlib.Path(video)
-    ckpt = pathlib.Path("checkpoints") / video.stem
+    # Accept a URL or a local path
+    video_pathlike = pathlib.Path(video)
+    safe_stem = video_pathlike.stem if video_pathlike.exists() else "remote"
+    ckpt = pathlib.Path("checkpoints") / safe_stem
     ckpt.mkdir(parents=True, exist_ok=True)
+    video = downloader.run(video, ckpt_dir=ckpt)
 
     defaults = _resolve_defaults(mode, lipsync_flag, keep_bg_flag, voice)
     logger.info(
