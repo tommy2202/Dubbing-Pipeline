@@ -1,21 +1,170 @@
-import pathlib, json, tempfile
+import pathlib
+import json
+import tempfile
+import subprocess
+from typing import Optional, List
 from anime_v1.utils import logger, checkpoints
-from TTS.api import TTS
 from pydub import AudioSegment
+import importlib
+try:
+    import torch  # type: ignore
+except Exception:  # pragma: no cover
+    torch = None
 
 SAMPLE_RATE = 22050
-tts_model = None
+_tts_model = None
+_tts_model_name = None
 
-def _load():
-    global tts_model
-    if tts_model is None:
-        logger.info("Loading Coqui TTS en/vctk/vits …")
-        tts_model = TTS(model_name="tts_models/en/vctk/vits", progress_bar=False, gpu=False)
-        # stash the first speaker as default
-        tts_model.default_speaker = tts_model.speakers[0]
-    return tts_model
 
-def run(transcript_json: pathlib.Path, ckpt_dir: pathlib.Path, **_):
+def _load_coqui(model_name: str = "tts_models/en/vctk/vits"):
+    global _tts_model, _tts_model_name
+    if _tts_model is not None and _tts_model_name == model_name:
+        return _tts_model
+    try:
+        # Lazy import to allow environments without Coqui
+        from TTS.api import TTS  # type: ignore
+    except Exception as ex:  # pragma: no cover
+        logger.warning("Coqui TTS not available (%s)", ex)
+        return None
+    try:
+        logger.info("Loading Coqui TTS %s …", model_name)
+        use_gpu = bool(torch and torch.cuda.is_available())
+        _tts_model = TTS(model_name=model_name, progress_bar=False, gpu=use_gpu)
+        _tts_model_name = model_name
+        # Select a default speaker if available
+        if getattr(_tts_model, "speakers", None):
+            _tts_model.default_speaker = _tts_model.speakers[0]
+        return _tts_model
+    except Exception as ex:  # pragma: no cover
+        logger.warning("Failed to load Coqui TTS (%s)", ex)
+        return None
+
+
+def _speak_with_coqui(tts, text: str, outfile: pathlib.Path, *, speaker_wav: Optional[pathlib.Path] = None) -> bool:
+    try:
+        kwargs = {"text": text, "file_path": str(outfile)}
+        # Speaker (if model supports multi-speaker)
+        if getattr(tts, "default_speaker", None):
+            kwargs["speaker"] = tts.default_speaker
+        # XTTS voice cloning support: pass reference wav if available
+        if speaker_wav is not None:
+            kwargs["speaker_wav"] = str(speaker_wav)
+        tts.tts_to_file(**kwargs)
+        return True
+    except Exception as ex:  # pragma: no cover
+        logger.warning("Coqui synthesis failed (%s)", ex)
+        return False
+
+
+def _speak_with_espeak(text: str, outfile: pathlib.Path, lang: str = "en", speed_wpm: int = 175) -> bool:
+    try:
+        # espeak-ng writes WAV via -w
+        cmd = [
+            "espeak-ng",
+            f"-v{lang}",
+            f"-s{speed_wpm}",
+            "-w", str(outfile),
+            text,
+        ]
+        subprocess.run(cmd, check=True)
+        return True
+    except Exception as ex:  # pragma: no cover
+        logger.warning("espeak-ng fallback failed (%s)", ex)
+        return False
+
+
+def _speak_with_tortoise(text: str, outfile: pathlib.Path, *, speaker_wav: Optional[pathlib.Path] = None) -> bool:
+    """Try to synthesize using Tortoise-TTS if installed.
+
+    This supports optional cloning via a single reference WAV when provided.
+    """
+    try:
+        from tortoise.api import TextToSpeech  # type: ignore
+        import torchaudio  # type: ignore
+    except Exception as ex:  # pragma: no cover
+        logger.warning("Tortoise-TTS not available (%s)", ex)
+        return False
+    try:
+        use_gpu = bool(torch and torch.cuda.is_available())
+        tts = TextToSpeech(use_deepspeed=False, half=use_gpu)
+        voice_samples = None
+        conditioning_latents = None
+        if speaker_wav is not None and speaker_wav.exists():
+            try:
+                wav, sr = torchaudio.load(str(speaker_wav))
+                voice_samples = [wav]
+            except Exception as ex:  # pragma: no cover
+                logger.warning("Failed to load speaker reference for Tortoise (%s)", ex)
+        # Tortoise API: tts_to_file(text, voice_samples=[...], conditioning_latents=None, file_path=...)
+        tts.tts_to_file(
+            text=text,
+            voice_samples=voice_samples,
+            conditioning_latents=conditioning_latents,
+            file_path=str(outfile),
+            preset="fast",
+        )
+        return True
+    except Exception as ex:  # pragma: no cover
+        logger.warning("Tortoise synthesis failed (%s)", ex)
+        return False
+
+
+def _time_stretch_with_ffmpeg(in_wav: pathlib.Path, out_wav: pathlib.Path, tempo: float) -> bool:
+    """Time-stretch using ffmpeg atempo (chain if out of range)."""
+    try:
+        # Build a chain of atempo filters within [0.5, 2.0]
+        factors: List[float] = []
+        remaining = tempo
+        while remaining > 2.0:
+            factors.append(2.0)
+            remaining /= 2.0
+        while 0 < remaining < 0.5:
+            factors.append(0.5)
+            remaining /= 0.5
+        if remaining > 0:
+            factors.append(remaining)
+        filt = ",".join(f"atempo={f:.5f}" for f in factors)
+        cmd = [
+            "ffmpeg", "-y", "-i", str(in_wav),
+            "-filter:a", filt,
+            str(out_wav),
+        ]
+        subprocess.run(cmd, check=True)
+        return True
+    except Exception as ex:  # pragma: no cover
+        logger.warning("ffmpeg atempo failed (%s)", ex)
+        return False
+
+
+def _align_to_duration(seg_wav: pathlib.Path, target_ms: int) -> AudioSegment:
+    audio = AudioSegment.from_wav(seg_wav)
+    if target_ms <= 0:
+        return audio
+    current_ms = max(1, int(len(audio)))
+    if current_ms == target_ms:
+        return audio
+    tempo = current_ms / max(1, target_ms)
+    tmp_out = pathlib.Path(seg_wav.parent) / (seg_wav.stem + ".tempo.wav")
+    if 0.25 <= tempo <= 4.0 and _time_stretch_with_ffmpeg(seg_wav, tmp_out, tempo):
+        try:
+            return AudioSegment.from_wav(tmp_out)
+        finally:
+            tmp_out.unlink(missing_ok=True)
+    # Fallback: pad or trim without time-stretch
+    if current_ms < target_ms:
+        return audio + AudioSegment.silent(duration=(target_ms - current_ms), frame_rate=audio.frame_rate)
+    return audio[:target_ms]
+
+
+def run(
+    transcript_json: pathlib.Path,
+    ckpt_dir: pathlib.Path,
+    *,
+    tgt_lang: str = "en",
+    preference: str = "default",
+    source_audio: Optional[pathlib.Path] = None,
+    **_,
+):
     out = ckpt_dir / "dubbed.wav"
     if out.exists():
         logger.info("Dubbed audio exists, skip.")
@@ -28,21 +177,63 @@ def run(transcript_json: pathlib.Path, ckpt_dir: pathlib.Path, **_):
         AudioSegment.silent(duration=1000, frame_rate=SAMPLE_RATE).export(out, format="wav")
         return out
 
-    tts = _load()
+    # Pick model based on preference
+    model_name = "tts_models/en/vctk/vits"
+    if preference == "clone":
+        # Try XTTS voice cloning model if available
+        model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
+    tts = _load_coqui(model_name=model_name)
     combined = AudioSegment.silent(duration=0, frame_rate=SAMPLE_RATE)
+    cursor_ms = 0
+    produced_any = False
+
     for seg in segments:
-        txt = seg["text"].strip()
+        txt = (seg.get("text") or "").strip()
         if not txt:
             continue
-        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        # **always** pass the default_speaker**
-        tts.tts_to_file(
-            text=txt,
-            file_path=tmp.name,
-            speaker=tts.default_speaker
-        )
-        seg_audio = AudioSegment.from_wav(tmp.name)
+        start_ms = int(float(seg.get("start", 0.0)) * 1000)
+        end_ms = int(float(seg.get("end", 0.0)) * 1000)
+        target_ms = max(0, end_ms - start_ms)
+
+        tmp = pathlib.Path(tempfile.mkstemp(suffix=".wav")[1])
+
+        ok = False
+        if tts is not None:
+            speaker_ref = source_audio if preference == "clone" else None
+            ok = _speak_with_coqui(tts, txt, tmp, speaker_wav=speaker_ref)
+        # If Coqui path failed and we requested clone, try Tortoise before espeak
+        if not ok and preference == "clone":
+            ok = _speak_with_tortoise(txt, tmp, speaker_wav=source_audio)
+        if not ok:
+            # Fallback to espeak-ng
+            logger.info("Using espeak-ng fallback for segment")
+            ok = _speak_with_espeak(txt, tmp, lang=(tgt_lang or "en"))
+
+        if not ok:
+            logger.warning("Skipping segment due to TTS failures")
+            tmp.unlink(missing_ok=True)
+            continue
+
+        seg_audio = _align_to_duration(tmp, target_ms)
+        tmp.unlink(missing_ok=True)
+
+        # Insert silence up to segment start
+        if start_ms > cursor_ms:
+            combined += AudioSegment.silent(duration=(start_ms - cursor_ms), frame_rate=SAMPLE_RATE)
+            cursor_ms = start_ms
+
+        # Append aligned segment and advance cursor
+        # Resample to desired SAMPLE_RATE if needed
+        if seg_audio.frame_rate != SAMPLE_RATE:
+            seg_audio = seg_audio.set_frame_rate(SAMPLE_RATE)
         combined += seg_audio
+        cursor_ms += len(seg_audio)
+        produced_any = True
+
+    if not produced_any:
+        logger.warning("No audio produced; writing 1-s silence.")
+        AudioSegment.silent(duration=1000, frame_rate=SAMPLE_RATE).export(out, format="wav")
+        return out
 
     combined.export(out, format="wav")
     logger.info("Wrote TTS audio → %s", out)
