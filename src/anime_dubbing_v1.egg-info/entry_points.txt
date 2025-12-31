@@ -1,0 +1,3 @@
+[console_scripts]
+anime-v1 = anime_v1.cli:cli
+anime-v2 = anime_v2.cli:cli

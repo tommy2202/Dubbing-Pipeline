@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=68.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,6 +12,7 @@ requires-python = ">=3.10"
 
 [project.scripts]
 anime-v1 = "anime_v1.cli:cli"
+anime-v2 = "anime_v2.cli:cli"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
