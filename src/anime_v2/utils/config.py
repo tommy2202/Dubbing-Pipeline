@@ -57,6 +57,9 @@ class Settings:
     diarization_model: str
     hf_token: str | None
 
+    translation_model: str | None
+    transformers_cache: Path | None
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -86,6 +89,10 @@ def get_settings() -> Settings:
     diarization_model = _env("DIARIZATION_MODEL", "pyannote/speaker-diarization") or "pyannote/speaker-diarization"
     hf_token = _env("HF_TOKEN", None) or _env("HUGGINGFACE_TOKEN", None)
 
+    translation_model = _env("TRANSLATION_MODEL", None)
+    transformers_cache_raw = _env("TRANSFORMERS_CACHE", None) or _env("HF_HUB_CACHE", None)
+    transformers_cache = Path(transformers_cache_raw) if transformers_cache_raw else None
+
     settings = Settings(
         api_token=api_token,
         coqui_tos_agreed=coqui_tos_agreed,
@@ -98,6 +105,8 @@ def get_settings() -> Settings:
         tts_home=tts_home,
         diarization_model=diarization_model,
         hf_token=hf_token,
+        translation_model=translation_model,
+        transformers_cache=transformers_cache,
     )
 
     # Soft warnings (don’t block imports/tests)

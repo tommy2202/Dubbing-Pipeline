@@ -7,8 +7,9 @@ import click
 
 from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.diarize import run as diarize_run
+from anime_v2.stages.translate import translate_lines
 from anime_v2.stages.transcription import transcribe
-from anime_v2.utils.io import write_json
+from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.paths import output_dir_for
 
@@ -66,7 +67,8 @@ def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_tr
     chosen_model = MODE_TO_MODEL[mode]
     chosen_device = _select_device(device)
 
-    task = "transcribe" if no_translate else "translate"
+    # Whisper should only do ASR; translation is handled by stages.translate to support any src→tgt.
+    task = "transcribe"
 
     # Output layout requirement:
     # Output/<video_stem>/{wav,srt,tts.wav,dub.mkv}
@@ -77,19 +79,12 @@ def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_tr
     wav_path = out_dir / "audio.wav"
     srt_out = out_dir / f"{stem}.srt"
     diar_json = out_dir / "diarization.json"
+    translated_json = out_dir / "translated.json"
     tts_wav = out_dir / "tts.wav"
     dub_mkv = out_dir / "dub.mkv"
 
-    logger.info(
-        "[v2] Starting dub: video=%s mode=%s model=%s device=%s task=%s src_lang=%s tgt_lang=%s",
-        video,
-        mode,
-        chosen_model,
-        chosen_device,
-        task,
-        src_lang,
-        tgt_lang,
-    )
+    logger.info("[v2] Starting dub: video=%s mode=%s model=%s device=%s", video, mode, chosen_model, chosen_device)
+    logger.info("[v2] Languages: src_lang=%s tgt_lang=%s translate=%s", src_lang, tgt_lang, (not no_translate))
 
     t0 = time.perf_counter()
 
@@ -126,6 +121,61 @@ def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_tr
         src_lang=src_lang,
         tgt_lang=tgt_lang,
     )
+
+    # 3.5) Separate translation stage (writes translated.json)
+    if no_translate:
+        logger.info("[v2] Translation disabled (--no-translate)")
+    else:
+        try:
+            diar = read_json(diar_json, default={})
+            diar_segments = diar.get("segments", []) if isinstance(diar, dict) else []
+
+            # Minimal SRT cue parser and optional speaker assignment via diarization midpoint match
+            srt_text = srt_out.read_text(encoding="utf-8")
+            blocks = [b for b in srt_text.split("\n\n") if b.strip()]
+            cues: list[dict] = []
+            for b in blocks:
+                lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
+                if len(lines) < 2:
+                    continue
+                times = lines[1]
+                if "-->" not in times:
+                    continue
+                start_s, end_s = [p.strip() for p in times.split("-->", 1)]
+
+                def parse_ts(ts: str) -> float:
+                    hh, mm, rest = ts.split(":")
+                    ss, ms = rest.split(",")
+                    return int(hh) * 3600 + int(mm) * 60 + int(ss) + int(ms) / 1000.0
+
+                start = parse_ts(start_s)
+                end = parse_ts(end_s)
+                text = " ".join(lines[2:]).strip() if len(lines) > 2 else ""
+
+                speaker_id = "Speaker1"
+                mid = (start + end) / 2.0
+                for seg in diar_segments:
+                    try:
+                        if float(seg["start"]) <= mid <= float(seg["end"]):
+                            speaker_id = str(seg.get("speaker_id") or speaker_id)
+                            break
+                    except Exception:
+                        continue
+
+                cues.append({"start": start, "end": end, "speaker_id": speaker_id, "text": text})
+
+            translated = translate_lines(cues, src_lang=src_lang, tgt_lang=tgt_lang)
+            write_json(
+                translated_json,
+                {
+                    "src_lang": src_lang,
+                    "tgt_lang": tgt_lang,
+                    "lines": translated,
+                },
+            )
+            logger.info("[v2] translated.json written (%s lines) → %s", len(translated), translated_json)
+        except Exception as ex:
+            logger.warning("[v2] Translation stage failed/skipped: %s", ex)
 
     # 4) TTS + mux (stubs for now, but keep file layout stable)
     try:

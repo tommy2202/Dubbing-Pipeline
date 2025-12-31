@@ -11,6 +11,10 @@ Requires-Dist: numpy>=1.24; extra == "diarization"
 Requires-Dist: pyannote.audio>=3.1.0; extra == "diarization"
 Requires-Dist: resemblyzer>=0.1.4; extra == "diarization"
 Requires-Dist: torch>=2.0.0; extra == "diarization"
+Provides-Extra: translation
+Requires-Dist: langdetect>=1.0.9; extra == "translation"
+Requires-Dist: transformers>=4.45.0; extra == "translation"
+Requires-Dist: sentencepiece>=0.2.0; extra == "translation"
 
 Anime Dub Alpha:
 

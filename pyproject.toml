@@ -20,6 +20,11 @@ diarization = [
   "resemblyzer>=0.1.4",
   "torch>=2.0.0",
 ]
+translation = [
+  "langdetect>=1.0.9",
+  "transformers>=4.45.0",
+  "sentencepiece>=0.2.0",
+]
 
 [project.scripts]
 anime-v1 = "anime_v1.cli:cli"
