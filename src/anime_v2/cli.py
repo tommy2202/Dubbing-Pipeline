@@ -80,7 +80,7 @@ def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_tr
     srt_out = out_dir / f"{stem}.srt"
     diar_json = out_dir / "diarization.json"
     translated_json = out_dir / "translated.json"
-    tts_wav = out_dir / "tts.wav"
+    tts_wav = out_dir / f"{stem}.tts.wav"
     dub_mkv = out_dir / "dub.mkv"
 
     logger.info("[v2] Starting dub: video=%s mode=%s model=%s device=%s", video, mode, chosen_model, chosen_device)
@@ -179,7 +179,7 @@ def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_tr
 
     # 4) TTS + mux (stubs for now, but keep file layout stable)
     try:
-        tts.run(transcript_srt=srt_out, wav_out=tts_wav, ckpt_dir=out_dir)
+        tts.run(out_dir=out_dir, transcript_srt=srt_out, translated_json=translated_json, diarization_json=diar_json, wav_out=tts_wav)
         mkv_export.run(video=video, dubbed_audio=tts_wav, mkv_out=dub_mkv, ckpt_dir=out_dir, out_dir=out_dir)
     except Exception as ex:
         # Keep CLI usable even if downstream stages are not implemented yet.

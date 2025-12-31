@@ -15,6 +15,10 @@ Provides-Extra: translation
 Requires-Dist: langdetect>=1.0.9; extra == "translation"
 Requires-Dist: transformers>=4.45.0; extra == "translation"
 Requires-Dist: sentencepiece>=0.2.0; extra == "translation"
+Provides-Extra: tts
+Requires-Dist: numpy>=1.24; extra == "tts"
+Requires-Dist: resemblyzer>=0.1.4; extra == "tts"
+Requires-Dist: TTS>=0.22.0; extra == "tts"
 
 Anime Dub Alpha:
 
@@ -66,6 +70,16 @@ Version One Changelog:
 
 
 Commands:
+
+---
+
+## Coqui TTS note (required)
+
+If you use the Coqui TTS engine (XTTS), you must explicitly acknowledge the Coqui Terms of Service by setting:
+
+- `COQUI_TOS_AGREED=1`
+
+This repo’s `anime_v2` TTS layer will refuse to synthesize without it.
 
 
 Task: Shows where the folder is

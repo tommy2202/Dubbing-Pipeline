@@ -25,6 +25,11 @@ translation = [
   "transformers>=4.45.0",
   "sentencepiece>=0.2.0",
 ]
+tts = [
+  "numpy>=1.24",
+  "resemblyzer>=0.1.4",
+  "TTS>=0.22.0",
+]
 
 [project.scripts]
 anime-v1 = "anime_v1.cli:cli"

@@ -60,6 +60,10 @@ class Settings:
     translation_model: str | None
     transformers_cache: Path | None
 
+    tts_speaker_wav: Path | None
+    voice_preset_dir: Path
+    voice_db_path: Path
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -93,6 +97,12 @@ def get_settings() -> Settings:
     transformers_cache_raw = _env("TRANSFORMERS_CACHE", None) or _env("HF_HUB_CACHE", None)
     transformers_cache = Path(transformers_cache_raw) if transformers_cache_raw else None
 
+    tts_speaker_wav_raw = _env("TTS_SPEAKER_WAV", None)
+    tts_speaker_wav = Path(tts_speaker_wav_raw) if tts_speaker_wav_raw else None
+
+    voice_preset_dir = Path(_env("VOICE_PRESET_DIR", str(Path.cwd() / "voices" / "presets")) or "")
+    voice_db_path = Path(_env("VOICE_DB", str(Path.cwd() / "voices" / "presets.json")) or "")
+
     settings = Settings(
         api_token=api_token,
         coqui_tos_agreed=coqui_tos_agreed,
@@ -107,6 +117,9 @@ def get_settings() -> Settings:
         hf_token=hf_token,
         translation_model=translation_model,
         transformers_cache=transformers_cache,
+        tts_speaker_wav=tts_speaker_wav,
+        voice_preset_dir=voice_preset_dir,
+        voice_db_path=voice_db_path,
     )
 
     # Soft warnings (don’t block imports/tests)

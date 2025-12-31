@@ -49,6 +49,16 @@ Version One Changelog:
 
 Commands:
 
+---
+
+## Coqui TTS note (required)
+
+If you use the Coqui TTS engine (XTTS), you must explicitly acknowledge the Coqui Terms of Service by setting:
+
+- `COQUI_TOS_AGREED=1`
+
+This repo’s `anime_v2` TTS layer will refuse to synthesize without it.
+
 
 Task: Shows where the folder is
 
