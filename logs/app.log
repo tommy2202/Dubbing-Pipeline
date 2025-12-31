@@ -1,1 +1,38 @@
 2025-12-31 23:22:47 INFO anime_v2 [2014] hello
+2025-12-31 23:33:37 INFO anime_v2 [2529] hello
+2025-12-31 23:33:56 INFO anime_v2 [2648] [v2] Starting dub: video=/workspace/Input/Test.mp4 mode=low model=small device=cpu task=transcribe src_lang=ja tgt_lang=en
+2025-12-31 23:33:56 INFO anime_v2 [2648] [v2] Extracting audio → /workspace/Output/Test/audio.wav
+2025-12-31 23:33:56 WARNING anime_v2 [2648] API_TOKEN is set to default 'change-me' (set it in env for production).
+2025-12-31 23:33:56 WARNING anime_v2 [2648] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2025-12-31 23:33:56 WARNING anime_v2 [2648] [v2] Diarization unavailable (No module named 'pyannote'). Falling back to single speaker.
+2025-12-31 23:33:56 WARNING anime_v2 [2648] [v2] Embeddings unavailable (No module named 'resemblyzer'). Stable IDs will still persist.
+2025-12-31 23:33:56 INFO anime_v2 [2648] [v2] Diarization: diar_speakers=1 stable_speakers=1 segments=1
+2025-12-31 23:33:56 INFO anime_v2 [2648] [v2] diarization.json written (1 segments, 1 stable speakers) → /workspace/Output/Test/diarization.json
+2025-12-31 23:33:56 INFO anime_v2 [2648] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=ja tgt_lang=en
+2025-12-31 23:34:34 INFO anime_v2 [2758] [v2] Starting dub: video=/workspace/Input/Test.mp4 mode=high model=large-v3 device=cpu task=translate src_lang=auto tgt_lang=en
+2025-12-31 23:34:34 INFO anime_v2 [2758] [v2] Extracting audio → /workspace/Output/Test/audio.wav
+2025-12-31 23:34:34 WARNING anime_v2 [2758] API_TOKEN is set to default 'change-me' (set it in env for production).
+2025-12-31 23:34:34 WARNING anime_v2 [2758] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2025-12-31 23:34:34 WARNING anime_v2 [2758] [v2] Diarization unavailable (No module named 'pyannote'). Falling back to single speaker.
+2025-12-31 23:34:34 WARNING anime_v2 [2758] [v2] Embeddings unavailable (No module named 'resemblyzer'). Stable IDs will still persist.
+2025-12-31 23:34:34 INFO anime_v2 [2758] [v2] Diarization: diar_speakers=1 stable_speakers=1 segments=1
+2025-12-31 23:34:34 INFO anime_v2 [2758] [v2] diarization.json written (1 segments, 1 stable speakers) → /workspace/Output/Test/diarization.json
+2025-12-31 23:34:34 INFO anime_v2 [2758] [v2] Whisper transcribe: model=large-v3 device=cpu task=translate src_lang=auto tgt_lang=en
+2025-12-31 23:34:34 WARNING anime_v2 [2758] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2025-12-31 23:34:34 INFO anime_v2 [2758] [v2] tts.run(transcript=/workspace/Output/Test/Test.srt) -> /workspace/Output/Test/tts.wav
+2025-12-31 23:34:34 INFO anime_v2 [2758] [v2] mkv_export.run(video=/workspace/Input/Test.mp4, dubbed_audio=/workspace/Output/Test/tts.wav) -> /workspace/Output/Test/dub.mkv
+2025-12-31 23:34:34 INFO anime_v2 [2758] [v2] Done in 0.14s → /workspace/Output/Test
+2025-12-31 23:34:43 INFO anime_v2 [2834] [v2] Starting dub: video=/workspace/Input/Test.mp4 mode=high model=large-v3 device=cpu task=translate src_lang=auto tgt_lang=en
+2025-12-31 23:34:43 INFO anime_v2 [2834] [v2] Extracting audio → /workspace/Output/Test/audio.wav
+2025-12-31 23:34:43 INFO anime_v2 [2834] [v2] Audio already extracted
+2025-12-31 23:34:43 WARNING anime_v2 [2834] API_TOKEN is set to default 'change-me' (set it in env for production).
+2025-12-31 23:34:43 WARNING anime_v2 [2834] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2025-12-31 23:34:43 WARNING anime_v2 [2834] [v2] Diarization unavailable (No module named 'pyannote'). Falling back to single speaker.
+2025-12-31 23:34:43 WARNING anime_v2 [2834] [v2] Embeddings unavailable (No module named 'resemblyzer'). Stable IDs will still persist.
+2025-12-31 23:34:43 INFO anime_v2 [2834] [v2] Diarization: diar_speakers=1 stable_speakers=1 segments=1
+2025-12-31 23:34:43 INFO anime_v2 [2834] [v2] diarization.json written (1 segments, 1 stable speakers) → /workspace/Output/Test/diarization.json
+2025-12-31 23:34:43 INFO anime_v2 [2834] [v2] Whisper transcribe: model=large-v3 device=cpu task=translate src_lang=auto tgt_lang=en
+2025-12-31 23:34:43 WARNING anime_v2 [2834] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2025-12-31 23:34:43 INFO anime_v2 [2834] [v2] tts.run(transcript=/workspace/Output/Test/Test.srt) -> /workspace/Output/Test/tts.wav
+2025-12-31 23:34:43 INFO anime_v2 [2834] [v2] mkv_export.run(video=/workspace/Input/Test.mp4, dubbed_audio=/workspace/Output/Test/tts.wav) -> /workspace/Output/Test/dub.mkv
+2025-12-31 23:34:43 INFO anime_v2 [2834] [v2] Done in 0.08s → /workspace/Output/Test

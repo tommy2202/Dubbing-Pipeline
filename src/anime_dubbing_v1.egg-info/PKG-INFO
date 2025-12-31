@@ -5,6 +5,12 @@ Summary: Offline anime dubbing suite - Version 1 slice 1
 Author: Your Name
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+Requires-Dist: click>=8.1.0
+Provides-Extra: diarization
+Requires-Dist: numpy>=1.24; extra == "diarization"
+Requires-Dist: pyannote.audio>=3.1.0; extra == "diarization"
+Requires-Dist: resemblyzer>=0.1.4; extra == "diarization"
+Requires-Dist: torch>=2.0.0; extra == "diarization"
 
 Anime Dub Alpha:
 

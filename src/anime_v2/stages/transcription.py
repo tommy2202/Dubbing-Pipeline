@@ -68,10 +68,29 @@ def transcribe(
     try:
         import whisper  # type: ignore
     except Exception as ex:  # pragma: no cover
-        raise RuntimeError(
-            "Python package 'whisper' is required for transcription. "
-            "Install openai-whisper (or adapt this stage to faster-whisper)."
-        ) from ex
+        # Degraded mode: still produce an empty SRT + metadata so the pipeline can
+        # persist artifacts even when Whisper isn't installed in the environment.
+        logger.warning(
+            "[v2] Whisper not installed (%s). Writing placeholder SRT/metadata.",
+            ex,
+        )
+        srt_out.parent.mkdir(parents=True, exist_ok=True)
+        srt_out.write_text("", encoding="utf-8")
+        meta = {
+            "model_name": model_name,
+            "device": device,
+            "task": task,
+            "requested_src_lang": src_lang,
+            "detected_language": None,
+            "tgt_lang": tgt_lang,
+            "segments": 0,
+            "audio_duration_s": None,
+            "wall_time_s": time.perf_counter() - t0,
+            "error": "whisper_not_installed",
+        }
+        meta_path = srt_out.with_suffix(".json")
+        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+        return srt_out
 
     model = whisper.load_model(model_name, device=device)
     result = model.transcribe(

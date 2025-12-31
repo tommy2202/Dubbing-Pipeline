@@ -1,0 +1,15 @@
+{
+  "audio_path": "/workspace/Output/Test/audio.wav",
+  "segments": [
+    {
+      "diar_label": "SPEAKER_00",
+      "end": 7.7090625,
+      "speaker_id": "Speaker1",
+      "start": 0.0,
+      "wav_path": "/workspace/Output/Test/segments/0000_SPEAKER_00.wav"
+    }
+  ],
+  "speaker_embeddings": {
+    "Speaker1": "/workspace/voices/embeddings/Speaker1.npy"
+  }
+}

@@ -54,6 +54,9 @@ class Settings:
     torch_home: Path
     tts_home: Path
 
+    diarization_model: str
+    hf_token: str | None
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -80,6 +83,9 @@ def get_settings() -> Settings:
     torch_home = Path(_env("TORCH_HOME", str(Path.home() / ".cache" / "torch")) or "")
     tts_home = Path(_env("TTS_HOME", str(Path.home() / ".local" / "share" / "tts")) or "")
 
+    diarization_model = _env("DIARIZATION_MODEL", "pyannote/speaker-diarization") or "pyannote/speaker-diarization"
+    hf_token = _env("HF_TOKEN", None) or _env("HUGGINGFACE_TOKEN", None)
+
     settings = Settings(
         api_token=api_token,
         coqui_tos_agreed=coqui_tos_agreed,
@@ -90,6 +96,8 @@ def get_settings() -> Settings:
         hf_home=hf_home,
         torch_home=torch_home,
         tts_home=tts_home,
+        diarization_model=diarization_model,
+        hf_token=hf_token,
     )
 
     # Soft warnings (don’t block imports/tests)

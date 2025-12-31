@@ -1,0 +1,12 @@
+{
+  "audio_duration_s": null,
+  "detected_language": null,
+  "device": "cpu",
+  "error": "whisper_not_installed",
+  "model_name": "large-v3",
+  "requested_src_lang": "auto",
+  "segments": 0,
+  "task": "translate",
+  "tgt_lang": "en",
+  "wall_time_s": 0.00036265188828110695
+}

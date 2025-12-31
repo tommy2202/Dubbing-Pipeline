@@ -9,6 +9,17 @@ authors = [{name="Your Name"}]
 description = "Offline anime dubbing suite - Version 1 slice 1"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+  "click>=8.1.0",
+]
+
+[project.optional-dependencies]
+diarization = [
+  "numpy>=1.24",
+  "pyannote.audio>=3.1.0",
+  "resemblyzer>=0.1.4",
+  "torch>=2.0.0",
+]
 
 [project.scripts]
 anime-v1 = "anime_v1.cli:cli"

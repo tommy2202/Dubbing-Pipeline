@@ -4,6 +4,7 @@ src/anime_dubbing_v1.egg-info/PKG-INFO
 src/anime_dubbing_v1.egg-info/SOURCES.txt
 src/anime_dubbing_v1.egg-info/dependency_links.txt
 src/anime_dubbing_v1.egg-info/entry_points.txt
+src/anime_dubbing_v1.egg-info/requires.txt
 src/anime_dubbing_v1.egg-info/top_level.txt
 src/anime_v1/__init__.py
 src/anime_v1/cli.py
