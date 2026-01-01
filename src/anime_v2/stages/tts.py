@@ -157,7 +157,7 @@ def run(
     clips_dir.mkdir(parents=True, exist_ok=True)
     clip_paths: list[Path] = []
 
-    voice_db_embeddings_dir = (settings.voice_db_path.parent / "embeddings" / "presets").resolve()
+    voice_db_embeddings_dir = (settings.voice_db_path.parent / "embeddings").resolve()
 
     for i, l in enumerate(lines):
         text = str(l.get("text", "") or "").strip()

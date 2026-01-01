@@ -160,7 +160,13 @@ def build_voice_db(*, preset_dir: Path, db_path: Path, embeddings_dir: Path) -> 
         emb = np.mean(np.stack(embs, axis=0), axis=0).astype(np.float32)
         emb_path = embeddings_dir / f"{name}.npy"
         np.save(str(emb_path), emb)
-        presets[name] = {"embedding_path": str(emb_path), "samples": [str(p) for p in wavs]}
+        # Store embedding path relative to DB location (portable)
+        try:
+            rel = emb_path.resolve().relative_to(db_path.parent.resolve())
+            rel_s = str(rel).replace("\\", "/")
+        except Exception:
+            rel_s = str(emb_path)
+        presets[name] = {"embedding": rel_s, "samples": [str(p) for p in wavs]}
 
     data = {"version": 1, "presets": presets}
     write_json(db_path, data)
@@ -170,6 +176,9 @@ def build_voice_db(*, preset_dir: Path, db_path: Path, embeddings_dir: Path) -> 
 
 def load_voice_db(*, preset_dir: Path, db_path: Path, embeddings_dir: Path) -> dict[str, Any]:
     db = read_json(db_path, default=None)
+    # Support both:
+    # - new format: {"version":1,"presets": {"alice":{"embedding":"embeddings/alice.npy"}, ...}}
+    # - legacy format: {"version":1,"presets": {"alice":{"embedding_path":"/abs/path.npy"}, ...}}
     if isinstance(db, dict) and isinstance(db.get("presets"), dict):
         return db
     return build_voice_db(preset_dir=preset_dir, db_path=db_path, embeddings_dir=embeddings_dir)
@@ -200,7 +209,12 @@ def choose_similar_voice(target_embedding: Path, *, preset_dir: Path, db_path: P
     best_sim = -math.inf
     for name, meta in presets.items():
         try:
-            emb_path = Path(meta["embedding_path"])
+            emb_ref = meta.get("embedding") or meta.get("embedding_path")
+            if not emb_ref:
+                continue
+            emb_path = Path(str(emb_ref))
+            if not emb_path.is_absolute():
+                emb_path = (db_path.parent / emb_path).resolve()
             emb = np.load(str(emb_path))
             sim = _cosine_sim(tgt, emb)
             if sim > best_sim:
