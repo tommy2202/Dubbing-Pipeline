@@ -113,3 +113,19 @@ async def ui_upload(request: Request) -> HTMLResponse:
         return RedirectResponse(url="/ui/login", status_code=302)
     return _render(request, "upload_wizard.html", {})
 
+
+@router.get("/presets")
+async def ui_presets(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    return _render(request, "presets.html", {})
+
+
+@router.get("/projects")
+async def ui_projects(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    return _render(request, "projects.html", {})
+

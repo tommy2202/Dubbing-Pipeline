@@ -1,0 +1,102 @@
+{% extends "_base.html" %}
+
+{% block title %}Presets • anime_v2{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Presets</h1>
+    <p class="mt-1 text-sm text-slate-400">Saved settings bundles for batch submissions.</p>
+  </div>
+  <a href="/ui/upload" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium">Upload</a>
+</div>
+
+<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4" x-data="presetsPage()" x-init="init()">
+  <div class="text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
+  <div class="text-sm text-emerald-200" x-show="toast" x-cloak x-text="toast"></div>
+
+  <div class="mt-4 grid gap-3 lg:grid-cols-2">
+    <div class="rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+      <div class="text-sm text-slate-300">Create preset</div>
+      <div class="mt-3 grid gap-3 sm:grid-cols-2 text-sm">
+        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="Name" x-model="form.name" />
+        <select class="rounded bg-slate-950 border border-slate-800 px-3 py-2" x-model="form.mode">
+          <option value="high">high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
+        </select>
+        <select class="rounded bg-slate-950 border border-slate-800 px-3 py-2" x-model="form.device">
+          <option value="auto">auto</option>
+          <option value="cpu">cpu</option>
+          <option value="cuda">cuda</option>
+        </select>
+        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="src_lang (ja)" x-model="form.src_lang" />
+        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="tgt_lang (en)" x-model="form.tgt_lang" />
+        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="tts_lang (en)" x-model="form.tts_lang" />
+        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2 sm:col-span-2" placeholder="tts_speaker (default)" x-model="form.tts_speaker" />
+      </div>
+      <button class="mt-4 rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-2 text-sm font-medium" @click="create()">
+        Save preset
+      </button>
+    </div>
+
+    <div class="rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+      <div class="text-sm text-slate-300">Existing presets</div>
+      <div class="mt-3 space-y-2">
+        <template x-for="p in items" :key="p.id">
+          <div class="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+            <div>
+              <div class="text-sm text-slate-200" x-text="p.name"></div>
+              <div class="text-xs text-slate-500" x-text="`${p.mode} • ${p.device} • ${p.src_lang}→${p.tgt_lang} • tts:${p.tts_lang}/${p.tts_speaker}`"></div>
+            </div>
+            <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-2 py-1 text-xs text-red-100"
+                    @click="remove(p.id)">Delete</button>
+          </div>
+        </template>
+        <div class="text-sm text-slate-500" x-show="items.length===0">No presets yet.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function presetsPage() {
+    return {
+      items: [],
+      error: "",
+      toast: "",
+      form: { name: "", mode: "medium", device: "auto", src_lang: "ja", tgt_lang: "en", tts_lang: "en", tts_speaker: "default" },
+      async init() { await this.refresh(); },
+      async refresh() {
+        const r = await fetch("/api/presets", { credentials: "include" });
+        if (!r.ok) return;
+        const d = await r.json();
+        this.items = Array.isArray(d.items) ? d.items : [];
+      },
+      async create() {
+        this.error = ""; this.toast = "";
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/presets", {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify(this.form),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { this.error = d.detail || "Create failed"; return; }
+        this.toast = "Preset saved.";
+        await this.refresh();
+      },
+      async remove(id) {
+        this.error = ""; this.toast = "";
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/presets/" + encodeURIComponent(id), { method: "DELETE", credentials: "include", headers: { "X-CSRF-Token": csrf } });
+        if (!r.ok) { this.error = "Delete failed"; return; }
+        this.toast = "Deleted.";
+        await this.refresh();
+      },
+    };
+  }
+</script>
+{% endblock %}
+

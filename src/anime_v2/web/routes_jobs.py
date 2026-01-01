@@ -41,6 +41,16 @@ _ALLOWED_UPLOAD_MIME = {
 }
 
 
+def _now_iso() -> str:
+    return now_utc()
+
+
+def _new_short_id(prefix: str = "p_") -> str:
+    import secrets
+
+    return prefix + secrets.token_hex(8)
+
+
 def _app_root() -> Path:
     env = os.environ.get("APP_ROOT")
     if env:
@@ -70,6 +80,19 @@ def _sanitize_video_path(p: str) -> Path:
     except Exception:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="video_path must be under APP_ROOT")
     return resolved
+
+
+def _sanitize_output_subdir(s: str) -> str:
+    s = (s or "").strip().strip("/")
+    if not s:
+        return ""
+    # allow spaces for friendly folder names
+    if not re.fullmatch(r"[A-Za-z0-9._/\- ]+", s):
+        raise HTTPException(status_code=400, detail="Invalid output_subdir")
+    # prevent traversal
+    if ".." in s.split("/"):
+        raise HTTPException(status_code=400, detail="Invalid output_subdir")
+    return s
 
 
 def _get_store(request: Request):
@@ -409,6 +432,170 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     return {"id": jid}
 
 
+@router.post("/api/jobs/batch")
+async def create_jobs_batch(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+    """
+    Batch submit jobs.
+
+    Supports:
+      - multipart/form-data with:
+          - files: multiple UploadFile (field name 'files')
+          - preset_id (optional), project_id (optional)
+      - application/json with:
+          - items: [{video_path|filename, preset_id?, project_id?}, ...]
+    """
+    store = _get_store(request)
+    scheduler = _get_scheduler(request)
+    limits = get_limits()
+
+    # Disk guard once per batch
+    s = get_settings()
+    out_root = Path(str(getattr(store, "db_path", Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output"))))).resolve().parent
+    out_root.mkdir(parents=True, exist_ok=True)
+    ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
+
+    created_ids: list[str] = []
+
+    async def _submit_one(*, video_path: Path, mode: str, device: str, src_lang: str, tgt_lang: str, preset: dict[str, Any] | None, project: dict[str, Any] | None) -> str:
+        # duration validation
+        try:
+            duration_s = float(ffprobe_duration_seconds(video_path))
+        except FFmpegError as ex:
+            raise HTTPException(status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}")
+        if duration_s <= 0.5:
+            raise HTTPException(status_code=400, detail="Video duration is too short or unreadable")
+        if duration_s > float(limits.max_video_min) * 60.0:
+            raise HTTPException(status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)")
+
+        jid = new_id()
+        created = now_utc()
+        job = Job(
+            id=jid,
+            owner_id=ident.user.id,
+            video_path=str(video_path),
+            duration_s=float(duration_s),
+            request_id=(request_id_var.get() or ""),
+            mode=mode,
+            device=device,
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+            created_at=created,
+            updated_at=created,
+            state=JobState.QUEUED,
+            progress=0.0,
+            message="Queued",
+            output_mkv="",
+            output_srt="",
+            work_dir="",
+            log_path="",
+            error=None,
+        )
+        rt = dict(job.runtime or {})
+        if preset:
+            rt["preset_id"] = str(preset.get("id") or "")
+            rt["preset"] = {
+                "tts_lang": str(preset.get("tts_lang") or ""),
+                "tts_speaker": str(preset.get("tts_speaker") or ""),
+                "tts_speaker_wav": str(preset.get("tts_speaker_wav") or ""),
+            }
+        if project:
+            rt["project_id"] = str(project.get("id") or "")
+            rt["project"] = {
+                "name": str(project.get("name") or ""),
+                "output_subdir": str(project.get("output_subdir") or ""),
+            }
+        job.runtime = rt
+        store.put(job)
+        try:
+            scheduler.submit(JobRecord(job_id=jid, mode=mode, device_pref=device, created_at=time.time(), priority=100))
+        except RuntimeError as ex:
+            if "draining" in str(ex).lower():
+                raise HTTPException(status_code=503, detail="Server is draining; try again later")
+            raise
+        jobs_queued.inc()
+        pipeline_job_total.inc()
+        return jid
+
+    ctype = (request.headers.get("content-type") or "").lower()
+    if "application/json" in ctype:
+        body = await request.json()
+        if not isinstance(body, dict) or not isinstance(body.get("items"), list):
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+        for it in body["items"]:
+            if not isinstance(it, dict):
+                continue
+            preset_id = str(it.get("preset_id") or "").strip()
+            project_id = str(it.get("project_id") or "").strip()
+            preset = store.get_preset(preset_id) if preset_id else None
+            project = store.get_project(project_id) if project_id else None
+            # Allow `filename` as relative under APP_ROOT/Input/...
+            vp = it.get("video_path") or it.get("filename")
+            if not isinstance(vp, str):
+                raise HTTPException(status_code=400, detail="Missing video_path/filename")
+            if vp.startswith("/"):
+                video_path = _sanitize_video_path(vp)
+            else:
+                video_path = _sanitize_video_path(str(Path("Input") / vp))
+            if not video_path.exists() or not video_path.is_file():
+                raise HTTPException(status_code=400, detail=f"video_path does not exist: {vp}")
+            mode = str(it.get("mode") or (preset.get("mode") if preset else "medium"))
+            device = str(it.get("device") or (preset.get("device") if preset else "auto"))
+            src_lang = str(it.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
+            tgt_lang = str(it.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
+            # project output folder stored in runtime; validated here
+            if project and project.get("output_subdir"):
+                project["output_subdir"] = _sanitize_output_subdir(str(project.get("output_subdir") or ""))
+            created_ids.append(await _submit_one(video_path=video_path, mode=mode, device=device, src_lang=src_lang, tgt_lang=tgt_lang, preset=preset, project=project))
+    else:
+        form = await request.form()
+        preset_id = str(form.get("preset_id") or "").strip()
+        project_id = str(form.get("project_id") or "").strip()
+        preset = store.get_preset(preset_id) if preset_id else None
+        project = store.get_project(project_id) if project_id else None
+        if project and project.get("output_subdir"):
+            project["output_subdir"] = _sanitize_output_subdir(str(project.get("output_subdir") or ""))
+        mode = str(form.get("mode") or (preset.get("mode") if preset else "medium"))
+        device = str(form.get("device") or (preset.get("device") if preset else "auto"))
+        src_lang = str(form.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
+        tgt_lang = str(form.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
+
+        files = form.getlist("files") if hasattr(form, "getlist") else []
+        if not files:
+            raise HTTPException(status_code=400, detail="Provide files")
+
+        root = _app_root()
+        up_dir = (root / "Input" / "uploads").resolve()
+        up_dir.mkdir(parents=True, exist_ok=True)
+        for upload in files:
+            ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()
+            if ctype_u and ctype_u not in _ALLOWED_UPLOAD_MIME:
+                raise HTTPException(status_code=400, detail=f"Unsupported upload content-type: {ctype_u}")
+            ext = ".mp4"
+            name = getattr(upload, "filename", "") or ""
+            if "." in name:
+                ext = "." + name.rsplit(".", 1)[-1][:8]
+            tmp_id = new_id()
+            dest = up_dir / f"{tmp_id}{ext}"
+            max_bytes = int(limits.max_upload_mb) * 1024 * 1024
+            written = 0
+            with dest.open("wb") as f:
+                while True:
+                    chunk = await upload.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        try:
+                            dest.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        raise HTTPException(status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)")
+                    f.write(chunk)
+            created_ids.append(await _submit_one(video_path=dest, mode=mode, device=device, src_lang=src_lang, tgt_lang=tgt_lang, preset=preset, project=project))
+
+    return {"ids": created_ids}
+
+
 @router.get("/api/jobs")
 async def list_jobs(
     request: Request,
@@ -564,6 +751,91 @@ async def jobs_events(request: Request, _: Identity = Depends(require_scope("rea
     import json
 
     return EventSourceResponse(gen())
+
+
+# --- presets ---
+@router.get("/api/presets")
+async def list_presets(request: Request, ident: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    items = store.list_presets(owner_id=ident.user.id)
+    return {"items": items}
+
+
+@router.post("/api/presets")
+async def create_preset(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    name = str(body.get("name") or "").strip() or "Preset"
+    preset = {
+        "id": _new_short_id("preset_"),
+        "owner_id": ident.user.id,
+        "name": name,
+        "created_at": _now_iso(),
+        "mode": str(body.get("mode") or "medium"),
+        "device": str(body.get("device") or "auto"),
+        "src_lang": str(body.get("src_lang") or "ja"),
+        "tgt_lang": str(body.get("tgt_lang") or "en"),
+        "tts_lang": str(body.get("tts_lang") or "en"),
+        "tts_speaker": str(body.get("tts_speaker") or "default"),
+        "tts_speaker_wav": str(body.get("tts_speaker_wav") or ""),
+    }
+    store.put_preset(preset)
+    return preset
+
+
+@router.delete("/api/presets/{id}")
+async def delete_preset(request: Request, id: str, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    p = store.get_preset(id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if str(p.get("owner_id") or "") != ident.user.id and ident.user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    store.delete_preset(id)
+    return {"ok": True}
+
+
+# --- projects ---
+@router.get("/api/projects")
+async def list_projects(request: Request, ident: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    items = store.list_projects(owner_id=ident.user.id)
+    return {"items": items}
+
+
+@router.post("/api/projects")
+async def create_project(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    name = str(body.get("name") or "").strip() or "Project"
+    default_preset_id = str(body.get("default_preset_id") or "").strip()
+    output_subdir = str(body.get("output_subdir") or "").strip()  # under Output/
+    proj = {
+        "id": _new_short_id("proj_"),
+        "owner_id": ident.user.id,
+        "name": name,
+        "created_at": _now_iso(),
+        "default_preset_id": default_preset_id,
+        "output_subdir": output_subdir,
+    }
+    store.put_project(proj)
+    return proj
+
+
+@router.delete("/api/projects/{id}")
+async def delete_project(request: Request, id: str, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    p = store.get_project(id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if str(p.get("owner_id") or "") != ident.user.id and ident.user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    store.delete_project(id)
+    return {"ok": True}
 
 
 @router.get("/api/jobs/{id}/logs/tail")

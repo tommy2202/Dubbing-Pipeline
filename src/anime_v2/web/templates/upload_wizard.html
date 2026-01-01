@@ -6,7 +6,7 @@
 <div class="flex items-start justify-between gap-4">
   <div>
     <h1 class="text-2xl font-semibold">Upload Wizard</h1>
-    <p class="mt-1 text-sm text-slate-400">3 steps: File → Settings → Voice.</p>
+    <p class="mt-1 text-sm text-slate-400">3 steps: File → Settings → Voice. Supports batch mode.</p>
   </div>
 </div>
 
@@ -14,9 +14,13 @@
   class="mt-6"
   x-data="{
     step: 1,
+    batch: false,
+    files: [],
     file: null,
     fileName: '',
     fileSize: 0,
+    preset_id: '',
+    project_id: '',
     mode: 'medium',
     device: 'auto',
     src_lang: 'ja',
@@ -32,6 +36,13 @@
       this.file = f || null;
       this.fileName = f ? (f.name || '') : '';
       this.fileSize = f ? (f.size || 0) : 0;
+    },
+    setFiles(list) {
+      const arr = [];
+      try { for (const f of (list || [])) arr.push(f); } catch(e) {}
+      this.files = arr;
+      if (arr.length === 1) this.setFile(arr[0]);
+      if (arr.length !== 1) { this.file = null; this.fileName=''; this.fileSize=0; }
     },
     fmtBytes(n) {
       try {
@@ -73,7 +84,7 @@
   <form
     id="jobForm"
     class="rounded-xl border border-slate-800 bg-slate-900/40 p-4"
-    hx-post="/api/jobs"
+    :hx-post="batch ? '/api/jobs/batch' : '/api/jobs'"
     hx-encoding="multipart/form-data"
     hx-swap="none"
   >
@@ -82,12 +93,20 @@
     <!-- Step 1 -->
     <div x-show="step===1">
       <div class="text-sm text-slate-300">Step 1 — Video file</div>
+      <div class="mt-2 flex items-center gap-2 text-sm text-slate-300">
+        <input type="checkbox" class="h-4 w-4" x-model="batch" @change="setFiles([]); setFile(null)" />
+        <span>Batch mode (multiple files)</span>
+      </div>
       <div
         class="mt-3 rounded-xl border border-dashed border-slate-700 bg-slate-950/30 p-6"
         @dragover.prevent
         @drop.prevent="
-          const f = ($event.dataTransfer.files && $event.dataTransfer.files[0]) ? $event.dataTransfer.files[0] : null;
-          setFile(f);
+          if (batch) {
+            setFiles($event.dataTransfer.files || []);
+          } else {
+            const f = ($event.dataTransfer.files && $event.dataTransfer.files[0]) ? $event.dataTransfer.files[0] : null;
+            setFile(f);
+          }
           if ($event.dataTransfer.files && $refs.fileInput) { $refs.fileInput.files = $event.dataTransfer.files; }
         "
       >
@@ -96,16 +115,31 @@
           <input
             x-ref="fileInput"
             type="file"
-            name="file"
+            :name="batch ? 'files' : 'file'"
+            :multiple="batch"
             accept="video/*"
             class="block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700"
-            @change="setFile($event.target.files && $event.target.files[0])"
+            @change="batch ? setFiles($event.target.files) : setFile($event.target.files && $event.target.files[0])"
           />
         </div>
-        <template x-if="file">
+        <template x-if="!batch && file">
           <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm">
             <div class="text-slate-200" x-text="fileName"></div>
             <div class="text-slate-500" x-text="fmtBytes(fileSize)"></div>
+          </div>
+        </template>
+        <template x-if="batch && files.length">
+          <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm">
+            <div class="text-slate-200" x-text="files.length + ' files selected'"></div>
+            <div class="mt-2 text-xs text-slate-400 space-y-1">
+              <template x-for="f in files.slice(0, 6)" :key="f.name">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="truncate" x-text="f.name"></div>
+                  <div class="text-slate-500" x-text="fmtBytes(f.size)"></div>
+                </div>
+              </template>
+              <div class="text-slate-500" x-show="files.length > 6">…and more</div>
+            </div>
           </div>
         </template>
       </div>
@@ -114,6 +148,24 @@
     <!-- Step 2 -->
     <div x-show="step===2" x-cloak>
       <div class="text-sm text-slate-300">Step 2 — Settings</div>
+      <div class="mt-3 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm text-slate-300">Preset (optional)</label>
+          <select name="preset_id" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+                  x-model="preset_id">
+            <option value="">(none)</option>
+          </select>
+          <div class="mt-1 text-xs text-slate-500">Loaded from /api/presets on page load (JS).</div>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300">Project (optional)</label>
+          <select name="project_id" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+                  x-model="project_id">
+            <option value="">(none)</option>
+          </select>
+          <div class="mt-1 text-xs text-slate-500">Loaded from /api/projects.</div>
+        </div>
+      </div>
       <div class="mt-4 grid gap-4 sm:grid-cols-2">
         <div>
           <label class="block text-sm text-slate-300">Mode</label>
@@ -244,7 +296,11 @@
           class="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-sm font-semibold"
           @click="
             error='';
-            if(!file){ error='Please choose a video file.'; $event.preventDefault(); return; }
+            if(batch){
+              if(!files.length){ error='Please choose at least one video file.'; $event.preventDefault(); return; }
+            } else {
+              if(!file){ error='Please choose a video file.'; $event.preventDefault(); return; }
+            }
           "
         >
           Start Job
@@ -269,14 +325,37 @@
           window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
           return;
         }
-        const jobId = data.id || data.job_id;
-        if (jobId) {
-          window.location = "/ui/jobs/" + encodeURIComponent(jobId) + "?created=1";
-        }
+        const ids = data.ids || [];
+        const jobId = data.id || data.job_id || (Array.isArray(ids) && ids.length ? ids[0] : null);
+        if (jobId) window.location = "/ui/jobs/" + encodeURIComponent(jobId) + "?created=1";
       } catch (e) {
         // ignore
       }
     });
+  })();
+</script>
+
+<script>
+  // Populate preset/project selects (simple, no build step)
+  (function(){
+    async function fill(url, selName){
+      const sel = document.querySelector('select[name="'+selName+'"]');
+      if(!sel) return;
+      try{
+        const r = await fetch(url, {credentials:'include'});
+        if(!r.ok) return;
+        const d = await r.json();
+        const items = Array.isArray(d.items) ? d.items : [];
+        for(const it of items){
+          const o = document.createElement('option');
+          o.value = it.id;
+          o.textContent = it.name || it.id;
+          sel.appendChild(o);
+        }
+      }catch(e){}
+    }
+    fill('/api/presets','preset_id');
+    fill('/api/projects','project_id');
   })();
 </script>
 {% endblock %}

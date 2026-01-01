@@ -1,0 +1,109 @@
+{% extends "_base.html" %}
+
+{% block title %}Projects • anime_v2{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Projects</h1>
+    <p class="mt-1 text-sm text-slate-400">Group jobs and set defaults.</p>
+  </div>
+  <div class="flex items-center gap-2">
+    <a href="/ui/presets" class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">Presets</a>
+    <a href="/ui/upload" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium">Upload</a>
+  </div>
+</div>
+
+<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4" x-data="projectsPage()" x-init="init()">
+  <div class="text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
+  <div class="text-sm text-emerald-200" x-show="toast" x-cloak x-text="toast"></div>
+
+  <div class="mt-4 grid gap-3 lg:grid-cols-2">
+    <div class="rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+      <div class="text-sm text-slate-300">Create project</div>
+      <div class="mt-3 grid gap-3 text-sm">
+        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="Name (My Series S01)" x-model="form.name" />
+        <select class="rounded bg-slate-950 border border-slate-800 px-3 py-2" x-model="form.default_preset_id">
+          <option value="">Default preset (optional)</option>
+          <template x-for="p in presets" :key="p.id">
+            <option :value="p.id" x-text="p.name"></option>
+          </template>
+        </select>
+        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="output_subdir (optional, under Output/)" x-model="form.output_subdir" />
+      </div>
+      <button class="mt-4 rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-2 text-sm font-medium" @click="create()">
+        Save project
+      </button>
+      <div class="mt-2 text-xs text-slate-500">Example output_subdir: <code class="text-slate-300">My Series S01</code></div>
+    </div>
+
+    <div class="rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+      <div class="text-sm text-slate-300">Existing projects</div>
+      <div class="mt-3 space-y-2">
+        <template x-for="p in items" :key="p.id">
+          <div class="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+            <div>
+              <div class="text-sm text-slate-200" x-text="p.name"></div>
+              <div class="text-xs text-slate-500" x-text="`default_preset=${p.default_preset_id||'-'} • output=${p.output_subdir||'-'}`"></div>
+            </div>
+            <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-2 py-1 text-xs text-red-100"
+                    @click="remove(p.id)">Delete</button>
+          </div>
+        </template>
+        <div class="text-sm text-slate-500" x-show="items.length===0">No projects yet.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function projectsPage() {
+    return {
+      items: [],
+      presets: [],
+      error: "",
+      toast: "",
+      form: { name: "", default_preset_id: "", output_subdir: "" },
+      async init() {
+        await this.refreshPresets();
+        await this.refresh();
+      },
+      async refreshPresets() {
+        const r = await fetch("/api/presets", { credentials: "include" });
+        if (!r.ok) return;
+        const d = await r.json();
+        this.presets = Array.isArray(d.items) ? d.items : [];
+      },
+      async refresh() {
+        const r = await fetch("/api/projects", { credentials: "include" });
+        if (!r.ok) return;
+        const d = await r.json();
+        this.items = Array.isArray(d.items) ? d.items : [];
+      },
+      async create() {
+        this.error = ""; this.toast = "";
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/projects", {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify(this.form),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { this.error = d.detail || "Create failed"; return; }
+        this.toast = "Project saved.";
+        await this.refresh();
+      },
+      async remove(id) {
+        this.error = ""; this.toast = "";
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/projects/" + encodeURIComponent(id), { method: "DELETE", credentials: "include", headers: { "X-CSRF-Token": csrf } });
+        if (!r.ok) { this.error = "Delete failed"; return; }
+        this.toast = "Deleted.";
+        await this.refresh();
+      },
+    };
+  }
+</script>
+{% endblock %}
+

@@ -251,7 +251,21 @@ class JobQueue:
 
         # Establish work/log paths before writing logs.
         video_path = Path(job.video_path)
-        base_dir = output_dir_for(video_path, self.app_root)
+        # Prefer ANIME_V2_OUTPUT_DIR (server-configured) over APP_ROOT/Output.
+        out_root = Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(self.app_root / "Output"))).resolve()
+        # Optional project output subdir (stored on job.runtime by batch/project submission).
+        runtime = dict(job.runtime or {})
+        proj_sub = ""
+        try:
+            proj = runtime.get("project")
+            if isinstance(proj, dict):
+                proj_sub = str(proj.get("output_subdir") or "").strip().strip("/")
+        except Exception:
+            proj_sub = ""
+        if proj_sub:
+            base_dir = (out_root / proj_sub / video_path.stem).resolve()
+        else:
+            base_dir = (out_root / video_path.stem).resolve()
         base_dir.mkdir(parents=True, exist_ok=True)
         # Temp artifacts live under Output/<stem>/work/<job_id>/...
         work_dir = (base_dir / "work" / job_id).resolve()
@@ -260,7 +274,6 @@ class JobQueue:
         ckpt_path = base_dir / ".checkpoint.json"
         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or {}
         # runtime report fields persisted on the job
-        runtime = dict(job.runtime or {})
         runtime.setdefault("attempts", {})
         runtime.setdefault("fallback_used", {})
         runtime.setdefault("breaker_state", {})
@@ -727,6 +740,23 @@ class JobQueue:
                     def _tts_phase():
                         if voice_map_json is not None:
                             os.environ["VOICE_MAP_JSON"] = str(voice_map_json)
+                        # Preset overrides for this job (lang/speaker/wav).
+                        try:
+                            curj = self.store.get(job_id)
+                            rt = dict((curj.runtime or {}) if curj else runtime)
+                            preset = rt.get("preset")
+                            if isinstance(preset, dict):
+                                tl = str(preset.get("tts_lang") or "").strip()
+                                if tl:
+                                    os.environ["TTS_LANG"] = tl
+                                sp = str(preset.get("tts_speaker") or "").strip()
+                                if sp:
+                                    os.environ["TTS_SPEAKER"] = sp
+                                wp = str(preset.get("tts_speaker_wav") or "").strip()
+                                if wp:
+                                    os.environ["TTS_SPEAKER_WAV"] = wp
+                        except Exception:
+                            pass
                         return tts.run(
                             out_dir=work_dir,
                             translated_json=translated_json if translated_json.exists() else None,

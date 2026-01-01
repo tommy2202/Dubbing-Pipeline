@@ -22,6 +22,12 @@ class JobStore:
     def _idem(self) -> SqliteDict:
         return SqliteDict(str(self.db_path), tablename="idempotency", autocommit=True)
 
+    def _presets(self) -> SqliteDict:
+        return SqliteDict(str(self.db_path), tablename="presets", autocommit=True)
+
+    def _projects(self) -> SqliteDict:
+        return SqliteDict(str(self.db_path), tablename="projects", autocommit=True)
+
     def put(self, job: Job) -> None:
         with self._lock:
             with self._jobs() as db:
@@ -109,4 +115,80 @@ class JobStore:
         with self._lock:
             with self._idem() as db:
                 db[key] = {"job_id": str(job_id), "ts": __import__("time").time()}
+
+    # --- presets ---
+    def list_presets(self, *, owner_id: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            with self._presets() as db:
+                items = list(db.values())
+        out = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            if owner_id and str(it.get("owner_id") or "") != str(owner_id):
+                continue
+            out.append(dict(it))
+        out.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+        return out
+
+    def get_preset(self, preset_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            with self._presets() as db:
+                v = db.get(str(preset_id))
+        return dict(v) if isinstance(v, dict) else None
+
+    def put_preset(self, preset: dict[str, Any]) -> dict[str, Any]:
+        pid = str(preset.get("id") or "")
+        if not pid:
+            raise ValueError("preset.id required")
+        with self._lock:
+            with self._presets() as db:
+                db[pid] = dict(preset)
+        return dict(preset)
+
+    def delete_preset(self, preset_id: str) -> None:
+        with self._lock:
+            with self._presets() as db:
+                try:
+                    del db[str(preset_id)]
+                except Exception:
+                    pass
+
+    # --- projects ---
+    def list_projects(self, *, owner_id: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            with self._projects() as db:
+                items = list(db.values())
+        out = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            if owner_id and str(it.get("owner_id") or "") != str(owner_id):
+                continue
+            out.append(dict(it))
+        out.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+        return out
+
+    def get_project(self, project_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            with self._projects() as db:
+                v = db.get(str(project_id))
+        return dict(v) if isinstance(v, dict) else None
+
+    def put_project(self, project: dict[str, Any]) -> dict[str, Any]:
+        pid = str(project.get("id") or "")
+        if not pid:
+            raise ValueError("project.id required")
+        with self._lock:
+            with self._projects() as db:
+                db[pid] = dict(project)
+        return dict(project)
+
+    def delete_project(self, project_id: str) -> None:
+        with self._lock:
+            with self._projects() as db:
+                try:
+                    del db[str(project_id)]
+                except Exception:
+                    pass
 
