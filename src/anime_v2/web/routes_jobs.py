@@ -109,6 +109,107 @@ def _player_job_for_path(p: Path) -> str | None:
     return hashlib.sha256(rel.encode("utf-8")).hexdigest()[:32]
 
 
+def _parse_srt(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    blocks = [b for b in text.split("\n\n") if b.strip()]
+
+    def parse_ts(ts: str) -> float:
+        hh, mm, rest = ts.split(":")
+        ss, ms = rest.split(",")
+        return int(hh) * 3600 + int(mm) * 60 + int(ss) + int(ms) / 1000.0
+
+    out: list[dict[str, Any]] = []
+    for b in blocks:
+        lines = [ln.rstrip("\n") for ln in b.splitlines() if ln.strip()]
+        if len(lines) < 2 or "-->" not in lines[1]:
+            continue
+        try:
+            start_s, end_s = [p.strip() for p in lines[1].split("-->", 1)]
+            start = float(parse_ts(start_s))
+            end = float(parse_ts(end_s))
+            txt = "\n".join(lines[2:]).strip() if len(lines) > 2 else ""
+            out.append({"start": start, "end": end, "text": txt})
+        except Exception:
+            continue
+    return out
+
+
+def _fmt_ts_srt(seconds: float) -> str:
+    s = max(0.0, float(seconds))
+    hh = int(s // 3600)
+    mm = int((s % 3600) // 60)
+    ss = int(s % 60)
+    ms = int(round((s - int(s)) * 1000.0))
+    return f"{hh:02d}:{mm:02d}:{ss:02d},{ms:03d}"
+
+
+def _write_srt_segments(path: Path, segments: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for i, s in enumerate(segments, 1):
+            f.write(f"{i}\n{_fmt_ts_srt(float(s['start']))} --> {_fmt_ts_srt(float(s['end']))}\n{str(s.get('text') or '').strip()}\n\n")
+
+
+def _job_base_dir(job: Job) -> Path:
+    # Prefer parent of output_mkv (stable Output/<stem>/), else use Output/<video_stem>.
+    if job.output_mkv:
+        try:
+            p = Path(str(job.output_mkv))
+            if p.parent.exists():
+                return p.parent.resolve()
+        except Exception:
+            pass
+    try:
+        stem = Path(str(job.video_path)).stem
+    except Exception:
+        stem = job.id
+    return (_output_root() / stem).resolve()
+
+
+def _transcript_store_paths(base_dir: Path) -> tuple[Path, Path]:
+    return base_dir / "transcript_store.json", base_dir / "transcript_versions.jsonl"
+
+
+def _load_transcript_store(base_dir: Path) -> dict[str, Any]:
+    store_path, _ = _transcript_store_paths(base_dir)
+    if not store_path.exists():
+        return {"version": 0, "segments": {}}
+    try:
+        import json as _json
+
+        data = _json.loads(store_path.read_text(encoding="utf-8", errors="replace"))
+        if isinstance(data, dict):
+            data.setdefault("version", 0)
+            data.setdefault("segments", {})
+            if not isinstance(data["segments"], dict):
+                data["segments"] = {}
+            return data
+    except Exception:
+        pass
+    return {"version": 0, "segments": {}}
+
+
+def _save_transcript_store(base_dir: Path, data: dict[str, Any]) -> None:
+    store_path, _ = _transcript_store_paths(base_dir)
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    import json as _json
+
+    tmp = store_path.with_suffix(".tmp")
+    tmp.write_text(_json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(store_path)
+
+
+def _append_transcript_version(base_dir: Path, entry: dict[str, Any]) -> None:
+    _, vpath = _transcript_store_paths(base_dir)
+    vpath.parent.mkdir(parents=True, exist_ok=True)
+    import json as _json
+
+    with vpath.open("a", encoding="utf-8") as f:
+        f.write(_json.dumps(entry, sort_keys=True) + "\n")
+
+
 @router.post("/api/jobs")
 async def create_job(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, str]:
     # Idempotency-Key: return existing job when present and not expired.
@@ -593,6 +694,142 @@ async def put_job_characters(request: Request, id: str, _: Identity = Depends(re
     rt["voice_map"] = items
     store.update(id, runtime=rt)
     return {"ok": True, "items": items}
+
+
+@router.get("/api/jobs/{id}/transcript")
+async def get_job_transcript(
+    request: Request,
+    id: str,
+    page: int = 1,
+    per_page: int = 50,
+    _: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    stem = Path(job.video_path).stem if job.video_path else base_dir.name
+
+    src_srt = base_dir / f"{stem}.srt"
+    tgt_srt = base_dir / f"{stem}.translated.srt"
+    # If no translated SRT yet, fall back to src.
+    if not tgt_srt.exists():
+        tgt_srt = src_srt
+
+    src = _parse_srt(src_srt)
+    tgt = _parse_srt(tgt_srt)
+
+    # Align by index
+    n = max(len(src), len(tgt))
+    items = []
+
+    st = _load_transcript_store(base_dir)
+    seg_over = st.get("segments", {})
+    version = int(st.get("version") or 0)
+
+    for i in range(n):
+        s0 = src[i] if i < len(src) else (tgt[i] if i < len(tgt) else {"start": 0.0, "end": 0.0, "text": ""})
+        t0 = tgt[i] if i < len(tgt) else (src[i] if i < len(src) else {"start": 0.0, "end": 0.0, "text": ""})
+        ov = seg_over.get(str(i + 1), {}) if isinstance(seg_over, dict) else {}
+        tgt_text = str(ov.get("tgt_text") if isinstance(ov, dict) and "tgt_text" in ov else t0.get("text") or "")
+        approved = bool(ov.get("approved")) if isinstance(ov, dict) else False
+        flags = ov.get("flags") if isinstance(ov, dict) else []
+        if not isinstance(flags, list):
+            flags = []
+        items.append(
+            {
+                "index": i + 1,
+                "start": _fmt_ts_srt(float(s0.get("start", 0.0))),
+                "end": _fmt_ts_srt(float(s0.get("end", 0.0))),
+                "src_text": str(s0.get("text") or ""),
+                "tgt_text": tgt_text,
+                "approved": approved,
+                "flags": [str(x) for x in flags],
+            }
+        )
+
+    per = max(1, min(200, int(per_page)))
+    p = max(1, int(page))
+    total = len(items)
+    start_i = (p - 1) * per
+    page_items = items[start_i : start_i + per]
+    return {"items": page_items, "page": p, "per_page": per, "total": total, "version": version}
+
+
+@router.put("/api/jobs/{id}/transcript")
+async def put_job_transcript(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+
+    body = await request.json()
+    if not isinstance(body, dict) or not isinstance(body.get("updates"), list):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    updates = [u for u in body.get("updates", []) if isinstance(u, dict)]
+    if not updates:
+        return {"ok": True, "version": int(_load_transcript_store(base_dir).get("version") or 0)}
+
+    st = _load_transcript_store(base_dir)
+    segs = st.get("segments", {})
+    if not isinstance(segs, dict):
+        segs = {}
+        st["segments"] = segs
+
+    applied = []
+    for u in updates:
+        try:
+            idx = int(u.get("index"))
+            if idx <= 0:
+                continue
+        except Exception:
+            continue
+        rec = segs.get(str(idx), {})
+        if not isinstance(rec, dict):
+            rec = {}
+        if "tgt_text" in u:
+            rec["tgt_text"] = str(u.get("tgt_text") or "")
+        if "approved" in u:
+            rec["approved"] = bool(u.get("approved"))
+        if "flags" in u:
+            flags = u.get("flags")
+            if isinstance(flags, list):
+                rec["flags"] = [str(x) for x in flags]
+        segs[str(idx)] = rec
+        applied.append({"index": idx, "tgt_text": rec.get("tgt_text"), "approved": rec.get("approved"), "flags": rec.get("flags", [])})
+
+    st["version"] = int(st.get("version") or 0) + 1
+    st["updated_at"] = now_utc()
+    _save_transcript_store(base_dir, st)
+    _append_transcript_version(base_dir, {"version": st["version"], "updated_at": st["updated_at"], "updates": applied})
+
+    # Persist version on job runtime for visibility.
+    rt = dict(job.runtime or {})
+    rt["transcript_version"] = st["version"]
+    store.update(id, runtime=rt)
+    return {"ok": True, "version": st["version"]}
+
+
+@router.post("/api/jobs/{id}/transcript/synthesize")
+async def synthesize_from_approved(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    scheduler = _get_scheduler(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    st = _load_transcript_store(base_dir)
+    # Mark job to re-synthesize only approved segments.
+    rt = dict(job.runtime or {})
+    rt["resynth"] = {"type": "approved", "requested_at": now_utc(), "transcript_version": int(st.get("version") or 0)}
+    job2 = store.update(id, state=JobState.QUEUED, progress=0.0, message="Resynth requested (approved only)", runtime=rt)
+    try:
+        scheduler.submit(JobRecord(job_id=id, mode=(job2.mode if job2 else job.mode), device_pref=(job2.device if job2 else job.device), created_at=time.time(), priority=50))
+    except Exception:
+        pass
+    return {"ok": True}
 
 
 @router.websocket("/ws/jobs/{id}")

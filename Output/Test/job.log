@@ -148,3 +148,35 @@ Traceback (most recent call last):
     v = fn(*args, **kwargs)
         ^^^^^^^^^^^^^^^^^^^
 TypeError: extract() got an unexpected keyword argument 'job_id'
+[2026-01-01T04:44:25.207195+00:00] start job=j_test_1
+[2026-01-01T04:44:25.267271+00:00] audio_extractor
+[2026-01-01T04:44:25.273926+00:00] failed: Phase 'audio_extract' failed:
+Traceback (most recent call last):
+  File "/workspace/src/anime_v2/jobs/watchdog.py", line 24, in _child_main
+    v = fn(*args, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^
+TypeError: extract() got an unexpected keyword argument 'job_id'
+[2026-01-01T04:44:25.736818+00:00] start job=j_char_1
+[2026-01-01T04:44:25.795068+00:00] audio_extractor
+[2026-01-01T04:44:25.800158+00:00] failed: Phase 'audio_extract' failed:
+Traceback (most recent call last):
+  File "/workspace/src/anime_v2/jobs/watchdog.py", line 24, in _child_main
+    v = fn(*args, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^
+TypeError: extract() got an unexpected keyword argument 'job_id'
+[2026-01-01T04:44:25.912595+00:00] start job=j_log_1
+[2026-01-01T04:44:25.965078+00:00] audio_extractor
+[2026-01-01T04:44:25.971583+00:00] failed: Phase 'audio_extract' failed:
+Traceback (most recent call last):
+  File "/workspace/src/anime_v2/jobs/watchdog.py", line 24, in _child_main
+    v = fn(*args, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^
+TypeError: extract() got an unexpected keyword argument 'job_id'
+[2026-01-01T04:44:26.335076+00:00] start job=j_tr_2
+[2026-01-01T04:44:26.389185+00:00] audio_extractor
+[2026-01-01T04:44:26.395221+00:00] failed: Phase 'audio_extract' failed:
+Traceback (most recent call last):
+  File "/workspace/src/anime_v2/jobs/watchdog.py", line 24, in _child_main
+    v = fn(*args, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^
+TypeError: extract() got an unexpected keyword argument 'job_id'

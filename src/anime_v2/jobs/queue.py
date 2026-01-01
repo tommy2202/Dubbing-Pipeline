@@ -573,6 +573,89 @@ class JobQueue:
 
             do_translate = job.src_lang.lower() != job.tgt_lang.lower()
             subs_srt_path: Path | None = srt_public
+            # Resynthesis path: if transcript edits exist and a resynth was requested,
+            # we will skip MT and synthesize only approved segments (others become silence).
+            resynth = None
+            try:
+                curj = self.store.get(job_id)
+                rt = dict((curj.runtime or {}) if curj else runtime)
+                resynth = rt.get("resynth")
+            except Exception:
+                resynth = None
+
+            def _apply_transcript_to_translated_json(*, approved_only: bool) -> Path | None:
+                try:
+                    from anime_v2.utils.io import read_json, write_json
+
+                    store_path = base_dir / "transcript_store.json"
+                    if not store_path.exists():
+                        return None
+                    st = read_json(store_path, default={})
+                    seg_over = st.get("segments", {}) if isinstance(st, dict) else {}
+                    if not isinstance(seg_over, dict):
+                        return None
+
+                    # base segments from translated.json if present; else from translated_srt
+                    segments: list[dict] = []
+                    if translated_json.exists():
+                        data = read_json(translated_json, default={})
+                        segs = data.get("segments") if isinstance(data, dict) else None
+                        if isinstance(segs, list):
+                            segments = [dict(s) for s in segs if isinstance(s, dict)]
+                    if not segments and translated_srt.exists():
+                        # minimal parse (no speaker)
+                        txt = translated_srt.read_text(encoding="utf-8", errors="replace")
+                        blocks = [b for b in txt.split("\n\n") if b.strip()]
+
+                        def parse_ts(ts: str) -> float:
+                            hh, mm, rest = ts.split(":")
+                            ss, ms = rest.split(",")
+                            return int(hh) * 3600 + int(mm) * 60 + int(ss) + int(ms) / 1000.0
+
+                        for b in blocks:
+                            lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
+                            if len(lines) < 2 or "-->" not in lines[1]:
+                                continue
+                            start_s, end_s = [p.strip() for p in lines[1].split("-->", 1)]
+                            seg_text = " ".join(lines[2:]).strip() if len(lines) > 2 else ""
+                            segments.append({"start": parse_ts(start_s), "end": parse_ts(end_s), "speaker": "SPEAKER_01", "text": seg_text})
+
+                    if not segments:
+                        return None
+
+                    out_segments: list[dict] = []
+                    for i, s in enumerate(segments, 1):
+                        ov = seg_over.get(str(i), {})
+                        if isinstance(ov, dict):
+                            tgt_text = str(ov.get("tgt_text") if "tgt_text" in ov else (s.get("text") or ""))
+                            approved = bool(ov.get("approved"))
+                        else:
+                            tgt_text = str(s.get("text") or "")
+                            approved = False
+                        if approved_only and not approved:
+                            tgt_text = ""
+                        ss = dict(s)
+                        ss["text"] = tgt_text
+                        out_segments.append(ss)
+
+                    out_json = work_dir / "translated.edited.json"
+                    write_json(out_json, {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "segments": out_segments})
+                    # also write an edited SRT for review
+                    try:
+                        out_srt = base_dir / f"{video_path.stem}.translated.edited.srt"
+                        _write_srt(
+                            [{"start": float(s["start"]), "end": float(s["end"]), "speaker_id": str(s.get("speaker") or "SPEAKER_01"), "text": str(s.get("text") or "")} for s in out_segments],
+                            out_srt,
+                        )
+                        # prefer edited subtitles for mux when resynth is requested
+                        nonlocal subs_srt_path
+                        subs_srt_path = out_srt
+                    except Exception:
+                        pass
+                    return out_json
+                except Exception:
+                    return None
+
             if do_translate:
                 self.store.update(job_id, progress=0.62, message="Translating subtitles")
                 self.store.append_log(job_id, f"[{now_utc()}] translate src={job.src_lang} tgt={job.tgt_lang}")
@@ -600,6 +683,13 @@ class JobQueue:
                     self.store.update(job_id, progress=0.75, message="Translation failed (using original text)")
             else:
                 self.store.update(job_id, progress=0.75, message="Translation skipped")
+
+            # If resynth requested, generate an edited translation JSON for TTS.
+            edited_json = None
+            if isinstance(resynth, dict) and str(resynth.get("type") or "") == "approved":
+                edited_json = _apply_transcript_to_translated_json(approved_only=True)
+                if edited_json is not None:
+                    translated_json = edited_json
             await self._check_canceled(job_id)
 
             # e) tts.synthesize aligned track (~0.95)
@@ -652,9 +742,24 @@ class JobQueue:
 
                     # checkpoint-aware skip
                     tts_manifest = work_dir / "tts_manifest.json"
-                    if tts_wav.exists() and tts_manifest.exists() and stage_is_done(ckpt, "tts"):
+                    if (
+                        tts_wav.exists()
+                        and tts_manifest.exists()
+                        and stage_is_done(ckpt, "tts")
+                        and not (isinstance(resynth, dict) and str(resynth.get("type") or "") == "approved")
+                    ):
                         self.store.append_log(job_id, f"[{now_utc()}] tts (checkpoint hit)")
                     else:
+                        # Force rerun on resynth.
+                        if isinstance(resynth, dict) and str(resynth.get("type") or "") == "approved":
+                            try:
+                                tts_wav.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                            try:
+                                tts_manifest.unlink(missing_ok=True)
+                            except Exception:
+                                pass
                         if sched is None:
                             run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
                         else:
@@ -799,6 +904,15 @@ class JobQueue:
                 output_srt=str(subs_srt_path) if subs_srt_path else "",
                 work_dir=str(base_dir),
             )
+            # Clear resynth flag after completion.
+            try:
+                curj = self.store.get(job_id)
+                rt2 = dict((curj.runtime or {}) if curj else runtime)
+                if "resynth" in rt2:
+                    rt2.pop("resynth", None)
+                    self.store.update(job_id, runtime=rt2)
+            except Exception:
+                pass
             jobs_finished.labels(state="DONE").inc()
             self.store.append_log(job_id, f"[{now_utc()}] done in {time.perf_counter()-t0:.2f}s")
             # Cleanup temp workdir (keep logs + checkpoint + final outputs in Output/<stem>/).
