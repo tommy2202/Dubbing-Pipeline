@@ -290,6 +290,33 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 )
 @click.option("--limiter/--no-limiter", default=bool(get_settings().limiter), show_default=True)
 @click.option(
+    "--timing-fit/--no-timing-fit",
+    default=bool(get_settings().timing_fit),
+    show_default=True,
+)
+@click.option("--pacing/--no-pacing", default=bool(get_settings().pacing), show_default=True)
+@click.option(
+    "--pacing-min-stretch",
+    type=float,
+    default=float(get_settings().pacing_min_ratio),
+    show_default=True,
+)
+@click.option(
+    "--pacing-max-stretch",
+    type=float,
+    default=float(get_settings().pacing_max_ratio),
+    show_default=True,
+)
+@click.option("--wps", type=float, default=float(get_settings().timing_wps), show_default=True)
+@click.option(
+    "--tolerance",
+    type=float,
+    default=float(get_settings().timing_tolerance),
+    show_default=True,
+    help="Timing tolerance as a fraction (e.g. 0.10 = 10%)",
+)
+@click.option("--timing-debug", is_flag=True, default=False, help="Write per-segment debug JSON")
+@click.option(
     "--emit",
     default=str(get_settings().emit_formats),
     show_default=True,
@@ -370,6 +397,13 @@ def cli(
     ducking: bool,
     ducking_strength: float,
     limiter: bool,
+    timing_fit: bool,
+    pacing: bool,
+    pacing_min_stretch: float,
+    pacing_max_stretch: float,
+    wps: float,
+    tolerance: float,
+    timing_debug: bool,
     emit: str,
     emotion_mode: str,
     speech_rate: float,
@@ -466,6 +500,34 @@ def cli(
         base_args += ["--aligner", str(aligner)]
         base_args += ["--max-stretch", str(max_stretch)]
         base_args += ["--mix-profile", str(mix_profile)]
+        base_args += ["--mix", str(mix_mode)]
+        base_args += ["--lufs-target", str(lufs_target)]
+        if ducking:
+            base_args += ["--ducking"]
+        else:
+            base_args += ["--no-ducking"]
+        base_args += ["--ducking-strength", str(ducking_strength)]
+        if limiter:
+            base_args += ["--limiter"]
+        else:
+            base_args += ["--no-limiter"]
+        base_args += ["--separation", str(separation)]
+        base_args += ["--separation-model", str(separation_model)]
+        base_args += ["--separation-device", str(separation_device)]
+        if timing_fit:
+            base_args += ["--timing-fit"]
+        else:
+            base_args += ["--no-timing-fit"]
+        if pacing:
+            base_args += ["--pacing"]
+        else:
+            base_args += ["--no-pacing"]
+        base_args += ["--pacing-min-stretch", str(pacing_min_stretch)]
+        base_args += ["--pacing-max-stretch", str(pacing_max_stretch)]
+        base_args += ["--wps", str(wps)]
+        base_args += ["--tolerance", str(tolerance)]
+        if timing_debug:
+            base_args += ["--timing-debug"]
         base_args += ["--emit", str(emit)]
         if separate_vocals:
             base_args += ["--separate-vocals"]
@@ -514,6 +576,21 @@ def cli(
                     max_stretch=max_stretch,
                     mix_profile=mix_profile,
                     separate_vocals=separate_vocals,
+                    separation=separation,
+                    separation_model=separation_model,
+                    separation_device=separation_device,
+                    mix_mode=mix_mode,
+                    lufs_target=lufs_target,
+                    ducking=ducking,
+                    ducking_strength=ducking_strength,
+                    limiter=limiter,
+                    timing_fit=timing_fit,
+                    pacing=pacing,
+                    pacing_min_stretch=pacing_min_stretch,
+                    pacing_max_stretch=pacing_max_stretch,
+                    wps=wps,
+                    tolerance=tolerance,
+                    timing_debug=timing_debug,
                     emit=emit,
                     print_config=False,
                 )
@@ -1047,18 +1124,45 @@ def cli(
             except Exception as ex:
                 logger.warning("[v2] align: skipped/failed (%s)", ex)
 
+            # Optional timing-aware translation fit (Tier-1 B).
+            if timing_fit:
+                try:
+                    from anime_v2.timing.fit_text import fit_translation_to_time
+
+                    for seg in translated_segments:
+                        try:
+                            tgt_s = max(0.0, float(seg["end"]) - float(seg["start"]))
+                            pre = str(seg.get("text") or "")
+                            fitted, stats = fit_translation_to_time(
+                                pre,
+                                tgt_s,
+                                tolerance=float(tolerance),
+                                wps=float(wps),
+                                max_passes=4,
+                            )
+                            seg["text_pre_fit"] = pre
+                            seg["text"] = fitted
+                            seg["timing_fit"] = stats.to_dict()
+                        except Exception:
+                            continue
+                except Exception as ex:
+                    logger.warning("[v2] timing-fit skipped (%s)", ex)
+
             write_json(
                 translated_json,
                 {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": translated_segments},
             )
 
             # Convert to SRT lines (speaker preserved; text from translated)
+            subs_use_fit = bool(get_settings().subs_use_fitted_text) if timing_fit else True
             srt_lines = [
                 {
                     "start": s["start"],
                     "end": s["end"],
                     "speaker_id": s["speaker"],
-                    "text": s["text"],
+                    "text": (
+                        s.get("text") if subs_use_fit else (s.get("text_pre_fit") or s.get("text"))
+                    ),
                 }
                 for s in translated_segments
             ]
@@ -1068,7 +1172,15 @@ def cli(
                 try:
                     _write_vtt_from_lines(
                         [
-                            {"start": s["start"], "end": s["end"], "text": s["text"]}
+                            {
+                                "start": s["start"],
+                                "end": s["end"],
+                                "text": (
+                                    s.get("text")
+                                    if subs_use_fit
+                                    else (s.get("text_pre_fit") or s.get("text"))
+                                ),
+                            }
                             for s in translated_segments
                         ],
                         translated_vtt,
@@ -1120,6 +1232,11 @@ def cli(
             speech_rate=float(speech_rate),
             pitch=float(pitch),
             energy=float(energy),
+            pacing=bool(pacing),
+            pacing_min_ratio=float(pacing_min_stretch),
+            pacing_max_ratio=float(pacing_max_stretch),
+            timing_tolerance=float(tolerance),
+            timing_debug=bool(timing_debug),
             max_stretch=float(max_stretch),
         )
         logger.info("[v2] tts: ok (%.2fs) → %s", time.perf_counter() - t_stage, tts_wav)

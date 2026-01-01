@@ -172,6 +172,24 @@ Artifacts:
 anime-v2 Input/Test.mp4 --mix enhanced --lufs-target -16 --ducking --ducking-strength 1.0 --limiter
 ```
 
+### Timing Fit & Pacing (Tier‑1 B/C)
+
+Defaults preserve current behavior. To enable timing-aware translation fitting + segment pacing:
+
+```bash
+anime-v2 Input/Test.mp4 --timing-fit --pacing --wps 2.7 --tolerance 0.10 --pacing-min-stretch 0.88 --pacing-max-stretch 1.18
+```
+
+Debug artifacts (per segment):
+
+```bash
+anime-v2 Input/Test.mp4 --timing-fit --pacing --timing-debug
+```
+
+This writes:
+
+- `Output/<stem>/segments/0000.json` (start/end, pre-fit/fitted text, pacing actions)
+
 ### Pseudo-streaming (chunk mode)
 
 ```bash

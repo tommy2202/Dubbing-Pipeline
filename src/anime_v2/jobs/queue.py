@@ -821,6 +821,27 @@ class JobQueue:
                     translated_segments = translate_segments(
                         segments_for_mt, src_lang=job.src_lang, tgt_lang=job.tgt_lang, cfg=cfg
                     )
+                    # Optional timing-aware translation fit (Tier-1 B).
+                    if bool(getattr(settings, "timing_fit", False)):
+                        try:
+                            from anime_v2.timing.fit_text import fit_translation_to_time
+
+                            wps = float(getattr(settings, "timing_wps", 2.7))
+                            tol = float(getattr(settings, "timing_tolerance", 0.10))
+                            for seg in translated_segments:
+                                try:
+                                    tgt_s = max(0.0, float(seg["end"]) - float(seg["start"]))
+                                    pre = str(seg.get("text") or "")
+                                    fitted, stats = fit_translation_to_time(
+                                        pre, tgt_s, tolerance=tol, wps=wps, max_passes=4
+                                    )
+                                    seg["text_pre_fit"] = pre
+                                    seg["text"] = fitted
+                                    seg["timing_fit"] = stats.to_dict()
+                                except Exception:
+                                    continue
+                        except Exception:
+                            pass
                     write_json(
                         translated_json,
                         {
@@ -834,7 +855,11 @@ class JobQueue:
                             "start": s["start"],
                             "end": s["end"],
                             "speaker_id": s["speaker"],
-                            "text": s["text"],
+                            "text": (
+                                s.get("text")
+                                if bool(getattr(settings, "subs_use_fitted_text", True))
+                                else (s.get("text_pre_fit") or s.get("text"))
+                            ),
                         }
                         for s in translated_segments
                     ]
@@ -931,6 +956,11 @@ class JobQueue:
                             speech_rate=float(settings.speech_rate),
                             pitch=float(settings.pitch),
                             energy=float(settings.energy),
+                            pacing=bool(getattr(settings, "pacing", False)),
+                            pacing_min_ratio=float(getattr(settings, "pacing_min_ratio", 0.88)),
+                            pacing_max_ratio=float(getattr(settings, "pacing_max_ratio", 1.18)),
+                            timing_tolerance=float(getattr(settings, "timing_tolerance", 0.10)),
+                            timing_debug=bool(getattr(settings, "timing_debug", False)),
                             # callbacks omitted (not picklable); progress updates remain coarse for this phase
                             progress_cb=None,
                             cancel_cb=None,

@@ -264,6 +264,11 @@ def run(
     speech_rate: float | None = None,
     pitch: float | None = None,
     energy: float | None = None,
+    pacing: bool | None = None,
+    pacing_min_ratio: float | None = None,
+    pacing_max_ratio: float | None = None,
+    timing_tolerance: float | None = None,
+    timing_debug: bool | None = None,
     progress_cb=None,
     cancel_cb=None,
     max_stretch: float = 0.15,
@@ -297,6 +302,23 @@ def run(
     eff_rate = float(speech_rate if speech_rate is not None else settings.speech_rate)
     eff_pitch = float(pitch if pitch is not None else settings.pitch)
     eff_energy = float(energy if energy is not None else settings.energy)
+    eff_pacing = bool(pacing) if pacing is not None else bool(settings.pacing)
+    eff_pacing_min = (
+        float(pacing_min_ratio)
+        if pacing_min_ratio is not None
+        else float(settings.pacing_min_ratio)
+    )
+    eff_pacing_max = (
+        float(pacing_max_ratio)
+        if pacing_max_ratio is not None
+        else float(settings.pacing_max_ratio)
+    )
+    eff_tol = (
+        float(timing_tolerance)
+        if timing_tolerance is not None
+        else float(settings.timing_tolerance)
+    )
+    eff_debug = bool(timing_debug) if timing_debug is not None else bool(settings.timing_debug)
     out_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = out_dir / ".checkpoint.json"
 
@@ -365,6 +387,7 @@ def run(
                                     s.get("speaker") or s.get("speaker_id") or "SPEAKER_01"
                                 ),
                                 "text": str(s.get("text") or ""),
+                                "text_pre_fit": str(s.get("text_pre_fit") or ""),
                             }
                         )
                     except Exception:
@@ -635,12 +658,144 @@ def run(
         with suppress(Exception):
             clip = _apply_prosody_ffmpeg(clip, rate=rate_mul, pitch=pitch_mul, energy=energy_mul)
 
-        # Optional: retime clip to fit subtitle window (avoid early/late speech).
-        with suppress(Exception):
-            from anime_v2.stages.align import retime_tts  # lazy import
+        # Optional Tier-1 C pacing controls (opt-in).
+        if eff_pacing:
+            try:
+                from anime_v2.timing.fit_text import shorten_english
+                from anime_v2.timing.pacing import (
+                    measure_wav_seconds,
+                    pad_or_trim_wav,
+                    time_stretch_wav,
+                )
 
-            target_dur = max(0.05, float(line["end"]) - float(line["start"]))
-            clip = retime_tts(clip, target_duration_s=target_dur, max_stretch=float(max_stretch))
+                target_dur = max(0.05, float(line["end"]) - float(line["start"]))
+                actual_dur = measure_wav_seconds(clip)
+                actions: list[dict] = []
+
+                # Too long: 1) try TTS speed control (best-effort, only for XTTS engine)
+                if actual_dur > target_dur * (1.0 + eff_tol):
+                    ratio = max(1.0, float(actual_dur) / float(target_dur))
+                    speed = min(max(1.0, ratio), float(eff_pacing_max))
+                    if engine is not None and cb.allow() and eff_tts_provider in {"auto", "xtts"}:
+                        try:
+                            raw2 = raw_clip.with_suffix(".speed.raw.wav")
+                            actions.append({"kind": "tts_speed", "speed": float(speed)})
+                            # Prefer preset path for speed-control re-synth (clone w/ speed is model-dependent)
+                            _retry_wrap(
+                                "xtts_speed",
+                                lambda text=text, raw2=raw2, speed=speed: engine.synthesize(
+                                    text,
+                                    language=eff_tts_lang,
+                                    speaker_id=eff_tts_speaker,
+                                    out_path=raw2,
+                                    speed=float(speed),
+                                ),
+                            )
+                            # Normalize then continue with updated clip
+                            try:
+                                _ffmpeg_to_pcm16k(raw2, clip)
+                            except Exception:
+                                clip = raw2
+                            actual_dur = measure_wav_seconds(clip)
+                        except Exception as ex:
+                            actions.append({"kind": "tts_speed_failed", "error": str(ex)})
+
+                # 2) atempo time-stretch within safe bounds
+                if actual_dur > target_dur * (1.0 + eff_tol):
+                    ratio = float(actual_dur) / float(target_dur)
+                    ratio = max(float(eff_pacing_min), min(float(eff_pacing_max), float(ratio)))
+                    actions.append({"kind": "atempo", "ratio": float(ratio)})
+                    stretched = clip.with_suffix(".pacing.stretch.wav")
+                    stretched = time_stretch_wav(
+                        clip,
+                        stretched,
+                        ratio,
+                        min_ratio=float(eff_pacing_min),
+                        max_ratio=float(eff_pacing_max),
+                        timeout_s=120,
+                    )
+                    clip = stretched
+                    actual_dur = measure_wav_seconds(clip)
+
+                # 3) shorten and re-synthesize once (rule-based) if still too long
+                if actual_dur > target_dur * (1.0 + eff_tol):
+                    shorter = shorten_english(text)
+                    if shorter and shorter != text and engine is not None and cb.allow():
+                        try:
+                            actions.append(
+                                {"kind": "shorten_resynth", "before": text, "after": shorter}
+                            )
+                            raw3 = raw_clip.with_suffix(".short.raw.wav")
+                            _retry_wrap(
+                                "xtts_short",
+                                lambda shorter=shorter, raw3=raw3: engine.synthesize(
+                                    shorter,
+                                    language=eff_tts_lang,
+                                    speaker_id=eff_tts_speaker,
+                                    out_path=raw3,
+                                ),
+                            )
+                            try:
+                                _ffmpeg_to_pcm16k(raw3, clip)
+                            except Exception:
+                                clip = raw3
+                            actual_dur = measure_wav_seconds(clip)
+                        except Exception as ex:
+                            actions.append({"kind": "shorten_resynth_failed", "error": str(ex)})
+
+                # 4) hard cap if still too long
+                if actual_dur > target_dur * (1.0 + eff_tol):
+                    actions.append({"kind": "hard_trim"})
+                    capped = clip.with_suffix(".pacing.cap.wav")
+                    clip = pad_or_trim_wav(clip, capped, target_dur, timeout_s=120)
+                    actual_dur = measure_wav_seconds(clip)
+                    logger.warning(
+                        "[v2] pacing: hard-capped segment",
+                        idx=i,
+                        target_s=target_dur,
+                        actual_s=actual_dur,
+                    )
+
+                # 5) pad if too short
+                if actual_dur < target_dur * (1.0 - eff_tol):
+                    actions.append({"kind": "pad"})
+                    padded = clip.with_suffix(".pacing.pad.wav")
+                    clip = pad_or_trim_wav(clip, padded, target_dur, timeout_s=120)
+                    actual_dur = measure_wav_seconds(clip)
+                if eff_debug:
+                    try:
+                        seg_dir = out_dir / "segments"
+                        seg_dir.mkdir(parents=True, exist_ok=True)
+                        from anime_v2.utils.io import write_json as _wj
+
+                        _wj(
+                            seg_dir / f"{i:04d}.json",
+                            {
+                                "idx": i,
+                                "start": float(line.get("start", 0.0)),
+                                "end": float(line.get("end", 0.0)),
+                                "original_text": str(line.get("src_text") or ""),
+                                "translated_text_pre_fit": str(line.get("text_pre_fit") or ""),
+                                "translated_text": str(line.get("text") or ""),
+                                "target_seconds": float(target_dur),
+                                "actual_seconds": float(actual_dur),
+                                "actions": actions,
+                            },
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                # If pacing layer fails, fall back to legacy retime below.
+                pass
+        else:
+            # Legacy retime (existing behavior): librosa when available, else pad/trim.
+            with suppress(Exception):
+                from anime_v2.stages.align import retime_tts  # lazy import
+
+                target_dur = max(0.05, float(line["end"]) - float(line["start"]))
+                clip = retime_tts(
+                    clip, target_duration_s=target_dur, max_stretch=float(max_stretch)
+                )
         clip_paths.append(clip)
         if progress_cb is not None:
             with suppress(Exception):

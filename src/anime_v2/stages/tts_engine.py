@@ -23,6 +23,7 @@ class TTSEngine(abc.ABC):
         language: str,
         speaker_id: str | None = None,
         speaker_wav: Path | None = None,
+        speed: float | None = None,
         out_path: Path | None = None,
     ) -> Path:
         """
@@ -66,6 +67,7 @@ class CoquiXTTS(TTSEngine):
         language: str,
         speaker_id: str | None = None,
         speaker_wav: Path | None = None,
+        speed: float | None = None,
         out_path: Path | None = None,
     ) -> Path:
         if not text.strip():
@@ -87,16 +89,27 @@ class CoquiXTTS(TTSEngine):
                 "speaker_wav": str(speaker_wav),
                 "file_path": str(out_path),
             }
+            if speed is not None:
+                kwargs["speed"] = float(speed)
             try:
                 tts.tts_to_file(**kwargs)
             except TypeError:
                 # Older API variants
-                tts.tts_to_file(
-                    text=text,
-                    speaker_wav=str(speaker_wav),
-                    language=language,
-                    file_path=str(out_path),
-                )
+                try:
+                    tts.tts_to_file(
+                        text=text,
+                        speaker_wav=str(speaker_wav),
+                        language=language,
+                        file_path=str(out_path),
+                        speed=float(speed) if speed is not None else None,
+                    )
+                except TypeError:
+                    tts.tts_to_file(
+                        text=text,
+                        speaker_wav=str(speaker_wav),
+                        language=language,
+                        file_path=str(out_path),
+                    )
             return out_path
 
         if not speaker_id:
@@ -108,13 +121,29 @@ class CoquiXTTS(TTSEngine):
         logger.debug("[v2] XTTS preset synth (speaker_id=%s)", speaker_id)
         try:
             tts.tts_to_file(
-                text=text, speaker=str(speaker_id), language=language, file_path=str(out_path)
+                text=text,
+                speaker=str(speaker_id),
+                language=language,
+                file_path=str(out_path),
+                speed=float(speed) if speed is not None else None,
             )
         except TypeError:
             # Some Coqui versions use speaker_id parameter name
-            tts.tts_to_file(
-                text=text, speaker_id=str(speaker_id), language=language, file_path=str(out_path)
-            )
+            try:
+                tts.tts_to_file(
+                    text=text,
+                    speaker_id=str(speaker_id),
+                    language=language,
+                    file_path=str(out_path),
+                    speed=float(speed) if speed is not None else None,
+                )
+            except TypeError:
+                tts.tts_to_file(
+                    text=text,
+                    speaker_id=str(speaker_id),
+                    language=language,
+                    file_path=str(out_path),
+                )
         return out_path
 
 

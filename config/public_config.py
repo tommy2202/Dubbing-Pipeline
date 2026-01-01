@@ -135,6 +135,16 @@ class PublicConfig(BaseSettings):
     ducking_strength: float = Field(default=1.0, alias="DUCKING_STRENGTH")
     limiter: bool = Field(default=True, alias="LIMITER")
 
+    # Tier-1 B/C: timing-aware translation + segment pacing (opt-in; defaults preserve behavior)
+    timing_fit: bool = Field(default=False, alias="TIMING_FIT")  # off by default
+    pacing: bool = Field(default=False, alias="PACING")  # off by default
+    pacing_min_ratio: float = Field(default=0.88, alias="PACING_MIN_STRETCH")
+    pacing_max_ratio: float = Field(default=1.18, alias="PACING_MAX_STRETCH")
+    timing_wps: float = Field(default=2.7, alias="TIMING_WPS")
+    timing_tolerance: float = Field(default=0.10, alias="TIMING_TOLERANCE")
+    timing_debug: bool = Field(default=False, alias="TIMING_DEBUG")
+    subs_use_fitted_text: bool = Field(default=True, alias="SUBS_USE_FITTED_TEXT")
+
     tts_model: str = Field(
         default="tts_models/multilingual/multi-dataset/xtts_v2", alias="TTS_MODEL"
     )
