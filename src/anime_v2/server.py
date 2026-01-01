@@ -24,6 +24,7 @@ from anime_v2.jobs.queue import JobQueue
 from anime_v2.jobs.store import JobStore
 from anime_v2.ops import audit
 from anime_v2.ops.metrics import REGISTRY
+from anime_v2.runtime.model_manager import ModelManager
 from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.log import logger
 from anime_v2.utils.ratelimit import RateLimiter
@@ -78,6 +79,11 @@ async def lifespan(app: FastAPI):
             logger.warning("admin bootstrap failed (%s)", ex)
 
     await q.start()
+    # Optional model pre-warm (env-controlled). Never prevent boot.
+    try:
+        ModelManager.instance().prewarm()
+    except Exception as ex:
+        logger.warning("model_prewarm_exception", error=str(ex))
     yield
     await q.stop()
 

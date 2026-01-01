@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     retention_days_input: int = Field(default=7, alias="RETENTION_DAYS_INPUT")
     retention_days_logs: int = Field(default=14, alias="RETENTION_DAYS_LOGS")
 
+    # runtime model manager / allocator
+    prewarm_whisper: str = Field(default="", alias="PREWARM_WHISPER")  # comma-separated models
+    prewarm_tts: str = Field(default="", alias="PREWARM_TTS")  # comma-separated models
+    model_cache_max: int = Field(default=3, alias="MODEL_CACHE_MAX")
+    gpu_util_max: float = Field(default=0.85, alias="GPU_UTIL_MAX")
+    gpu_mem_max_ratio: float = Field(default=0.90, alias="GPU_MEM_MAX_RATIO")
+
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in (self.cors_origins or "").split(",") if o.strip()]
 

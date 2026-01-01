@@ -10,6 +10,8 @@ from anime_v2.utils.config import get_settings
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
 from anime_v2.gates.license import require_coqui_tos
+from anime_v2.runtime.model_manager import ModelManager
+from anime_v2.runtime.device_allocator import pick_device
 
 
 class TTSEngine(abc.ABC):
@@ -44,17 +46,13 @@ class CoquiXTTS(TTSEngine):
 
         self.model_name = settings.tts_model or "tts_models/multilingual/multi-dataset/xtts_v2"
         self._tts = None
+        self._device = pick_device("auto")
 
     def _load(self):
         if self._tts is not None:
             return self._tts
-        try:
-            from TTS.api import TTS  # type: ignore
-        except Exception as ex:  # pragma: no cover
-            raise RuntimeError("Coqui TTS not installed. Install the `TTS` package to enable synthesis.") from ex
-
-        logger.info("[v2] Loading Coqui TTS model: %s", self.model_name)
-        self._tts = TTS(self.model_name)
+        logger.info("[v2] Loading Coqui TTS model (via ModelManager): %s device=%s", self.model_name, self._device)
+        self._tts = ModelManager.instance().get_tts(self.model_name, self._device)
         return self._tts
 
     def synthesize(
