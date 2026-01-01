@@ -13,3 +13,11 @@
 {"logger": "anime_v2", "ts": "2026-01-01T02:46:01.246568Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
 {"logger": "anime_v2", "ts": "2026-01-01T02:46:35.560892Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
 {"logger": "anime_v2", "ts": "2026-01-01T02:46:35.561662Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T02:54:07.301477Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T02:54:07.302135Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
+{"zip": "/workspace/backups/backup-20260101-0254.zip", "manifest": "/workspace/backups/backup-20260101-0254.manifest.json", "files": 15, "logger": "anime_v2", "ts": "2026-01-01T02:54:08.405476Z", "level": "info", "msg": "backup_created"}
+{"inputs_removed": 0, "logs_removed": 0, "logger": "anime_v2", "ts": "2026-01-01T02:54:09.286653Z", "level": "info", "msg": "retention_done"}
+{"logger": "anime_v2", "ts": "2026-01-01T02:54:21.632259Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T02:54:21.632894Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T02:54:44.649893Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T02:54:44.650515Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}

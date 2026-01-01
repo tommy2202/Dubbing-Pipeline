@@ -253,3 +253,16 @@ The Docker constraints pin `numpy==1.22.0` to satisfy **wheel compatibility for 
 
 - If ASR produces an empty SRT (e.g. Whisper not installed/downloaded), muxing skips subtitles to avoid ffmpeg errors on empty SRT.
 - If you want to skip subs intentionally, pass `--no-subs`.
+
+---
+
+## Backups & retention (ops)
+
+- **Retention**: `RETENTION_DAYS_INPUT` (default `7`) best-effort purges old raw uploads from `Input/uploads/`. `RETENTION_DAYS_LOGS` (default `14`) purges old files from `logs/` and old per-job `Output/**/job.log`.
+  - Run manually: `python -m anime_v2.ops.retention`
+
+- **Backups**: creates a metadata-only zip (no large media) under `backups/`:
+  - Includes: `data/**`, `Output/*.db`, `Output/**/{*.json,*.srt,job.log}`
+  - Run manually: `python -m anime_v2.ops.backup`
+  - Output: `backups/backup-YYYYmmdd-HHMM.zip` and `backups/backup-YYYYmmdd-HHMM.manifest.json` (with per-file SHA256).
+  - **Restore**: unzip into the repo/app root (so paths like `data/...` and `Output/...` land in place), then verify file hashes against the manifest.

@@ -41,6 +41,7 @@ opentelemetry-sdk==1.27.0
 opentelemetry-exporter-otlp==1.27.0
 opentelemetry-instrumentation-fastapi==0.48b0
 prometheus-client==0.21.0
+cryptography==43.0.3
 
 # jobs + realtime progress
 sqlitedict==2.1.0

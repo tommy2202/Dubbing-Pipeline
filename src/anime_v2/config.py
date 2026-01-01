@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     voice_preset_dir: Path = Field(default=Path.cwd() / "voices" / "presets", alias="VOICE_PRESET_DIR")
     voice_db_path: Path = Field(default=Path.cwd() / "voices" / "presets.json", alias="VOICE_DB")
 
+    # character store encryption + ops retention
+    char_store_key: SecretStr | None = Field(default=None, alias="CHAR_STORE_KEY")  # 32-byte base64
+    char_store_key_file: Path = Field(default=Path.cwd() / "secrets" / "char_store.key", alias="CHAR_STORE_KEY_FILE")
+    retention_days_input: int = Field(default=7, alias="RETENTION_DAYS_INPUT")
+    retention_days_logs: int = Field(default=14, alias="RETENTION_DAYS_LOGS")
+
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in (self.cors_origins or "").split(",") if o.strip()]
 

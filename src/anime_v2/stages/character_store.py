@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import base64
+import os
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from anime_v2.config import get_settings
 from anime_v2.utils.log import logger
+
+_MAGIC = b"ANV2CHAR"
+_FORMAT_VERSION = 1
+_AAD = b"anime_v2_character_store:v1"
 
 
 def _cosine(a, b) -> float:
@@ -44,10 +51,85 @@ class CharacterStore:
     def default(cls) -> "CharacterStore":
         return cls(Path("data") / "characters.json")
 
+    def _get_key(self) -> bytes:
+        """
+        Returns 32-byte AES key. Sources:
+        - env CHAR_STORE_KEY (base64)
+        - file CHAR_STORE_KEY_FILE (raw base64, whitespace ok)
+        """
+        s = get_settings()
+        raw = None
+        if s.char_store_key:
+            raw = s.char_store_key.get_secret_value()
+        else:
+            try:
+                p = Path(s.char_store_key_file)
+                if p.exists() and p.is_file():
+                    raw = p.read_text(encoding="utf-8", errors="replace").strip()
+            except Exception:
+                raw = None
+        if not raw:
+            raise RuntimeError(
+                "CharacterStore encryption key missing. Set CHAR_STORE_KEY (32-byte base64) "
+                "or mount secrets/char_store.key (see CHAR_STORE_KEY_FILE)."
+            )
+        try:
+            key = base64.b64decode(raw, validate=True)
+        except Exception as ex:
+            raise RuntimeError("CHAR_STORE_KEY must be valid base64") from ex
+        if len(key) != 32:
+            raise RuntimeError("CHAR_STORE_KEY must decode to exactly 32 bytes")
+        return key
+
+    def _encrypt(self, plaintext: bytes) -> bytes:
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
+        except Exception as ex:  # pragma: no cover
+            raise RuntimeError("cryptography is required for CharacterStore encryption") from ex
+        key = self._get_key()
+        nonce = os.urandom(12)
+        ct = AESGCM(key).encrypt(nonce, plaintext, _AAD)
+        # file format:
+        # [MAGIC (8)][ver (1)][nonce (12)][ciphertext+tag (N)]
+        return _MAGIC + bytes([_FORMAT_VERSION]) + nonce + ct
+
+    def _decrypt(self, blob: bytes) -> bytes:
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
+        except Exception as ex:  # pragma: no cover
+            raise RuntimeError("cryptography is required for CharacterStore encryption") from ex
+        if not blob or len(blob) < (len(_MAGIC) + 1 + 12 + 16):
+            raise RuntimeError("CharacterStore file is corrupted (too short)")
+        if not blob.startswith(_MAGIC):
+            raise RuntimeError("CharacterStore file is not encrypted (missing header)")
+        ver = blob[len(_MAGIC)]
+        if ver != _FORMAT_VERSION:
+            raise RuntimeError(f"Unsupported CharacterStore format version: {ver}")
+        nonce = blob[len(_MAGIC) + 1 : len(_MAGIC) + 1 + 12]
+        ct = blob[len(_MAGIC) + 1 + 12 :]
+        key = self._get_key()
+        return AESGCM(key).decrypt(nonce, ct, _AAD)
+
+    def _migrate(self, data: dict[str, Any]) -> dict[str, Any]:
+        # JSON schema versioning inside plaintext payload.
+        v = int(data.get("version", 1))
+        if v == 1:
+            return data
+        # Future-proof: best-effort migration by keeping known fields.
+        logger.warning("CharacterStore schema version mismatch", found=v, expected=1)
+        out = {"version": 1, "next_n": int(data.get("next_n", 1)), "characters": data.get("characters", {})}
+        return out
+
     def load(self) -> None:
         if not self.path.exists():
             return
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        # Encrypted at rest. Reads require a key.
+        blob = self.path.read_bytes()
+        pt = self._decrypt(blob)
+        data = json.loads(pt.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise RuntimeError("CharacterStore decrypted payload is not a JSON object")
+        data = self._migrate(data)
         chars = data.get("characters", {})
         self.characters = {}
         for cid, c in chars.items():
@@ -75,7 +157,9 @@ class CharacterStore:
             },
         }
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        pt = json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
+        blob = self._encrypt(pt)
+        tmp.write_bytes(blob)
         tmp.replace(self.path)
 
     def _new_id(self) -> str:
