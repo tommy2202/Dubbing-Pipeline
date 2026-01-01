@@ -60,3 +60,11 @@
 [2026-01-01T03:09:49.640435+00:00] mix
 [2026-01-01T03:09:49.843028+00:00] mix failed: Command '['ffmpeg', '-y', '-i', '/workspace/Input/Test.mp4', '-i', '/workspace/Output/Test/Test.tts.wav', '-filter_complex', "[0:a:0]aresample=48000,volume=0.85[bg];[bg][1:a:0]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250[duck];[duck][1:a:0]amix=inputs=2:normalize=0:weights='0.9 1.1'[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:measured_I=-inf:measured_LRA=0.00:measured_TP=-inf:measured_thresh=-70.00:offset=inf:linear=true:print_format=summary[mix2];[mix2]alimiter=limit=0.891[mixout];", '-map', '[mixout]', '-ac', '1', '-ar', '48000', '-c:a', 'pcm_s16le', '/workspace/Output/Test/Test.mixed.wav']' returned non-zero exit status 222. (falling back to mux)
 [2026-01-01T03:09:49.963157+00:00] done in 0.53s
+[2026-01-01T03:33:51.264070+00:00] start job=b440f3c5-6012-4c34-8fc2-798c6d60c321
+[2026-01-01T03:33:51.320714+00:00] audio_extractor
+[2026-01-01T03:33:51.327689+00:00] failed: Phase 'audio_extract' failed:
+Traceback (most recent call last):
+  File "/workspace/src/anime_v2/jobs/watchdog.py", line 24, in _child_main
+    v = fn(*args, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^
+TypeError: extract() got an unexpected keyword argument 'job_id'

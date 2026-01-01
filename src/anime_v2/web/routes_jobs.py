@@ -93,6 +93,21 @@ def _get_scheduler(request: Request):
 
 @router.post("/api/jobs")
 async def create_job(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, str]:
+    # Idempotency-Key: return existing job when present and not expired.
+    idem_key = (request.headers.get("idempotency-key") or "").strip()
+    store = _get_store(request)
+    if idem_key:
+        # basic bounds to avoid abuse
+        if len(idem_key) > 200:
+            raise HTTPException(status_code=400, detail="Idempotency-Key too long")
+        ttl = int(os.environ.get("IDEMPOTENCY_TTL_SEC", "86400"))
+        hit = store.get_idempotency(idem_key)
+        if hit:
+            jid, ts = hit
+            if (time.time() - ts) <= ttl:
+                if store.get(jid) is not None:
+                    return {"id": jid}
+
     # Rate limit: 10/min per identity (fallback to IP)
     rl: RateLimiter | None = getattr(request.app.state, "rate_limiter", None)
     if rl is None:
@@ -101,7 +116,6 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     who = ident.user.id if ident.kind == "user" else (ident.api_key_prefix or "unknown")
     if not rl.allow(f"jobs:submit:{who}", limit=10, per_seconds=60):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    store = _get_store(request)
     scheduler = _get_scheduler(request)
     limits = get_limits()
 
@@ -232,6 +246,8 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
         error=None,
     )
     store.put(job)
+    if idem_key:
+        store.put_idempotency(idem_key, jid)
     scheduler.submit(
         JobRecord(
             job_id=jid,

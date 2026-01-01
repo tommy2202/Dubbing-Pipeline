@@ -12,6 +12,7 @@ from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 from anime_v2.utils.circuit import Circuit
 from anime_v2.utils.retry import retry_call
 from anime_v2.config import get_settings
+from anime_v2.cache.store import cache_get, cache_put, make_key
 
 
 def _write_srt(segments: list[dict], srt_path: Path) -> None:
@@ -34,6 +35,7 @@ def transcribe(
     *,
     tgt_lang: str = "en",
     job_id: str | None = None,
+    audio_hash: str | None = None,
 ) -> Path:
     """
     Whisper transcription/translation producing SRT and JSON metadata next to it.
@@ -128,6 +130,27 @@ def transcribe(
     chosen_device = device
     breaker_state = cb.snapshot().state
 
+    # Cross-job cache: if audio_hash provided, try reuse artifacts first.
+    if audio_hash:
+        key = make_key(
+            "transcribe",
+            {"audio": audio_hash, "model": model_name, "task": task, "src": src_lang, "tgt": tgt_lang},
+        )
+        hit = cache_get(key)
+        if hit:
+            paths = hit.get("paths", {})
+            try:
+                src_srt = Path(str(paths.get("srt")))
+                src_meta = Path(str(paths.get("meta")))
+                if src_srt.exists() and src_meta.exists():
+                    srt_out.parent.mkdir(parents=True, exist_ok=True)
+                    srt_out.write_bytes(src_srt.read_bytes())
+                    srt_out.with_suffix(".json").write_bytes(src_meta.read_bytes())
+                    logger.info("[v2] transcribe cache hit", key=key)
+                    return srt_out
+            except Exception:
+                pass
+
     for cand_model in _fallback_chain(model_name):
         # circuit open => degrade to CPU for this attempt (and skip if even CPU is blocked by circuit)
         breaker_state = cb.snapshot().state
@@ -218,6 +241,16 @@ def transcribe(
     }
     meta_path = srt_out.with_suffix(".json")
     meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+
+    if audio_hash:
+        try:
+            key = make_key(
+                "transcribe",
+                {"audio": audio_hash, "model": chosen_model or model_name, "task": task, "src": src_lang, "tgt": tgt_lang},
+            )
+            cache_put(key, {"srt": srt_out, "meta": meta_path}, meta={"created_at": time.time()})
+        except Exception:
+            pass
 
     if job_id:
         try:

@@ -171,3 +171,31 @@
 {"job_id": "j2", "from_mode": "high", "to_mode": "medium", "qlen": 1, "logger": "anime_v2", "ts": "2026-01-01T03:28:19.687197Z", "level": "info", "msg": "scheduler_backpressure_degrade"}
 {"logger": "anime_v2", "ts": "2026-01-01T03:28:19.692393Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
 {"logger": "anime_v2", "ts": "2026-01-01T03:28:19.692944Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
+{"util": 0.99, "mem": 0.95, "util_max": 0.85, "mem_max": 0.9, "logger": "anime_v2", "ts": "2026-01-01T03:31:44.496760Z", "level": "info", "msg": "gpu_saturated; using cpu"}
+{"kind": "whisper", "model": "a", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:31:44.498102Z", "level": "info", "msg": "model_loaded"}
+{"kind": "whisper", "model": "b", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:31:44.498290Z", "level": "info", "msg": "model_loaded"}
+{"kind": "tts", "model": "c", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:31:44.498425Z", "level": "info", "msg": "model_loaded"}
+{"kind": "whisper", "model": "a", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:31:44.498531Z", "level": "info", "msg": "model_evicted"}
+{"kind": "tts", "model": "d", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:31:44.498637Z", "level": "info", "msg": "model_loaded"}
+{"job_id": "j2", "from_mode": "high", "to_mode": "medium", "qlen": 1, "logger": "anime_v2", "ts": "2026-01-01T03:31:44.507510Z", "level": "info", "msg": "scheduler_backpressure_degrade"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:31:44.513586Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:31:44.514236Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T03:33:51.052738Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:33:51.135491Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/auth/login", "status": 200, "duration_ms": 52.10594483651221, "logger": "anime_v2", "ts": "2026-01-01T03:33:51.188822Z", "level": "info", "request_id": "c32d2494ac9b44da9489db5e3d3fed66", "msg": "http_done"}
+{"ts": "2026-01-01T03:33:51.189914Z", "level": "info", "msg": "HTTP Request: POST http://testserver/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 200, "duration_ms": 61.02512707002461, "logger": "anime_v2", "ts": "2026-01-01T03:33:51.251730Z", "level": "info", "request_id": "58b4dba67c6e47ab9b53e5052f4ebc68", "msg": "http_done"}
+{"ts": "2026-01-01T03:33:51.252867Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 200, "duration_ms": 5.616409936919808, "logger": "anime_v2", "ts": "2026-01-01T03:33:51.259962Z", "level": "info", "request_id": "fb818539413e48e1b374e36ef1215abf", "msg": "http_done"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:33:51.332866Z", "level": "info", "msg": "job b440f3c5-6012-4c34-8fc2-798c6d60c321 finished state=JobState.FAILED in 0.07s"}
+{"job_id": "b440f3c5-6012-4c34-8fc2-798c6d60c321", "mode": "low", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:33:51.333637Z", "level": "info", "msg": "scheduler_enqueued"}
+{"ts": "2026-01-01T03:33:51.334276Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 200 OK\""}
+{"util": 0.99, "mem": 0.95, "util_max": 0.85, "mem_max": 0.9, "logger": "anime_v2", "ts": "2026-01-01T03:33:51.338232Z", "level": "info", "msg": "gpu_saturated; using cpu"}
+{"kind": "whisper", "model": "a", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:33:51.339418Z", "level": "info", "msg": "model_loaded"}
+{"kind": "whisper", "model": "b", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:33:51.339583Z", "level": "info", "msg": "model_loaded"}
+{"kind": "tts", "model": "c", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:33:51.339697Z", "level": "info", "msg": "model_loaded"}
+{"kind": "whisper", "model": "a", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:33:51.339807Z", "level": "info", "msg": "model_evicted"}
+{"kind": "tts", "model": "d", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T03:33:51.339910Z", "level": "info", "msg": "model_loaded"}
+{"job_id": "j2", "from_mode": "high", "to_mode": "medium", "qlen": 1, "logger": "anime_v2", "ts": "2026-01-01T03:33:51.346663Z", "level": "info", "msg": "scheduler_backpressure_degrade"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:33:51.350949Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:33:51.351503Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}

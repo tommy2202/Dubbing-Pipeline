@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 import wave
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 from anime_v2.utils.circuit import Circuit
 from anime_v2.utils.retry import retry_call
+from anime_v2.cache.store import cache_get, cache_put, make_key
 
 
 class TTSCanceled(Exception):
@@ -129,6 +131,7 @@ def run(
     cancel_cb=None,
     max_stretch: float = 0.15,
     job_id: str | None = None,
+    audio_hash: str | None = None,
     **_,
 ) -> Path:
     """
@@ -398,6 +401,29 @@ def run(
         # default: <stem>.tts.wav (stem is output folder name)
         wav_out = out_dir / f"{out_dir.name}.tts.wav"
 
+    # Cross-job cache (coarse): if audio_hash provided and tts config stable, reuse tts wav + manifest.
+    if audio_hash:
+        sig = os.environ.get("SPEAKER_SIGNATURE")  # optional precomputed override
+        if not sig:
+            from anime_v2.utils.hashio import speaker_signature
+
+            sig = speaker_signature(settings.tts_lang, settings.tts_speaker, settings.tts_speaker_wav)
+        key = make_key("tts", {"audio": audio_hash, "tts_model": settings.tts_model, "lang": settings.tts_lang, "sig": sig})
+        hit = cache_get(key)
+        if hit:
+            paths = hit.get("paths", {})
+            try:
+                src_wav = Path(str(paths.get("tts_wav")))
+                src_manifest = Path(str(paths.get("manifest")))
+                if src_wav.exists() and src_manifest.exists():
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    wav_out.write_bytes(src_wav.read_bytes())
+                    (out_dir / "tts_manifest.json").write_bytes(src_manifest.read_bytes())
+                    logger.info("[v2] tts cache hit", key=key)
+                    return wav_out
+            except Exception:
+                pass
+
     if job_id:
         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path)
         manifest = out_dir / "tts_manifest.json"
@@ -419,6 +445,18 @@ def run(
     if job_id:
         try:
             write_ckpt(job_id, "tts", {"tts_wav": wav_out, "manifest": out_dir / "tts_manifest.json"}, {"work_dir": str(out_dir)}, ckpt_path=ckpt_path)
+        except Exception:
+            pass
+
+    if audio_hash:
+        try:
+            sig = os.environ.get("SPEAKER_SIGNATURE") or ""
+            if not sig:
+                from anime_v2.utils.hashio import speaker_signature
+
+                sig = speaker_signature(settings.tts_lang, settings.tts_speaker, settings.tts_speaker_wav)
+            key = make_key("tts", {"audio": audio_hash, "tts_model": settings.tts_model, "lang": settings.tts_lang, "sig": sig})
+            cache_put(key, {"tts_wav": wav_out, "manifest": out_dir / "tts_manifest.json"}, meta={"created_at": time.time()})
         except Exception:
             pass
 

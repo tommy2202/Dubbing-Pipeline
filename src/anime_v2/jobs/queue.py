@@ -29,6 +29,7 @@ from anime_v2.utils.net import install_egress_policy
 from anime_v2.runtime.scheduler import Scheduler
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 from anime_v2.utils.circuit import Circuit
+from anime_v2.utils.hashio import hash_audio_from_video
 
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-")
@@ -218,6 +219,17 @@ class JobQueue:
         try:
             await self._check_canceled(job_id)
 
+            # Compute audio hash once per job (used for cross-job caching)
+            audio_hash = None
+            try:
+                audio_hash = hash_audio_from_video(video_path)
+                curj = self.store.get(job_id)
+                rt = dict((curj.runtime or {}) if curj else runtime)
+                rt["audio_hash"] = audio_hash
+                self.store.update(job_id, runtime=rt)
+            except Exception as ex:
+                self.store.append_log(job_id, f"[{now_utc()}] audio_hash failed: {ex}")
+
             # a) audio_extractor.extract (~0.10)
             self.store.update(job_id, progress=0.05, message="Extracting audio")
             self.store.append_log(job_id, f"[{now_utc()}] audio_extractor")
@@ -227,23 +239,23 @@ class JobQueue:
                     wav = wav_guess
                     self.store.append_log(job_id, f"[{now_utc()}] audio_extractor (checkpoint hit)")
                 else:
-                if sched is None:
-                    wav = run_with_timeout(
-                        "audio_extract",
-                        timeout_s=limits.timeout_audio_s,
-                        fn=audio_extractor.extract,
-                        args=(),
-                            kwargs={"video": video_path, "out_dir": out_dir, "wav_out": out_dir / "audio.wav", "job_id": job_id},
-                    )
-                else:
-                    with sched.phase("audio"):
+                    if sched is None:
                         wav = run_with_timeout(
                             "audio_extract",
                             timeout_s=limits.timeout_audio_s,
                             fn=audio_extractor.extract,
                             args=(),
-                                kwargs={"video": video_path, "out_dir": out_dir, "wav_out": out_dir / "audio.wav", "job_id": job_id},
+                            kwargs={"video": video_path, "out_dir": out_dir, "wav_out": out_dir / "audio.wav", "job_id": job_id},
                         )
+                    else:
+                        with sched.phase("audio"):
+                            wav = run_with_timeout(
+                                "audio_extract",
+                                timeout_s=limits.timeout_audio_s,
+                                fn=audio_extractor.extract,
+                                args=(),
+                                kwargs={"video": video_path, "out_dir": out_dir, "wav_out": out_dir / "audio.wav", "job_id": job_id},
+                            )
                     try:
                         write_ckpt(job_id, "audio", {"audio_wav": Path(str(wav))}, {"work_dir": str(out_dir)}, ckpt_path=ckpt_path)
                         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
@@ -325,19 +337,7 @@ class JobQueue:
                 if srt_out.exists() and srt_meta.exists() and stage_is_done(ckpt, "transcribe"):
                     self.store.append_log(job_id, f"[{now_utc()}] transcribe (checkpoint hit)")
                 else:
-                if sched is None:
-                    transcribe(
-                        audio_path=wav,
-                        srt_out=srt_out,
-                        device=device,
-                        model_name=model_name,
-                        task="transcribe",
-                        src_lang=job.src_lang,
-                        tgt_lang=job.tgt_lang,
-                            job_id=job_id,
-                    )
-                else:
-                    with sched.phase("transcribe"):
+                    if sched is None:
                         transcribe(
                             audio_path=wav,
                             srt_out=srt_out,
@@ -346,11 +346,26 @@ class JobQueue:
                             task="transcribe",
                             src_lang=job.src_lang,
                             tgt_lang=job.tgt_lang,
-                                job_id=job_id,
+                            job_id=job_id,
+                            audio_hash=audio_hash,
                         )
-                    # reflect circuit state into job
+                    else:
+                        with sched.phase("transcribe"):
+                            transcribe(
+                                audio_path=wav,
+                                srt_out=srt_out,
+                                device=device,
+                                model_name=model_name,
+                                task="transcribe",
+                                src_lang=job.src_lang,
+                                tgt_lang=job.tgt_lang,
+                                job_id=job_id,
+                                audio_hash=audio_hash,
+                            )
+                    # reflect circuit state into job (only when we actually ran transcribe)
                     try:
-                        rt = dict((self.store.get(job_id).runtime or {}) if self.store.get(job_id) else runtime)
+                        curj = self.store.get(job_id)
+                        rt = dict((curj.runtime or {}) if curj else runtime)
                         rt.setdefault("breaker_state", {})
                         rt["breaker_state"]["whisper"] = Circuit.get("whisper").snapshot().state
                         rt.setdefault("attempts", {})
@@ -501,6 +516,7 @@ class JobQueue:
                         cancel_cb=None,
                         max_stretch=float(os.environ.get("MAX_STRETCH", "0.15")),
                         job_id=job_id,
+                        audio_hash=audio_hash,
                     )
 
                 # checkpoint-aware skip
@@ -568,30 +584,30 @@ class JobQueue:
                     if existing and existing.output_srt and Path(existing.output_srt).exists():
                         subs_srt_path = Path(existing.output_srt)
                 else:
-                cfg_mix = MixConfig(
-                    profile=os.environ.get("MIX_PROFILE", "streaming"),
-                    separate_vocals=bool(int(os.environ.get("SEPARATE_VOCALS", "0") or "0")),
-                    emit=tuple(
-                        sorted(
-                            {
-                                "mkv",
-                                "mp4",
-                                *[
-                                    p.strip().lower()
-                                    for p in (os.environ.get("EMIT_FORMATS") or os.environ.get("EMIT") or "mkv,mp4").split(",")
-                                    if p.strip()
-                                ],
-                            }
-                        )
-                    ),
-                )
-                if sched is None:
-                    outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=out_dir, cfg=cfg_mix)
-                else:
-                    with sched.phase("mux"):
+                    cfg_mix = MixConfig(
+                        profile=os.environ.get("MIX_PROFILE", "streaming"),
+                        separate_vocals=bool(int(os.environ.get("SEPARATE_VOCALS", "0") or "0")),
+                        emit=tuple(
+                            sorted(
+                                {
+                                    "mkv",
+                                    "mp4",
+                                    *[
+                                        p.strip().lower()
+                                        for p in (os.environ.get("EMIT_FORMATS") or os.environ.get("EMIT") or "mkv,mp4").split(",")
+                                        if p.strip()
+                                    ],
+                                }
+                            )
+                        ),
+                    )
+                    if sched is None:
                         outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=out_dir, cfg=cfg_mix)
-                out_mkv = outs.get("mkv", out_mkv)
-                out_mp4 = outs.get("mp4", out_mp4)
+                    else:
+                        with sched.phase("mux"):
+                            outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=out_dir, cfg=cfg_mix)
+                    out_mkv = outs.get("mkv", out_mkv)
+                    out_mp4 = outs.get("mp4", out_mp4)
                     try:
                         art = {"mkv": out_mkv}
                         if out_mp4 and Path(out_mp4).exists():

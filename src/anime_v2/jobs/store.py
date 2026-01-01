@@ -19,6 +19,9 @@ class JobStore:
         # Open/close per operation (safe + avoids cross-thread SQLite handle issues)
         return SqliteDict(str(self.db_path), tablename="jobs", autocommit=True)
 
+    def _idem(self) -> SqliteDict:
+        return SqliteDict(str(self.db_path), tablename="idempotency", autocommit=True)
+
     def put(self, job: Job) -> None:
         with self._lock:
             with self._jobs() as db:
@@ -85,4 +88,25 @@ class JobStore:
         # Simple read; logs are expected to be small per job.
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         return "\n".join(lines[-max(1, n) :]) + ("\n" if lines else "")
+
+    def get_idempotency(self, key: str) -> tuple[str, float] | None:
+        if not key:
+            return None
+        with self._lock:
+            with self._idem() as db:
+                v = db.get(key)
+        if not isinstance(v, dict):
+            return None
+        jid = str(v.get("job_id") or "")
+        ts = float(v.get("ts") or 0.0)
+        if not jid:
+            return None
+        return jid, ts
+
+    def put_idempotency(self, key: str, job_id: str) -> None:
+        if not key:
+            return
+        with self._lock:
+            with self._idem() as db:
+                db[key] = {"job_id": str(job_id), "ts": __import__("time").time()}
 
