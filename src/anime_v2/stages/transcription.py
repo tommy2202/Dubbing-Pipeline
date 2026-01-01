@@ -106,6 +106,21 @@ def transcribe(
         except Exception:
             audio_duration_s = 0.0
 
+    seg_details = []
+    for s in segments:
+        try:
+            seg_details.append(
+                {
+                    "start": float(s.get("start", 0.0)),
+                    "end": float(s.get("end", 0.0)),
+                    "text": (s.get("text") or "").strip(),
+                    "avg_logprob": s.get("avg_logprob"),
+                    "no_speech_prob": s.get("no_speech_prob"),
+                }
+            )
+        except Exception:
+            continue
+
     meta = {
         "model_name": model_name,
         "device": device,
@@ -114,6 +129,7 @@ def transcribe(
         "detected_language": detected_lang,
         "tgt_lang": tgt_lang,
         "segments": len(segments),
+        "segments_detail": seg_details,
         "audio_duration_s": audio_duration_s,
         "wall_time_s": time.perf_counter() - t0,
     }

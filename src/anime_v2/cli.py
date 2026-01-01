@@ -8,7 +8,7 @@ import click
 from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
-from anime_v2.stages.translate import translate_lines
+from anime_v2.stages.translation import TranslationConfig, translate_segments
 from anime_v2.stages.transcription import transcribe
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
@@ -118,6 +118,10 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
 @click.option("--diarizer", type=click.Choice(["auto", "pyannote", "speechbrain", "heuristic"], case_sensitive=False), default="auto", show_default=True)
 @click.option("--show-id", default=None, help="Show id used for persistent character IDs (default: input basename)")
 @click.option("--char-sim-thresh", type=float, default=0.72, show_default=True)
+@click.option("--mt-engine", type=click.Choice(["auto", "whisper", "marian", "nllb"], case_sensitive=False), default="auto", show_default=True)
+@click.option("--mt-lowconf-thresh", type=float, default=-0.45, show_default=True, help="Avg logprob threshold for Whisper translate fallback")
+@click.option("--glossary", default=None, help="Glossary TSV path or directory")
+@click.option("--style", default=None, help="Style YAML path or directory")
 def cli(
     video: Path,
     device: str,
@@ -129,6 +133,10 @@ def cli(
     diarizer: str,
     show_id: str | None,
     char_sim_thresh: float,
+    mt_engine: str,
+    mt_lowconf_thresh: float,
+    glossary: str | None,
+    style: str | None,
 ) -> None:
     """
     Run pipeline-v2 on VIDEO.
@@ -264,6 +272,7 @@ def cli(
 
     # 3) transcription.transcribe (ASR-only)
     t_stage = time.perf_counter()
+    trans_meta_path = srt_out.with_suffix(".json")
     try:
         transcribe(
             audio_path=extracted,
@@ -274,44 +283,111 @@ def cli(
             src_lang=src_lang,
             tgt_lang=tgt_lang,
         )
-        cues = _parse_srt_to_cues(srt_out)
-        logger.info("[v2] transcription: cues=%s (%.2fs) → %s", len(cues), time.perf_counter() - t_stage, srt_out)
+        meta = {}
+        try:
+            meta = read_json(trans_meta_path, default={})  # type: ignore[assignment]
+        except Exception:
+            meta = {}
+        segs_detail = meta.get("segments_detail", []) if isinstance(meta, dict) else []
+        cues = segs_detail if isinstance(segs_detail, list) else []
+        logger.info("[v2] transcription: segments=%s (%.2fs) → %s", len(cues), time.perf_counter() - t_stage, srt_out)
     except Exception as ex:
         logger.exception("[v2] transcription failed (continuing): %s", ex)
         cues = []
 
-    # Assign speakers from diarization (if any)
-    lines = _assign_speakers(cues, diar_segments)
+    # Build speaker-timed segments.
+    # Prefer diarization utterances (preserve diarization timing) and assign text/logprob from transcription overlaps.
+    diar_utts = sorted(
+        [{"start": float(s["start"]), "end": float(s["end"]), "speaker": str(s.get("speaker_id") or "SPEAKER_01")} for s in diar_segments],
+        key=lambda x: (x["start"], x["end"]),
+    )
+
+    def overlap(a0, a1, b0, b1) -> float:
+        return max(0.0, min(a1, b1) - max(a0, b0))
+
+    segments_for_mt: list[dict] = []
+    if diar_utts:
+        for u in diar_utts:
+            txt_parts = []
+            lp_parts = []
+            w_parts = []
+            for seg in cues:
+                try:
+                    s0 = float(seg["start"])
+                    s1 = float(seg["end"])
+                    ov = overlap(u["start"], u["end"], s0, s1)
+                    if ov <= 0:
+                        continue
+                    t = str(seg.get("text") or "").strip()
+                    if t:
+                        txt_parts.append(t)
+                    lp = seg.get("avg_logprob")
+                    if lp is not None:
+                        try:
+                            lp_parts.append(float(lp))
+                            w_parts.append(ov)
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+            text_src = " ".join(txt_parts).strip()
+            logprob = None
+            if lp_parts and w_parts and len(lp_parts) == len(w_parts):
+                tot = sum(w_parts)
+                if tot > 0:
+                    logprob = sum(lp * w for lp, w in zip(lp_parts, w_parts)) / tot
+            segments_for_mt.append({"start": u["start"], "end": u["end"], "speaker": u["speaker"], "text": text_src, "logprob": logprob})
+    else:
+        # Fall back to transcription segments (speaker assignment best-effort)
+        segments_for_mt = []
+        for seg in cues:
+            try:
+                segments_for_mt.append(
+                    {
+                        "start": float(seg["start"]),
+                        "end": float(seg["end"]),
+                        "speaker": "SPEAKER_01",
+                        "text": str(seg.get("text") or ""),
+                        "logprob": seg.get("avg_logprob"),
+                    }
+                )
+            except Exception:
+                continue
 
     # 4) translate.translate_lines (when needed)
     subs_srt_path: Path | None = srt_out
     if no_translate:
         logger.info("[v2] translate: disabled (--no-translate)")
         try:
-            write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "lines": lines})
+            # Keep raw segments for downstream (Japanese)
+            write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": segments_for_mt})
         except Exception:
             pass
     else:
         t_stage = time.perf_counter()
         try:
-            translated_lines = translate_lines(lines, src_lang=src_lang, tgt_lang=tgt_lang)
-            # Ensure per-line fallback to original text if translation produced empties
-            safe_lines = []
-            for orig, tr in zip(lines, translated_lines):
-                tr_text = str(tr.get("text", "") or "").strip()
-                if str(orig.get("text", "") or "").strip() and not tr_text:
-                    tr = dict(tr)
-                    tr["text"] = orig["text"]
-                safe_lines.append(tr)
-            write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "lines": safe_lines})
-            _write_srt_from_lines(safe_lines, translated_srt)
+            cfg = TranslationConfig(
+                mt_engine=mt_engine.lower(),
+                mt_lowconf_thresh=float(mt_lowconf_thresh),
+                glossary_path=glossary,
+                style_path=style,
+                show_id=show_id or video.stem,
+                whisper_model=chosen_model,
+                audio_path=str(extracted),
+                device=chosen_device,
+            )
+            translated_segments = translate_segments(segments_for_mt, src_lang=src_lang, tgt_lang=tgt_lang, cfg=cfg)
+            write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": translated_segments})
+
+            # Convert to SRT lines (speaker preserved; text from translated)
+            srt_lines = [{"start": s["start"], "end": s["end"], "speaker_id": s["speaker"], "text": s["text"]} for s in translated_segments]
+            _write_srt_from_lines(srt_lines, translated_srt)
             subs_srt_path = translated_srt
-            logger.info("[v2] translate: lines=%s (%.2fs) → %s", len(safe_lines), time.perf_counter() - t_stage, translated_json)
-            lines = safe_lines
+            logger.info("[v2] translate: segments=%s (%.2fs) → %s", len(translated_segments), time.perf_counter() - t_stage, translated_json)
         except Exception as ex:
             logger.exception("[v2] translate failed (continuing with original text): %s", ex)
             try:
-                write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "lines": lines, "error": str(ex)})
+                write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": segments_for_mt, "error": str(ex)})
             except Exception:
                 pass
 

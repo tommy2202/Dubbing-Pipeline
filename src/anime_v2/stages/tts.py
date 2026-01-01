@@ -119,7 +119,29 @@ def run(
     lines: list[dict]
     if translated_json and translated_json.exists():
         data = read_json(translated_json, default={})
-        lines = list(data.get("lines", [])) if isinstance(data, dict) else []
+        if isinstance(data, dict):
+            if isinstance(data.get("lines"), list):
+                lines = list(data.get("lines", []))
+            elif isinstance(data.get("segments"), list):
+                # Accept translation manager output: segments with "speaker"
+                segs = list(data.get("segments", []))
+                lines = []
+                for s in segs:
+                    try:
+                        lines.append(
+                            {
+                                "start": float(s["start"]),
+                                "end": float(s["end"]),
+                                "speaker_id": str(s.get("speaker") or s.get("speaker_id") or "SPEAKER_01"),
+                                "text": str(s.get("text") or ""),
+                            }
+                        )
+                    except Exception:
+                        continue
+            else:
+                lines = []
+        else:
+            lines = []
     elif transcript_srt and transcript_srt.exists():
         lines = _parse_srt(transcript_srt)
     else:

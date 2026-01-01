@@ -31,6 +31,7 @@ translation = [
   "langdetect>=1.0.9",
   "transformers>=4.45.0",
   "sentencepiece>=0.2.0",
+  "sacremoses>=0.1.1",
 ]
 tts = [
   "numpy>=1.24",
