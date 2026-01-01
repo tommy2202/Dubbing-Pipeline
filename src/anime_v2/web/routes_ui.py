@@ -77,6 +77,26 @@ async def ui_dashboard(request: Request) -> HTMLResponse:
     return _render(request, "dashboard.html", {})
 
 
+@router.get("/partials/jobs_table")
+async def ui_jobs_table(request: Request, status: str | None = None, q: str | None = None, limit: int = 25) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    store = getattr(request.app.state, "job_store", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="Job store not initialized")
+    # mirror API defaults
+    limit_i = max(1, min(200, int(limit)))
+    jobs = store.list(limit=1000, state=(status or None))
+    if q:
+        qq = str(q).lower().strip()
+        if qq:
+            jobs = [j for j in jobs if (qq in j.id.lower()) or (qq in (j.video_path or "").lower())]
+    jobs = jobs[:limit_i]
+    # Template expects simple dicts with state as string.
+    return _render(request, "_jobs_table.html", {"jobs": [j.to_dict() for j in jobs]})
+
+
 @router.get("/jobs/{job_id}")
 async def ui_job_detail(request: Request, job_id: str) -> HTMLResponse:
     user = _current_user_optional(request)

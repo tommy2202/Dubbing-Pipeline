@@ -9,6 +9,7 @@ from typing import Any
 
 class JobState(str, Enum):
     QUEUED = "QUEUED"
+    PAUSED = "PAUSED"
     RUNNING = "RUNNING"
     DONE = "DONE"
     FAILED = "FAILED"

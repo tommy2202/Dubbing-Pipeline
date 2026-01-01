@@ -6,16 +6,118 @@
 <div class="flex items-start justify-between gap-4">
   <div>
     <h1 class="text-2xl font-semibold">Dashboard</h1>
-    <p class="mt-1 text-sm text-slate-400">Jobs and outputs will appear here (UX-2).</p>
+    <p class="mt-1 text-sm text-slate-400">Recent jobs with live progress.</p>
   </div>
   <a href="/ui/upload" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium">
     New Job
   </a>
 </div>
 
-<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-  <div class="text-sm text-slate-300">Jobs</div>
-  <div class="mt-3 text-sm text-slate-500">Table placeholder.</div>
+<div id="dashJobs" class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4" x-data="{status:'', q:''}">
+  <div class="flex flex-wrap items-end justify-between gap-3">
+    <div class="text-sm text-slate-300">Jobs</div>
+    <div class="flex flex-wrap items-center gap-2 text-sm">
+      <div>
+        <label class="block text-xs text-slate-500">Status</label>
+        <select class="mt-1 rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm" x-model="status" @change="reloadJobs()">
+          <option value="">All</option>
+          <option value="QUEUED">QUEUED</option>
+          <option value="PAUSED">PAUSED</option>
+          <option value="RUNNING">RUNNING</option>
+          <option value="DONE">DONE</option>
+          <option value="FAILED">FAILED</option>
+          <option value="CANCELED">CANCELED</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500">Search</label>
+        <input class="mt-1 rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+               placeholder="job id or filename" x-model="q"
+               @keydown.enter.prevent="reloadJobs()" />
+      </div>
+      <button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+              @click="reloadJobs()">Apply</button>
+    </div>
+  </div>
+
+  <div class="mt-4 flex flex-wrap items-center gap-2 text-sm">
+    <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+            @click="bulkAction('pause')">Pause</button>
+    <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+            @click="bulkAction('resume')">Resume</button>
+    <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-sm text-red-100"
+            @click="bulkAction('cancel')">Cancel</button>
+  </div>
+
+  <div
+    id="job-table"
+    class="mt-4"
+    hx-get="/ui/partials/jobs_table?limit=25"
+    hx-trigger="load"
+    hx-swap="innerHTML"
+  ></div>
 </div>
+
+<script>
+  function selectedJobIds() {
+    return Array.from(document.querySelectorAll("input[data-job-select]:checked")).map((cb) => cb.value);
+  }
+
+  function reloadJobs() {
+    const root = document.getElementById("dashJobs");
+    const status = root && root.__x ? root.__x.$data.status : "";
+    const q = root && root.__x ? root.__x.$data.q : "";
+    const url = "/ui/partials/jobs_table?limit=25"
+      + (status ? ("&status=" + encodeURIComponent(status)) : "")
+      + (q ? ("&q=" + encodeURIComponent(q)) : "");
+    if (window.htmx) window.htmx.ajax("GET", url, "#job-table");
+  }
+
+  async function jobAction(action, jobId) {
+    const csrf = document.getElementById("csrf")?.value || "";
+    const url = "/api/jobs/" + encodeURIComponent(jobId) + "/" + action;
+    const r = await fetch(url, { method: "POST", headers: { "X-CSRF-Token": csrf } });
+    if (!r.ok) {
+      try {
+        const data = await r.json();
+        alert((data && data.detail) ? data.detail : ("Action failed (" + r.status + ")"));
+      } catch (e) {
+        alert("Action failed (" + r.status + ")");
+      }
+    }
+  }
+
+  async function bulkAction(action) {
+    const ids = selectedJobIds();
+    if (!ids.length) return;
+    for (const id of ids) {
+      await jobAction(action, id);
+    }
+  }
+
+  // Live updates via SSE
+  (function () {
+    try {
+      const es = new EventSource("/api/jobs/events");
+      es.addEventListener("job", function (evt) {
+        try {
+          const data = JSON.parse(evt.data || "{}");
+          const id = data.id;
+          if (!id) return;
+          const row = document.getElementById("job-row-" + id);
+          if (!row) {
+            // new job: reload table
+            reloadJobs();
+            return;
+          }
+          const st = row.querySelector("[data-job-state]");
+          const pr = row.querySelector("[data-job-progress]");
+          if (st) st.textContent = data.state || "";
+          if (pr) pr.textContent = Math.round((Number(data.progress || 0) * 100)) + "%";
+        } catch (e) {}
+      });
+    } catch (e) {}
+  })();
+</script>
 {% endblock %}
 

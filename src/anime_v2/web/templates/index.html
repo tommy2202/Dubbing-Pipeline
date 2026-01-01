@@ -141,7 +141,8 @@
       async function refreshJobs() {
         const res = await fetch(`/api/jobs`, { headers: authHeaders() });
         if (!res.ok) return;
-        const jobs = await res.json();
+        const payload = await res.json();
+        const jobs = Array.isArray(payload) ? payload : (payload.items || []);
         jobsTbody.innerHTML = "";
         for (const j of jobs) {
           const tr = document.createElement("tr");

@@ -293,9 +293,26 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
 
 
 @router.get("/api/jobs")
-async def list_jobs(request: Request, state: str | None = None, _: Identity = Depends(require_scope("read:job"))) -> list[dict[str, Any]]:
+async def list_jobs(
+    request: Request,
+    state: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+    _: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
     store = _get_store(request)
-    jobs = store.list(limit=100, state=state)
+    st = status or state
+    limit_i = max(1, min(200, int(limit)))
+    offset_i = max(0, int(offset))
+    jobs_all = store.list(limit=1000, state=st)
+    if q:
+        qq = str(q).lower().strip()
+        if qq:
+            jobs_all = [j for j in jobs_all if (qq in j.id.lower()) or (qq in (j.video_path or "").lower())]
+    total = len(jobs_all)
+    jobs = jobs_all[offset_i : offset_i + limit_i]
     out = []
     for j in jobs:
         out.append(
@@ -308,9 +325,15 @@ async def list_jobs(request: Request, state: str | None = None, _: Identity = De
                 "created_at": j.created_at,
                 "updated_at": j.updated_at,
                 "output_mkv": j.output_mkv,
+                "mode": j.mode,
+                "src_lang": j.src_lang,
+                "tgt_lang": j.tgt_lang,
+                "device": j.device,
+                "runtime": j.runtime,
             }
         )
-    return out
+    next_offset = offset_i + limit_i
+    return {"items": out, "limit": limit_i, "offset": offset_i, "total": total, "next_offset": (next_offset if next_offset < total else None)}
 
 
 @router.get("/api/jobs/{id}")
@@ -331,6 +354,77 @@ async def cancel_job(request: Request, id: str, _: Identity = Depends(require_sc
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
     return job.to_dict()
+
+
+@router.post("/api/jobs/{id}/pause")
+async def pause_job(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    queue = _get_queue(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if job.state != JobState.QUEUED:
+        raise HTTPException(status_code=409, detail="Can only pause QUEUED jobs")
+    j2 = await queue.pause(id)
+    if j2 is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return j2.to_dict()
+
+
+@router.post("/api/jobs/{id}/resume")
+async def resume_job(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    queue = _get_queue(request)
+    scheduler = _get_scheduler(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if job.state != JobState.PAUSED:
+        raise HTTPException(status_code=409, detail="Can only resume PAUSED jobs")
+    j2 = await queue.resume(id)
+    if j2 is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    # re-submit to scheduler (best-effort)
+    try:
+        scheduler.submit(JobRecord(job_id=id, mode=j2.mode, device_pref=j2.device, created_at=time.time(), priority=100))
+    except Exception:
+        pass
+    return j2.to_dict()
+
+
+@router.get("/api/jobs/events")
+async def jobs_events(request: Request, _: Identity = Depends(require_scope("read:job"))):
+    store = _get_store(request)
+
+    async def gen():
+        last: dict[str, str] = {}
+        while True:
+            if await request.is_disconnected():
+                return
+            jobs = store.list(limit=200)
+            for j in jobs:
+                key = f"{j.state.value}:{j.updated_at}:{j.progress:.4f}:{j.message}"
+                if last.get(j.id) == key:
+                    continue
+                last[j.id] = key
+                payload = {
+                    "id": j.id,
+                    "state": j.state.value,
+                    "progress": float(j.progress),
+                    "message": j.message,
+                    "updated_at": j.updated_at,
+                    "created_at": j.created_at,
+                    "video_path": j.video_path,
+                    "mode": j.mode,
+                    "src_lang": j.src_lang,
+                    "tgt_lang": j.tgt_lang,
+                }
+                yield {"event": "job", "data": json.dumps(payload)}
+            await asyncio.sleep(0.75)
+
+    import json
+
+    return EventSourceResponse(gen())
 
 
 @router.get("/api/jobs/{id}/logs/tail")

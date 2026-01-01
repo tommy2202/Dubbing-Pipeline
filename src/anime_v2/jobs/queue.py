@@ -199,6 +199,23 @@ class JobQueue:
         j = self.store.update(id, state=JobState.CANCELED, message="Canceled")
         return j
 
+    async def pause(self, id: str) -> Job | None:
+        j = self.store.get(id)
+        if j is None:
+            return None
+        if j.state != JobState.QUEUED:
+            # cannot pause running/done/failed jobs in this simple implementation
+            return j
+        return self.store.update(id, state=JobState.PAUSED, message="Paused")
+
+    async def resume(self, id: str) -> Job | None:
+        j = self.store.get(id)
+        if j is None:
+            return None
+        if j.state != JobState.PAUSED:
+            return j
+        return self.store.update(id, state=JobState.QUEUED, message="Resumed")
+
     async def _is_canceled(self, id: str) -> bool:
         async with self._cancel_lock:
             return id in self._cancel
@@ -211,6 +228,12 @@ class JobQueue:
         while True:
             job_id = await self._q.get()
             try:
+                # Pause support (best-effort): if job is paused, requeue and yield.
+                j = self.store.get(job_id)
+                if j is not None and j.state == JobState.PAUSED:
+                    await asyncio.sleep(0.25)
+                    await self._q.put(job_id)
+                    continue
                 await self._run_job(job_id)
             finally:
                 self._q.task_done()

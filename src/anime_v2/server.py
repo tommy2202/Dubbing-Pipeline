@@ -59,7 +59,15 @@ async def lifespan(app: FastAPI):
 
     def _enqueue_threadsafe(job: Job) -> None:
         # Runs in scheduler thread; forward to asyncio loop
-        fut = _asyncio.run_coroutine_threadsafe(q.enqueue(job), loop)
+        coro = q.enqueue(job)
+        try:
+            fut = _asyncio.run_coroutine_threadsafe(coro, loop)
+        except Exception:
+            try:
+                coro.close()
+            except Exception:
+                pass
+            raise
         fut.result(timeout=5.0)
 
     sched = Scheduler(store=store, enqueue_cb=_enqueue_threadsafe)

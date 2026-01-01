@@ -1,0 +1,63 @@
+<div class="overflow-x-auto">
+  <table class="min-w-full text-sm">
+    <thead class="text-xs text-slate-400">
+      <tr class="border-b border-slate-800">
+        <th class="py-2 pr-3 text-left">
+          <input type="checkbox" class="h-4 w-4" x-data @change="
+            document.querySelectorAll('input[data-job-select]').forEach(cb => cb.checked = $event.target.checked);
+          ">
+        </th>
+        <th class="py-2 pr-3 text-left">Job ID</th>
+        <th class="py-2 pr-3 text-left">Filename</th>
+        <th class="py-2 pr-3 text-left">Mode</th>
+        <th class="py-2 pr-3 text-left">Lang</th>
+        <th class="py-2 pr-3 text-left">Progress</th>
+        <th class="py-2 pr-3 text-left">Status</th>
+        <th class="py-2 pr-3 text-left">Created</th>
+        <th class="py-2 text-right">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for j in jobs %}
+      <tr
+        id="job-row-{{ j.id }}"
+        class="border-b border-slate-900 hover:bg-slate-900/40 cursor-pointer"
+        onclick="window.location='/ui/jobs/{{ j.id }}';"
+      >
+        <td class="py-2 pr-3" onclick="event.stopPropagation();">
+          <input type="checkbox" class="h-4 w-4" data-job-select value="{{ j.id }}">
+        </td>
+        <td class="py-2 pr-3 font-mono text-xs text-slate-200">
+          {{ j.id[:8] }}…
+        </td>
+        <td class="py-2 pr-3 text-slate-200" data-job-filename>{{ j.video_path.split('/')[-1] }}</td>
+        <td class="py-2 pr-3 text-slate-200" data-job-mode>{{ j.mode }}</td>
+        <td class="py-2 pr-3 text-slate-400" data-job-lang>{{ j.src_lang }}→{{ j.tgt_lang }}</td>
+        <td class="py-2 pr-3 text-slate-200" data-job-progress>{{ (j.progress * 100.0) | round(0) }}%</td>
+        <td class="py-2 pr-3 text-slate-200" data-job-state>{{ j.state }}</td>
+        <td class="py-2 pr-3 text-slate-500" data-job-created>{{ j.created_at }}</td>
+        <td class="py-2 text-right" onclick="event.stopPropagation();">
+          <div class="flex items-center justify-end gap-2">
+            {% if j.state == "QUEUED" %}
+              <button class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1 text-xs"
+                      onclick="jobAction('pause','{{ j.id }}')">Pause</button>
+            {% elif j.state == "PAUSED" %}
+              <button class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1 text-xs"
+                      onclick="jobAction('resume','{{ j.id }}')">Resume</button>
+            {% endif %}
+            {% if j.state in ["QUEUED","RUNNING","PAUSED"] %}
+              <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-2 py-1 text-xs text-red-100"
+                      onclick="jobAction('cancel','{{ j.id }}')">Cancel</button>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if not jobs %}
+    <div class="py-6 text-sm text-slate-500">No jobs found.</div>
+  {% endif %}
+</div>
+
