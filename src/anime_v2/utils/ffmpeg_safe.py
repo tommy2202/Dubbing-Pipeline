@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from anime_v2.config import get_settings
+
 _FORBIDDEN_FLAGS = {
     "-filter_script",
     "-filter_script:v",
@@ -38,8 +40,9 @@ def run_ffmpeg(argv: list[str], *, timeout_s: int | None = None) -> None:
 
 
 def ffprobe_duration_seconds(path: Path, *, timeout_s: int = 20) -> float:
+    s = get_settings()
     argv = [
-        "ffprobe",
+        str(s.ffprobe_bin),
         "-v",
         "error",
         "-show_entries",
@@ -70,7 +73,8 @@ def extract_audio_mono_16k(
     end_s: float | None = None,
     timeout_s: int = 120,
 ) -> None:
-    argv = ["ffmpeg", "-y"]
+    s = get_settings()
+    argv = [str(s.ffmpeg_bin), "-y"]
     if start_s is not None:
         argv += ["-ss", f"{float(start_s):.3f}"]
     if end_s is not None:

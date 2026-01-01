@@ -27,7 +27,7 @@ def _ffprobe_duration_s(path: Path) -> float | None:
     try:
         p = subprocess.run(
             [
-                "ffprobe",
+                str(get_settings().ffprobe_bin),
                 "-v",
                 "error",
                 "-print_format",
@@ -258,11 +258,11 @@ def mix(
         #   - if bg_is_wav: [0:a]=bed, [1:a]=tts
         #   - else: [0:a]=video audio, [1:a]=tts
         if bg_is_wav:
-            cmd = ["ffmpeg", "-y", "-i", str(bg_input), "-i", str(tts_wav)]
+            cmd = [str(get_settings().ffmpeg_bin), "-y", "-i", str(bg_input), "-i", str(tts_wav)]
             bg_stream = "0:a:0"
             tts_stream = "1:a:0"
         else:
-            cmd = ["ffmpeg", "-y", "-i", str(video_in), "-i", str(tts_wav)]
+            cmd = [str(get_settings().ffmpeg_bin), "-y", "-i", str(video_in), "-i", str(tts_wav)]
             bg_stream = "0:a:0"
             tts_stream = "1:a:0"
 
@@ -297,7 +297,15 @@ def mix(
             loud1 = f"loudnorm=I={loudnorm_target}:LRA=11:TP=-1.0:print_format=json"
             # Minimal pass: audio-only null output.
             if bg_is_wav:
-                cmd = ["ffmpeg", "-y", "-i", str(bg_input), "-i", str(tts_wav), "-filter_complex"]
+                cmd = [
+                    str(get_settings().ffmpeg_bin),
+                    "-y",
+                    "-i",
+                    str(bg_input),
+                    "-i",
+                    str(tts_wav),
+                    "-filter_complex",
+                ]
                 fg, out_bus = _build_filtergraph(
                     bg_stream="0:a:0",
                     tts_stream="1:a:0",
@@ -306,7 +314,15 @@ def mix(
                     vid_dur=vid_dur,
                 )
             else:
-                cmd = ["ffmpeg", "-y", "-i", str(video_in), "-i", str(tts_wav), "-filter_complex"]
+                cmd = [
+                    str(get_settings().ffmpeg_bin),
+                    "-y",
+                    "-i",
+                    str(video_in),
+                    "-i",
+                    str(tts_wav),
+                    "-filter_complex",
+                ]
                 fg, out_bus = _build_filtergraph(
                     bg_stream="0:a:0",
                     tts_stream="1:a:0",

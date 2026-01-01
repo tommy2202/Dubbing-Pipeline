@@ -7,11 +7,11 @@ from contextlib import suppress
 from pathlib import Path
 
 from anime_v2.cache.store import cache_get, cache_put, make_key
+from anime_v2.config import get_settings
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
 from anime_v2.utils.circuit import Circuit
-from anime_v2.utils.config import get_settings
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.retry import retry_call
@@ -46,10 +46,11 @@ def _parse_srt(path: Path) -> list[dict]:
 def _ffmpeg_to_pcm16k(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     # ffmpeg cannot safely overwrite input in-place
+    s = get_settings()
     if src.resolve() == dst.resolve():
         tmp = dst.with_suffix(".tmp.wav")
         subprocess.run(
-            ["ffmpeg", "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(tmp)],
+            [str(s.ffmpeg_bin), "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(tmp)],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -57,7 +58,7 @@ def _ffmpeg_to_pcm16k(src: Path, dst: Path) -> None:
         tmp.replace(dst)
         return
     subprocess.run(
-        ["ffmpeg", "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(dst)],
+        [str(s.ffmpeg_bin), "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(dst)],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -134,6 +135,10 @@ def run(
     translated_json: Path | None = None,
     diarization_json: Path | None = None,
     wav_out: Path | None = None,
+    voice_map_json_path: Path | None = None,
+    tts_lang: str | None = None,
+    tts_speaker: str | None = None,
+    tts_speaker_wav: Path | None = None,
     progress_cb=None,
     cancel_cb=None,
     max_stretch: float = 0.15,
@@ -149,6 +154,12 @@ def run(
       - writes per-line clips and a combined aligned track: <stem>.tts.wav
     """
     settings = get_settings()
+    eff_tts_lang = (tts_lang or settings.tts_lang) or "en"
+    eff_tts_speaker = (tts_speaker or settings.tts_speaker) or "default"
+    eff_tts_speaker_wav: Path | None = tts_speaker_wav or settings.tts_speaker_wav
+    eff_voice_map_json_path: Path | None = voice_map_json_path or (
+        Path(settings.voice_map_json) if settings.voice_map_json else None
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = out_dir / ".checkpoint.json"
 
@@ -171,7 +182,7 @@ def run(
     per_speaker_wav_override: dict[str, Path] = {}
     per_speaker_preset_override: dict[str, str] = {}
     try:
-        vmj = settings.voice_map_json or ""
+        vmj = str(eff_voice_map_json_path) if eff_voice_map_json_path else ""
         if vmj:
             data = read_json(Path(vmj), default={})
             if isinstance(data, dict) and isinstance(data.get("items"), list):
@@ -291,7 +302,7 @@ def run(
             raise TTSCanceled()
 
         text = str(line.get("text", "") or "").strip()
-        speaker_id = str(line.get("speaker_id") or settings.tts_speaker or "default")
+        speaker_id = str(line.get("speaker_id") or eff_tts_speaker or "default")
         if not text:
             # keep timing, but skip synthesis (silence clip)
             clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
@@ -309,7 +320,7 @@ def run(
         # Choose clone speaker wav:
         speaker_wav = (
             per_speaker_wav_override.get(speaker_id)
-            or settings.tts_speaker_wav
+            or eff_tts_speaker_wav
             or speaker_rep_wav.get(speaker_id)
         )
         if speaker_wav is None:
@@ -346,7 +357,7 @@ def run(
                         "xtts_clone",
                         lambda text=text, speaker_wav=speaker_wav, raw_clip=raw_clip: engine.synthesize(
                             text,
-                            language=settings.tts_lang,
+                            language=eff_tts_lang,
                             speaker_wav=speaker_wav,
                             out_path=raw_clip,
                         ),
@@ -366,7 +377,7 @@ def run(
                 preset = (
                     per_speaker_preset_override.get(speaker_id)
                     or voice_map.get(speaker_id)
-                    or (settings.tts_speaker or "default")
+                    or (eff_tts_speaker or "default")
                 )
                 emb_path = speaker_embeddings.get(speaker_id)
                 if emb_path and emb_path.exists():
@@ -383,7 +394,7 @@ def run(
                         "xtts_preset",
                         lambda text=text, preset=preset, raw_clip=raw_clip: engine.synthesize(
                             text,
-                            language=settings.tts_lang,
+                            language=eff_tts_lang,
                             speaker_id=preset,
                             out_path=raw_clip,
                         ),
@@ -471,15 +482,13 @@ def run(
         if not sig:
             from anime_v2.utils.hashio import speaker_signature
 
-            sig = speaker_signature(
-                settings.tts_lang, settings.tts_speaker, settings.tts_speaker_wav
-            )
+            sig = speaker_signature(eff_tts_lang, eff_tts_speaker, eff_tts_speaker_wav)
         key = make_key(
             "tts",
             {
                 "audio": audio_hash,
                 "tts_model": settings.tts_model,
-                "lang": settings.tts_lang,
+                "lang": eff_tts_lang,
                 "sig": sig,
             },
         )
@@ -530,15 +539,13 @@ def run(
             if not sig:
                 from anime_v2.utils.hashio import speaker_signature
 
-                sig = speaker_signature(
-                    settings.tts_lang, settings.tts_speaker, settings.tts_speaker_wav
-                )
+                sig = speaker_signature(eff_tts_lang, eff_tts_speaker, eff_tts_speaker_wav)
             key = make_key(
                 "tts",
                 {
                     "audio": audio_hash,
                     "tts_model": settings.tts_model,
-                    "lang": settings.tts_lang,
+                    "lang": eff_tts_lang,
                     "sig": sig,
                 },
             )

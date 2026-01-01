@@ -5,6 +5,8 @@ import subprocess
 from contextlib import suppress
 from pathlib import Path
 
+from anime_v2.config import get_settings
+
 
 def hash_wav(path: str | Path) -> str:
     p = Path(path)
@@ -26,8 +28,9 @@ def hash_audio_from_video(path: str | Path) -> str:
     if not p.exists() or not p.is_file():
         raise FileNotFoundError(str(p))
 
+    s = get_settings()
     cmd = [
-        "ffmpeg",
+        str(s.ffmpeg_bin),
         "-nostdin",
         "-i",
         str(p),

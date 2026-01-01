@@ -59,6 +59,13 @@ class PublicConfig(BaseSettings):
         alias="OUTPUTS_DIR",
     )
 
+    # --- tool binaries ---
+    ffmpeg_bin: str = Field(default="ffmpeg", alias="FFMPEG_BIN")
+    ffprobe_bin: str = Field(default="ffprobe", alias="FFPROBE_BIN")
+
+    # --- per-user settings storage ---
+    user_settings_path: Path | None = Field(default=None, alias="ANIME_V2_SETTINGS_PATH")
+
     # --- web server ---
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")

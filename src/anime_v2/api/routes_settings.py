@@ -21,9 +21,9 @@ from anime_v2.utils.net import egress_guard
 def _settings_path() -> Path:
     # Allow override for tests / deployments.
     p = Path(str(Path.home())) / ".anime_v2" / "settings.json"
-    env = (str(__import__("os").environ.get("ANIME_V2_SETTINGS_PATH") or "")).strip()
-    if env:
-        p = Path(env)
+    s = get_settings()
+    if s.user_settings_path:
+        p = Path(s.user_settings_path)
     return p.expanduser().resolve()
 
 

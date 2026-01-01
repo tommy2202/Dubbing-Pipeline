@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from anime_v2.config import get_settings
 from anime_v2.utils.log import logger
 
 
@@ -30,7 +31,7 @@ def export_mkv(video_in: Path, dub_wav: Path, srt: Path | None, out_path: Path) 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     srt = _srt_ok(srt)
 
-    cmd: list[str] = ["ffmpeg", "-y", "-i", str(video_in), "-i", str(dub_wav)]
+    cmd: list[str] = [str(get_settings().ffmpeg_bin), "-y", "-i", str(video_in), "-i", str(dub_wav)]
     if srt is not None:
         cmd += ["-i", str(srt)]
 
@@ -81,7 +82,7 @@ def export_mp4(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     srt = _srt_ok(srt)
 
-    cmd: list[str] = ["ffmpeg", "-y", "-i", str(video_in), "-i", str(dub_wav)]
+    cmd: list[str] = [str(get_settings().ffmpeg_bin), "-y", "-i", str(video_in), "-i", str(dub_wav)]
     if srt is not None:
         cmd += ["-i", str(srt)]
 

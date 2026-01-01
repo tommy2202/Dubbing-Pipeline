@@ -85,11 +85,11 @@ anime-v2 = "anime_v2.cli:cli"
 anime-v2-web = "anime_v2.web.run:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["anime_v1*", "anime_v2*"]
+where = ["src", "."]
+include = ["anime_v1*", "anime_v2*", "config*"]
 
 [tool.pytest.ini_options]
 markers = [

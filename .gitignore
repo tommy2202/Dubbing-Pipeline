@@ -3,6 +3,8 @@
 
 # local secret files
 secrets/
+*.key
+*.pem
 
 # python caches
 __pycache__/

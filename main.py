@@ -88,7 +88,7 @@ def dub_video(input_path: str, output_path: str) -> None:
     # If your pipeline already outputs MP4, you can replace this step with a direct write.
     subprocess.run(
         [
-            "ffmpeg",
+            str(_s.ffmpeg_bin),
             "-y",
             "-i",
             str(expected_mkv),

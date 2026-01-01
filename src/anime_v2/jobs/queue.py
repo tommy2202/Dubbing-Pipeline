@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import shutil
 import time
@@ -849,9 +848,10 @@ class JobQueue:
 
                     # Run TTS in a separate process so watchdog can SIGKILL if it hangs.
                     def _tts_phase():
-                        if voice_map_json is not None:
-                            os.environ["VOICE_MAP_JSON"] = str(voice_map_json)
                         # Preset overrides for this job (lang/speaker/wav).
+                        tts_lang = None
+                        tts_speaker = None
+                        tts_speaker_wav = None
                         try:
                             curj = self.store.get(job_id)
                             rt = dict((curj.runtime or {}) if curj else runtime)
@@ -859,13 +859,13 @@ class JobQueue:
                             if isinstance(preset, dict):
                                 tl = str(preset.get("tts_lang") or "").strip()
                                 if tl:
-                                    os.environ["TTS_LANG"] = tl
+                                    tts_lang = tl
                                 sp = str(preset.get("tts_speaker") or "").strip()
                                 if sp:
-                                    os.environ["TTS_SPEAKER"] = sp
+                                    tts_speaker = sp
                                 wp = str(preset.get("tts_speaker_wav") or "").strip()
                                 if wp:
-                                    os.environ["TTS_SPEAKER_WAV"] = wp
+                                    tts_speaker_wav = Path(wp)
                         except Exception:
                             pass
                         return tts.run(
@@ -873,6 +873,10 @@ class JobQueue:
                             translated_json=translated_json if translated_json.exists() else None,
                             diarization_json=diar_json_work if diar_json_work.exists() else None,
                             wav_out=tts_wav,
+                            voice_map_json_path=voice_map_json,
+                            tts_lang=tts_lang,
+                            tts_speaker=tts_speaker,
+                            tts_speaker_wav=tts_speaker_wav,
                             # callbacks omitted (not picklable); progress updates remain coarse for this phase
                             progress_cb=None,
                             cancel_cb=None,

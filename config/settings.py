@@ -71,6 +71,47 @@ def _validate_secrets(s: Settings) -> None:
         )
 
 
+def get_safe_config_report() -> dict[str, Any]:
+    """
+    Deterministic, non-sensitive config report.
+
+    - Public values are included (paths are stringified)
+    - Secret values are NEVER included; only SET/UNSET markers
+    """
+    s = get_settings()
+
+    pub = s.public.model_dump()
+    pub_s: dict[str, Any] = {}
+    for k, v in pub.items():
+        # stringify Paths for stable JSON output
+        try:
+            pub_s[k] = str(v) if hasattr(v, "__fspath__") else v
+        except Exception:
+            pub_s[k] = str(v)
+
+    sec_fields = sorted(list(s.secret.model_fields.keys()))
+    sec: dict[str, str] = {}
+    for k in sec_fields:
+        try:
+            v = getattr(s.secret, k)
+        except Exception:
+            sec[k] = "UNSET"
+            continue
+        if v is None:
+            sec[k] = "UNSET"
+        elif isinstance(v, SecretStr):
+            sec[k] = "SET" if v.get_secret_value() else "UNSET"
+        else:
+            sec[k] = "SET" if str(v).strip() else "UNSET"
+
+    strict = bool(int(__import__("os").environ.get("STRICT_SECRETS", "0") or "0"))
+    return {
+        "strict_secrets": strict,
+        "public": pub_s,
+        "secrets": sec,
+    }
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     public = PublicConfig()
