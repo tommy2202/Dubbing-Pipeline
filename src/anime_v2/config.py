@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     min_free_gb: int = Field(default=10, alias="MIN_FREE_GB")
     work_stale_max_hours: int = Field(default=24, alias="WORK_STALE_MAX_HOURS")
 
+    # latency budgets (seconds): mark jobs "degraded" when exceeded
+    budget_transcribe_sec: int = Field(default=600, alias="BUDGET_TRANSCRIBE_SEC")
+    budget_tts_sec: int = Field(default=900, alias="BUDGET_TTS_SEC")
+    budget_mux_sec: int = Field(default=120, alias="BUDGET_MUX_SEC")
+
     # runtime model manager / allocator
     prewarm_whisper: str = Field(default="", alias="PREWARM_WHISPER")  # comma-separated models
     prewarm_tts: str = Field(default="", alias="PREWARM_TTS")  # comma-separated models

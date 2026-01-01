@@ -13,7 +13,19 @@ from anime_v2.jobs.models import Job, JobState, now_utc
 from anime_v2.jobs.store import JobStore
 from anime_v2.jobs.limits import get_limits
 from anime_v2.jobs.watchdog import PhaseTimeout, run_with_timeout
-from anime_v2.ops.metrics import job_errors, jobs_finished, whisper_seconds, tts_seconds
+from anime_v2.config import get_settings
+from anime_v2.ops.metrics import (
+    job_errors,
+    jobs_finished,
+    pipeline_job_degraded_total,
+    pipeline_job_failed_total,
+    pipeline_mux_seconds,
+    pipeline_transcribe_seconds,
+    pipeline_tts_seconds,
+    tts_seconds,
+    time_hist,
+    whisper_seconds,
+)
 from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
@@ -239,8 +251,32 @@ class JobQueue:
         )
 
         t0 = time.perf_counter()
+        settings = get_settings()
         self.store.update(job_id, state=JobState.RUNNING, progress=0.0, message="Starting")
         self.store.append_log(job_id, f"[{now_utc()}] start job={job_id}")
+
+        degraded_marked = False
+
+        def _mark_degraded(reason: str) -> None:
+            nonlocal degraded_marked
+            try:
+                curj = self.store.get(job_id)
+                rt = dict((curj.runtime or {}) if curj else runtime)
+                rt.setdefault("metadata", {})
+                md = rt.get("metadata")
+                if not isinstance(md, dict):
+                    md = {}
+                    rt["metadata"] = md
+                if not bool(md.get("degraded")):
+                    md["degraded"] = True
+                    degraded_marked = True
+                    pipeline_job_degraded_total.inc()
+                md.setdefault("degraded_reasons", [])
+                if isinstance(md["degraded_reasons"], list) and reason:
+                    md["degraded_reasons"].append(str(reason))
+                self.store.update(job_id, runtime=rt)
+            except Exception:
+                pass
 
         try:
             await self._check_canceled(job_id)
@@ -376,26 +412,14 @@ class JobQueue:
             srt_public = base_dir / f"{video_path.stem}.srt"
             self.store.update(job_id, progress=0.30, message=f"Transcribing (Whisper {model_name})")
             self.store.append_log(job_id, f"[{now_utc()}] transcribe model={model_name} device={device}")
-            t_wh0 = time.perf_counter()
             try:
-                srt_meta = srt_out.with_suffix(".json")
-                if srt_out.exists() and srt_meta.exists() and stage_is_done(ckpt, "transcribe"):
-                    self.store.append_log(job_id, f"[{now_utc()}] transcribe (checkpoint hit)")
-                else:
-                    if sched is None:
-                        transcribe(
-                            audio_path=wav,
-                            srt_out=srt_out,
-                            device=device,
-                            model_name=model_name,
-                            task="transcribe",
-                            src_lang=job.src_lang,
-                            tgt_lang=job.tgt_lang,
-                            job_id=job_id,
-                            audio_hash=audio_hash,
-                        )
+                with time_hist(pipeline_transcribe_seconds) as elapsed:
+                    t_wh0 = time.perf_counter()
+                    srt_meta = srt_out.with_suffix(".json")
+                    if srt_out.exists() and srt_meta.exists() and stage_is_done(ckpt, "transcribe"):
+                        self.store.append_log(job_id, f"[{now_utc()}] transcribe (checkpoint hit)")
                     else:
-                        with sched.phase("transcribe"):
+                        if sched is None:
                             transcribe(
                                 audio_path=wav,
                                 srt_out=srt_out,
@@ -407,33 +431,48 @@ class JobQueue:
                                 job_id=job_id,
                                 audio_hash=audio_hash,
                             )
-                    # reflect circuit state into job (only when we actually ran transcribe)
-                    try:
-                        curj = self.store.get(job_id)
-                        rt = dict((curj.runtime or {}) if curj else runtime)
-                        rt.setdefault("breaker_state", {})
-                        rt["breaker_state"]["whisper"] = Circuit.get("whisper").snapshot().state
-                        rt.setdefault("attempts", {})
-                        rt["attempts"]["whisper"] = int(rt["attempts"].get("whisper", 0)) + 1
-                        self.store.update(job_id, runtime=rt)
-                    except Exception:
-                        pass
-                    try:
-                        write_ckpt(
-                            job_id,
-                            "transcribe",
-                            {"srt": srt_out, "meta": srt_meta},
-                            {"work_dir": str(work_dir), "model": model_name, "device": device},
-                            ckpt_path=ckpt_path,
-                        )
-                        ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
-                    except Exception:
-                        pass
+                        else:
+                            with sched.phase("transcribe"):
+                                transcribe(
+                                    audio_path=wav,
+                                    srt_out=srt_out,
+                                    device=device,
+                                    model_name=model_name,
+                                    task="transcribe",
+                                    src_lang=job.src_lang,
+                                    tgt_lang=job.tgt_lang,
+                                    job_id=job_id,
+                                    audio_hash=audio_hash,
+                                )
+                        # reflect circuit state into job (only when we actually ran transcribe)
+                        try:
+                            curj = self.store.get(job_id)
+                            rt = dict((curj.runtime or {}) if curj else runtime)
+                            rt.setdefault("breaker_state", {})
+                            rt["breaker_state"]["whisper"] = Circuit.get("whisper").snapshot().state
+                            rt.setdefault("attempts", {})
+                            rt["attempts"]["whisper"] = int(rt["attempts"].get("whisper", 0)) + 1
+                            self.store.update(job_id, runtime=rt)
+                        except Exception:
+                            pass
+                        try:
+                            write_ckpt(
+                                job_id,
+                                "transcribe",
+                                {"srt": srt_out, "meta": srt_meta},
+                                {"work_dir": str(work_dir), "model": model_name, "device": device},
+                                ckpt_path=ckpt_path,
+                            )
+                            ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
+                        except Exception:
+                            pass
+                    whisper_seconds.observe(max(0.0, time.perf_counter() - t_wh0))
+                    dt = elapsed()
+                    if dt > float(settings.budget_transcribe_sec):
+                        _mark_degraded("budget_transcribe_exceeded")
             except Exception:
                 job_errors.labels(stage="whisper").inc()
                 raise
-            finally:
-                whisper_seconds.observe(max(0.0, time.perf_counter() - t_wh0))
             try:
                 srt_public.write_bytes(srt_out.read_bytes())
                 if srt_out.with_suffix(".json").exists():
@@ -554,47 +593,52 @@ class JobQueue:
             self.store.update(job_id, progress=0.76, message="Synthesizing TTS")
             self.store.append_log(job_id, f"[{now_utc()}] tts")
             try:
-                t_tts0 = time.perf_counter()
-                # Run TTS in a separate process so watchdog can SIGKILL if it hangs.
-                def _tts_phase():
-                    return tts.run(
-                        out_dir=work_dir,
-                        translated_json=translated_json if translated_json.exists() else None,
-                        diarization_json=diar_json_work if diar_json_work.exists() else None,
-                        wav_out=tts_wav,
-                        # callbacks omitted (not picklable); progress updates remain coarse for this phase
-                        progress_cb=None,
-                        cancel_cb=None,
-                        max_stretch=float(os.environ.get("MAX_STRETCH", "0.15")),
-                        job_id=job_id,
-                        audio_hash=audio_hash,
-                    )
+                with time_hist(pipeline_tts_seconds) as elapsed:
+                    t_tts0 = time.perf_counter()
 
-                # checkpoint-aware skip
-                tts_manifest = work_dir / "tts_manifest.json"
-                if tts_wav.exists() and tts_manifest.exists() and stage_is_done(ckpt, "tts"):
-                    self.store.append_log(job_id, f"[{now_utc()}] tts (checkpoint hit)")
-                else:
-                    if sched is None:
-                        run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
+                    # Run TTS in a separate process so watchdog can SIGKILL if it hangs.
+                    def _tts_phase():
+                        return tts.run(
+                            out_dir=work_dir,
+                            translated_json=translated_json if translated_json.exists() else None,
+                            diarization_json=diar_json_work if diar_json_work.exists() else None,
+                            wav_out=tts_wav,
+                            # callbacks omitted (not picklable); progress updates remain coarse for this phase
+                            progress_cb=None,
+                            cancel_cb=None,
+                            max_stretch=float(os.environ.get("MAX_STRETCH", "0.15")),
+                            job_id=job_id,
+                            audio_hash=audio_hash,
+                        )
+
+                    # checkpoint-aware skip
+                    tts_manifest = work_dir / "tts_manifest.json"
+                    if tts_wav.exists() and tts_manifest.exists() and stage_is_done(ckpt, "tts"):
+                        self.store.append_log(job_id, f"[{now_utc()}] tts (checkpoint hit)")
                     else:
-                        with sched.phase("tts"):
+                        if sched is None:
                             run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
-                    try:
-                        rt = dict((self.store.get(job_id).runtime or {}) if self.store.get(job_id) else runtime)
-                        rt.setdefault("breaker_state", {})
-                        rt["breaker_state"]["tts"] = Circuit.get("tts").snapshot().state
-                        rt.setdefault("attempts", {})
-                        rt["attempts"]["tts"] = int(rt["attempts"].get("tts", 0)) + 1
-                        self.store.update(job_id, runtime=rt)
-                    except Exception:
-                        pass
-                    try:
-                        write_ckpt(job_id, "tts", {"tts_wav": tts_wav, "manifest": tts_manifest}, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path)
-                        ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
-                    except Exception:
-                        pass
-                tts_seconds.observe(max(0.0, time.perf_counter() - t_tts0))
+                        else:
+                            with sched.phase("tts"):
+                                run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
+                        try:
+                            rt = dict((self.store.get(job_id).runtime or {}) if self.store.get(job_id) else runtime)
+                            rt.setdefault("breaker_state", {})
+                            rt["breaker_state"]["tts"] = Circuit.get("tts").snapshot().state
+                            rt.setdefault("attempts", {})
+                            rt["attempts"]["tts"] = int(rt["attempts"].get("tts", 0)) + 1
+                            self.store.update(job_id, runtime=rt)
+                        except Exception:
+                            pass
+                        try:
+                            write_ckpt(job_id, "tts", {"tts_wav": tts_wav, "manifest": tts_manifest}, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path)
+                            ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
+                        except Exception:
+                            pass
+                    tts_seconds.observe(max(0.0, time.perf_counter() - t_tts0))
+                    dt = elapsed()
+                    if dt > float(settings.budget_tts_sec):
+                        _mark_degraded("budget_tts_exceeded")
             except tts.TTSCanceled:
                 job_errors.labels(stage="tts").inc()
                 raise JobCanceled()
@@ -626,56 +670,61 @@ class JobQueue:
             final_mp4 = base_dir / f"{video_path.stem}.dub.mp4"
             self.store.update(job_id, progress=0.97, message="Mixing & muxing")
             self.store.append_log(job_id, f"[{now_utc()}] mix")
-            try:
-                # checkpoint-aware skip (accept either our "mix" stage marker or legacy "mux")
-                if stage_is_done(ckpt, "mix") or stage_is_done(ckpt, "mux"):
-                    self.store.append_log(job_id, f"[{now_utc()}] mix (checkpoint hit)")
-                    # best-effort: reuse previous output paths if present in store state
-                    existing = self.store.get(job_id)
-                    if existing and existing.output_mkv and Path(existing.output_mkv).exists():
-                        out_mkv = Path(existing.output_mkv)
-                    if existing and existing.output_srt and Path(existing.output_srt).exists():
-                        subs_srt_path = Path(existing.output_srt)
-                else:
-                    cfg_mix = MixConfig(
-                        profile=os.environ.get("MIX_PROFILE", "streaming"),
-                        separate_vocals=bool(int(os.environ.get("SEPARATE_VOCALS", "0") or "0")),
-                        emit=tuple(
-                            sorted(
-                                {
-                                    "mkv",
-                                    "mp4",
-                                    *[
-                                        p.strip().lower()
-                                        for p in (os.environ.get("EMIT_FORMATS") or os.environ.get("EMIT") or "mkv,mp4").split(",")
-                                        if p.strip()
-                                    ],
-                                }
-                            )
-                        ),
-                    )
+            with time_hist(pipeline_mux_seconds) as elapsed_mux:
+                try:
+                    # checkpoint-aware skip (accept either our "mix" stage marker or legacy "mux")
+                    if stage_is_done(ckpt, "mix") or stage_is_done(ckpt, "mux"):
+                        self.store.append_log(job_id, f"[{now_utc()}] mix (checkpoint hit)")
+                        # best-effort: reuse previous output paths if present in store state
+                        existing = self.store.get(job_id)
+                        if existing and existing.output_mkv and Path(existing.output_mkv).exists():
+                            out_mkv = Path(existing.output_mkv)
+                        if existing and existing.output_srt and Path(existing.output_srt).exists():
+                            subs_srt_path = Path(existing.output_srt)
+                    else:
+                        cfg_mix = MixConfig(
+                            profile=os.environ.get("MIX_PROFILE", "streaming"),
+                            separate_vocals=bool(int(os.environ.get("SEPARATE_VOCALS", "0") or "0")),
+                            emit=tuple(
+                                sorted(
+                                    {
+                                        "mkv",
+                                        "mp4",
+                                        *[
+                                            p.strip().lower()
+                                            for p in (os.environ.get("EMIT_FORMATS") or os.environ.get("EMIT") or "mkv,mp4").split(",")
+                                            if p.strip()
+                                        ],
+                                    }
+                                )
+                            ),
+                        )
+                        if sched is None:
+                            outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=work_dir, cfg=cfg_mix)
+                        else:
+                            with sched.phase("mux"):
+                                outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=work_dir, cfg=cfg_mix)
+                        out_mkv = outs.get("mkv", out_mkv)
+                        out_mp4 = outs.get("mp4", out_mp4)
+                        try:
+                            art = {"mkv": out_mkv}
+                            if out_mp4 and Path(out_mp4).exists():
+                                art["mp4"] = out_mp4
+                            write_ckpt(job_id, "mix", art, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path)
+                            ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
+                        except Exception:
+                            pass
+                except Exception as ex:
+                    self.store.append_log(job_id, f"[{now_utc()}] mix failed: {ex} (falling back to mux)")
                     if sched is None:
-                        outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=work_dir, cfg=cfg_mix)
+                        mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv, job_id=job_id)
                     else:
                         with sched.phase("mux"):
-                            outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=work_dir, cfg=cfg_mix)
-                    out_mkv = outs.get("mkv", out_mkv)
-                    out_mp4 = outs.get("mp4", out_mp4)
-                    try:
-                        art = {"mkv": out_mkv}
-                        if out_mp4 and Path(out_mp4).exists():
-                            art["mp4"] = out_mp4
-                        write_ckpt(job_id, "mix", art, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path)
-                        ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
-                    except Exception:
-                        pass
-            except Exception as ex:
-                self.store.append_log(job_id, f"[{now_utc()}] mix failed: {ex} (falling back to mux)")
-                if sched is None:
-                    mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv, job_id=job_id)
-                else:
-                    with sched.phase("mux"):
-                        mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv, job_id=job_id)
+                            mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv, job_id=job_id)
+                finally:
+                    dt = elapsed_mux()
+                    if dt > float(settings.budget_mux_sec):
+                        _mark_degraded("budget_mux_exceeded")
 
             def _move_best_effort(src: Path, dst: Path) -> None:
                 try:
@@ -727,6 +776,7 @@ class JobQueue:
             self.store.append_log(job_id, f"[{now_utc()}] failed: {ex}")
             self.store.update(job_id, state=JobState.FAILED, message="Failed", error=str(ex))
             jobs_finished.labels(state="FAILED").inc()
+            pipeline_job_failed_total.inc()
         finally:
             dt = time.perf_counter() - t0
             logger.info("job %s finished state=%s in %.2fs", job_id, (self.store.get(job_id).state if self.store.get(job_id) else "unknown"), dt)

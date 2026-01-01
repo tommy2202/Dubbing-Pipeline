@@ -13,6 +13,7 @@ from anime_v2.config import get_settings
 from anime_v2.jobs.models import Job, JobState
 from anime_v2.jobs.store import JobStore
 from anime_v2.runtime import lifecycle
+from anime_v2.ops.metrics import pipeline_job_degraded_total
 from anime_v2.utils.log import logger
 
 
@@ -171,7 +172,20 @@ class Scheduler:
                     mode = new_mode
                     # reflect mode into persisted job
                     try:
-                        self.store.update(job.job_id, mode=mode, message=f"Backpressure: degraded to {mode}")
+                        # Mark degraded in job runtime metadata.
+                        cur = self.store.get(job.job_id)
+                        rt = dict((cur.runtime or {}) if cur else {})
+                        rt.setdefault("metadata", {})
+                        if isinstance(rt["metadata"], dict):
+                            rt["metadata"]["degraded"] = True
+                            rt["metadata"].setdefault("degraded_reasons", [])
+                            if isinstance(rt["metadata"]["degraded_reasons"], list):
+                                rt["metadata"]["degraded_reasons"].append("backpressure_degraded")
+                        try:
+                            pipeline_job_degraded_total.inc()
+                        except Exception:
+                            pass
+                        self.store.update(job.job_id, mode=mode, message=f"Backpressure: degraded to {mode}", runtime=rt)
                     except Exception:
                         pass
                 else:

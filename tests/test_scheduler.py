@@ -65,4 +65,5 @@ def test_backpressure_degrades_mode(tmp_path, monkeypatch: pytest.MonkeyPatch) -
     j2 = store.get("j2")
     assert j2 is not None
     assert j2.mode in {"medium", "low"}
+    assert bool((j2.runtime or {}).get("metadata", {}).get("degraded")) is True
 

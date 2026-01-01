@@ -18,7 +18,7 @@ from anime_v2.api.security import decode_token
 from anime_v2.config import get_settings
 from anime_v2.jobs.limits import concurrent_jobs_for_user, get_limits, used_minutes_today
 from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_duration_seconds
-from anime_v2.ops.metrics import jobs_queued
+from anime_v2.ops.metrics import jobs_queued, pipeline_job_total
 from anime_v2.ops.storage import ensure_free_space
 from anime_v2.utils.log import request_id_var
 from anime_v2.utils.crypto import verify_secret
@@ -279,6 +279,7 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
             raise HTTPException(status_code=503, detail="Server is draining; try again later", headers={"Retry-After": ra})
         raise
     jobs_queued.inc()
+    pipeline_job_total.inc()
     return {"id": jid}
 
 

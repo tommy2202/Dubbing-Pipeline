@@ -27,3 +27,11 @@
 {"ts":"2026-01-01T03:47:56.501065+00:00","event":"auth.login_ok","request_id":"ef454e670a8742f0b0cc25826761369b","user_id":"u_bJXmWQQo6YyKgHSCUxe2SQ","meta":{"username":"admin","role":"admin","session":false}}
 {"ts":"2026-01-01T03:47:56.534375+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
 {"ts":"2026-01-01T03:47:56.613439+00:00","event":"auth.login_ok","request_id":"ce899d7d140141f68f50235f6270718c","user_id":"u_bJXmWQQo6YyKgHSCUxe2SQ","meta":{"username":"admin","role":"admin","session":false}}
+{"ts":"2026-01-01T03:52:10.386871+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:52:10.455913+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:52:10.547316+00:00","event":"auth.login_ok","request_id":"b86dbc1a93c147bd8026bc64ebc5f47b","user_id":"u_bJXmWQQo6YyKgHSCUxe2SQ","meta":{"username":"admin","role":"admin","session":true}}
+{"ts":"2026-01-01T03:52:10.559686+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:52:10.641567+00:00","event":"auth.login_ok","request_id":"71315ff7ace340ae98bf0fb4afc2d94c","user_id":"u_bJXmWQQo6YyKgHSCUxe2SQ","meta":{"username":"admin","role":"admin","session":false}}
+{"ts":"2026-01-01T03:52:10.663099+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:52:10.723375+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:52:10.801724+00:00","event":"auth.login_ok","request_id":"a8d156cae9284d1891bd0cf485d6e3e7","user_id":"u_bJXmWQQo6YyKgHSCUxe2SQ","meta":{"username":"admin","role":"admin","session":false}}
