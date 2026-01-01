@@ -3,6 +3,7 @@ import pathlib
 import subprocess
 import tempfile
 
+from config.settings import get_settings
 from pydub import AudioSegment
 
 from anime_v1.utils import logger
@@ -133,7 +134,7 @@ def _time_stretch_with_ffmpeg(in_wav: pathlib.Path, out_wav: pathlib.Path, tempo
             factors.append(remaining)
         filt = ",".join(f"atempo={f:.5f}" for f in factors)
         cmd = [
-            "ffmpeg",
+            str(get_settings().public.ffmpeg_bin),
             "-y",
             "-i",
             str(in_wav),

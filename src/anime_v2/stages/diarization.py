@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -92,25 +91,14 @@ def _speechbrain_cluster(audio_path: Path, device: str, cfg: DiarizeConfig) -> l
     kept = []
     for idx, s, e in segs:
         seg_wav = tmp_dir / f"{idx:04d}.wav"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-ss",
-                f"{s:.3f}",
-                "-to",
-                f"{e:.3f}",
-                "-i",
-                str(audio_path),
-                "-ac",
-                "1",
-                "-ar",
-                "16000",
-                str(seg_wav),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        from anime_v2.utils.ffmpeg_safe import extract_audio_mono_16k
+
+        extract_audio_mono_16k(
+            src=audio_path,
+            dst=seg_wav,
+            start_s=float(s),
+            end_s=float(e),
+            timeout_s=180,
         )
         emb = ecapa_embedding(seg_wav, device=device)
         if emb is None:

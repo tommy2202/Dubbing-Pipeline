@@ -300,6 +300,9 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     default=False,
     help="Print a safe config report (no secrets) and exit",
 )
+@click.option("--dry-run", is_flag=True, default=False, help="Validate inputs/tools and exit")
+@click.option("--verbose", is_flag=True, default=False, help="Verbose logging (INFO)")
+@click.option("--debug", is_flag=True, default=False, help="Debug logging (DEBUG)")
 def cli(
     video: Path | None,
     batch_spec: str | None,
@@ -342,6 +345,9 @@ def cli(
     voice_store_dir: Path | None,
     tts_provider: str,
     print_config: bool,
+    dry_run: bool,
+    verbose: bool,
+    debug: bool,
 ) -> None:
     """
     Run pipeline-v2 on VIDEO.
@@ -356,6 +362,16 @@ def cli(
 
         click.echo(_json.dumps(get_safe_config_report(), indent=2, sort_keys=True))
         return
+
+    # CLI log verbosity controls (default behavior unchanged when flags not passed)
+    if debug:
+        from anime_v2.utils.log import set_log_level
+
+        set_log_level("DEBUG")
+    elif verbose:
+        from anime_v2.utils.log import set_log_level
+
+        set_log_level("INFO")
 
     if batch_spec and video is not None:
         raise UsageError("Provide either VIDEO or --batch, not both.")
@@ -531,6 +547,25 @@ def cli(
     if not video.exists():
         raise click.ClickException(f"Video not found: {video}")
 
+    if dry_run:
+        # Preflight checks: ffmpeg/ffprobe availability and output writability.
+        try:
+            from anime_v2.utils.ffmpeg_safe import ffprobe_duration_seconds
+
+            _ = ffprobe_duration_seconds(video, timeout_s=10)
+        except Exception as ex:
+            raise click.ClickException(f"ffprobe failed: {ex}") from ex
+        try:
+            out_dir = output_dir_for(video)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            test = out_dir / ".dry_run_write_test"
+            test.write_text("ok", encoding="utf-8")
+            test.unlink(missing_ok=True)
+        except Exception as ex:
+            raise click.ClickException(f"Output directory not writable: {ex}") from ex
+        click.echo("DRY_RUN_OK")
+        return
+
     # Enforce OFFLINE_MODE / ALLOW_EGRESS policy early.
     install_egress_policy()
 
@@ -639,25 +674,14 @@ def cli(
             lab = str(u["speaker"])
             seg_wav = seg_dir / f"{i:04d}_{lab}.wav"
             try:
-                subprocess.run(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-ss",
-                        f"{s:.3f}",
-                        "-to",
-                        f"{e:.3f}",
-                        "-i",
-                        str(extracted),
-                        "-ac",
-                        "1",
-                        "-ar",
-                        "16000",
-                        str(seg_wav),
-                    ],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                from anime_v2.utils.ffmpeg_safe import extract_audio_mono_16k
+
+                extract_audio_mono_16k(
+                    src=Path(str(extracted)),
+                    dst=seg_wav,
+                    start_s=float(s),
+                    end_s=float(e),
+                    timeout_s=120,
                 )
             except Exception:
                 seg_wav = Path(str(extracted))

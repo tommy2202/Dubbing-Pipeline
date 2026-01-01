@@ -147,7 +147,7 @@ def export_hls(video_in: Path, dub_wav: Path, srt: Path | None, out_dir: Path) -
     seg_pat = out_dir / "seg_%03d.ts"
 
     cmd: list[str] = [
-        "ffmpeg",
+        str(get_settings().ffmpeg_bin),
         "-y",
         "-i",
         str(video_in),

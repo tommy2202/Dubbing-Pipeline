@@ -1,7 +1,7 @@
 .PHONY: fmt lint type test check
 .PHONY: check-all
 
-PYTHON ?= python
+PYTHON ?= python3
 PATHS ?= src tests tools main.py
 
 fmt:

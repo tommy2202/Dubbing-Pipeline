@@ -15,12 +15,27 @@ def ensure_dir(path: Path) -> Path:
 
 def atomic_copy(src: Path, dst: Path) -> None:
     """
-    Simple helper for copying files into place.
-    (Placeholder: upgrade to atomic rename with temp files if needed.)
+    Copy into place via temp file + atomic replace.
     """
     ensure_dir(dst.parent)
-    logger.debug("Copying %s -> %s", src, dst)
-    shutil.copy2(src, dst)
+    tmp = dst.with_suffix(dst.suffix + f".tmp.{os.getpid()}")
+    logger.debug("Copying %s -> %s (tmp=%s)", src, dst, tmp)
+    shutil.copy2(src, tmp)
+    tmp.replace(dst)
+
+
+def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    ensure_dir(path.parent)
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    tmp.write_text(text, encoding=encoding)
+    tmp.replace(path)
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    ensure_dir(path.parent)
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    tmp.write_bytes(data)
+    tmp.replace(path)
 
 
 def read_json(path: Path, *, default: object | None = None) -> object:
@@ -37,8 +52,5 @@ def write_json(path: Path, data: object, *, indent: int = 2) -> None:
     """
     Write JSON safely via atomic replace.
     """
-    ensure_dir(path.parent)
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(data, indent=indent, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_text(path, json.dumps(data, indent=indent, sort_keys=True), encoding="utf-8")
     logger.debug("Wrote JSON → %s", path)

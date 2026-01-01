@@ -556,11 +556,11 @@ class JobQueue:
                 job_errors.labels(stage="whisper").inc()
                 raise
             try:
-                srt_public.write_bytes(srt_out.read_bytes())
+                from anime_v2.utils.io import atomic_copy
+
+                atomic_copy(srt_out, srt_public)
                 if srt_out.with_suffix(".json").exists():
-                    srt_public.with_suffix(".json").write_bytes(
-                        srt_out.with_suffix(".json").read_bytes()
-                    )
+                    atomic_copy(srt_out.with_suffix(".json"), srt_public.with_suffix(".json"))
             except Exception:
                 pass
             # Prefer rich segment metadata (avg_logprob) when available.

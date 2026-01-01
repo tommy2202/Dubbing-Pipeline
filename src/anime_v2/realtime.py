@@ -12,7 +12,7 @@ from anime_v2.stages import audio_extractor, tts
 from anime_v2.stages.transcription import transcribe
 from anime_v2.stages.translation import TranslationConfig, translate_segments
 from anime_v2.utils.ffmpeg_safe import FFmpegError, extract_audio_mono_16k, ffprobe_duration_seconds
-from anime_v2.utils.io import write_json
+from anime_v2.utils.io import atomic_write_text, write_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.subtitles import write_srt, write_vtt
 
@@ -32,8 +32,17 @@ def _concat_wavs_ffmpeg(wavs: list[Path], out_wav: Path) -> Path:
     """
     s = get_settings()
     out_wav.parent.mkdir(parents=True, exist_ok=True)
+
+    def esc(p: Path) -> str:
+        # ffmpeg concat demuxer uses: file '<path>'; escape single quotes.
+        return p.as_posix().replace("'", r"'\''")
+
     lst = out_wav.with_suffix(".concat.txt")
-    lst.write_text("".join([f"file '{w.as_posix()}'\n" for w in wavs]), encoding="utf-8")
+    atomic_write_text(
+        lst,
+        "".join([f"file '{esc(w)}'\n" for w in wavs]),
+        encoding="utf-8",
+    )
     subprocess.run(
         [
             str(s.ffmpeg_bin),
@@ -324,7 +333,11 @@ def realtime_dub(
         "stitched_segments": len(stitched_segments),
         "wall_time_s": time.perf_counter() - t0,
     }
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    atomic_write_text(
+        manifest_path,
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
     stitched_wav = None
     stitched_srt = None

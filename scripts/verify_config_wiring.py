@@ -29,6 +29,7 @@ def _assert_no_env_reads_outside_config_and_tests() -> None:
         # Verification / smoke scripts may set process-level env defaults.
         REPO_ROOT / "scripts" / "smoke_run.py",
         REPO_ROOT / "scripts" / "verify_features.py",
+        REPO_ROOT / "scripts" / "verify_runtime.py",
     }
 
     offenders: list[Path] = []

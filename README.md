@@ -90,6 +90,7 @@ python3 scripts/verify_config_wiring.py
 python3 scripts/verify_features.py
 python3 scripts/smoke_import_all.py
 python3 scripts/smoke_run.py
+python3 scripts/verify_runtime.py
 ```
 
 ### Run a single dub job (CLI)
@@ -154,6 +155,19 @@ anime-v2 Input/Test.mp4 --emotion-mode tags
 
 ```bash
 anime-v2 Input/Test.mp4 --realtime --chunk-seconds 20 --chunk-overlap 2 --stitch
+```
+
+### Preflight / dry-run
+
+```bash
+anime-v2 Input/Test.mp4 --dry-run
+```
+
+### Logging verbosity
+
+```bash
+anime-v2 Input/Test.mp4 --verbose
+anime-v2 Input/Test.mp4 --debug
 ```
 
 Artifacts land in:
@@ -288,10 +302,19 @@ The Docker constraints pin `numpy==1.22.0` to satisfy **wheel compatibility for 
 ## Contribution / dev
 
 ```bash
+make check
 python3 -m ruff check --fix
 python3 -m black .
 python3 -m pytest -q
 ```
+
+## CHANGELOG (hardening pass)
+
+- **Config/tooling consistency**: removed remaining hardcoded `ffmpeg/ffprobe` literals; everything flows through settings + shared helpers.
+- **FFmpeg robustness**: improved `anime_v2.utils.ffmpeg_safe` with retries/timeout support and better error messages.
+- **File I/O safety**: added atomic write/copy helpers and used them for critical artifacts (e.g., realtime manifests, job SRT propagation).
+- **CLI operability**: added `--dry-run`, `--verbose`, `--debug` for safer preflight and better diagnostics without changing defaults.
+- **Runtime verification**: added `scripts/verify_runtime.py` for config + tool + filesystem checks (safe config report only).
 
 
 - **Retention**: `RETENTION_DAYS_INPUT` (default `7`) best-effort purges old raw uploads from `Input/uploads/`. `RETENTION_DAYS_LOGS` (default `14`) purges old files from `logs/` and old per-job `Output/**/job.log`.

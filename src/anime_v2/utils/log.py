@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import sys
+from contextlib import suppress
 from contextvars import ContextVar
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -154,3 +155,20 @@ info = logger.info
 warning = logger.warning
 error = logger.error
 exception = logger.exception
+
+
+def set_log_level(level: str) -> None:
+    """
+    Best-effort runtime log level override (CLI convenience).
+    Does not change handlers/formatters; only raises/lowers filtering level.
+    """
+    try:
+        lvl = getattr(logging, str(level).upper(), logging.INFO)
+        root = logging.getLogger()
+        root.setLevel(lvl)
+        for h in root.handlers:
+            with suppress(Exception):
+                h.setLevel(lvl)
+    except Exception:
+        # keep existing configuration
+        return

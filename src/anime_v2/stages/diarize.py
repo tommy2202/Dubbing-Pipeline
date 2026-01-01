@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import subprocess
 import wave
 from contextlib import suppress
 from pathlib import Path
@@ -103,26 +102,14 @@ def _merge_segments(segments: list[dict], *, tol_s: float = 0.4, min_s: float = 
 
 
 def _ffmpeg_extract_wav(src_wav: Path, dst_wav: Path, start: float, end: float) -> None:
-    dst_wav.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            f"{start:.3f}",
-            "-to",
-            f"{end:.3f}",
-            "-i",
-            str(src_wav),
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            str(dst_wav),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    from anime_v2.utils.ffmpeg_safe import extract_audio_mono_16k
+
+    extract_audio_mono_16k(
+        src=src_wav,
+        dst=dst_wav,
+        start_s=float(start),
+        end_s=float(end),
+        timeout_s=180,
     )
 
 

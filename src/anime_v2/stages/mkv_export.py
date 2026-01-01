@@ -1,34 +1,19 @@
 from __future__ import annotations
 
-import json
 import subprocess
 from contextlib import suppress
 from pathlib import Path
 
+from anime_v2.config import get_settings
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from anime_v2.utils.ffmpeg_safe import ffprobe_duration_seconds
 from anime_v2.utils.log import logger
 
 
 def _ffprobe_duration_s(path: Path) -> float | None:
     try:
-        p = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-print_format",
-                "json",
-                "-show_entries",
-                "format=duration",
-                str(path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        data = json.loads(p.stdout)
-        dur = float(data["format"]["duration"])
-        return dur if dur > 0 else None
+        d = float(ffprobe_duration_seconds(path, timeout_s=20))
+        return d if d > 0 else None
     except Exception:
         return None
 
@@ -76,7 +61,7 @@ def mux(
     # fails (filter missing), retry with volume only.
     def _run(filter_a: str) -> None:
         cmd: list[str] = [
-            "ffmpeg",
+            str(get_settings().ffmpeg_bin),
             "-y",
             "-i",
             str(src_video),

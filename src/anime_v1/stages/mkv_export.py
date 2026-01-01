@@ -2,6 +2,8 @@ import json
 import pathlib
 import subprocess
 
+from config.settings import get_settings
+
 from anime_v1.utils import logger
 
 
@@ -51,7 +53,7 @@ def run(
             logger.info("Using separated background for mixing → %s", bg)
             # Mix separated background with dubbed voice (no original voice bleed)
             cmd = [
-                "ffmpeg",
+                str(get_settings().public.ffmpeg_bin),
                 "-y",
                 "-i",
                 str(video),
@@ -76,7 +78,7 @@ def run(
         else:
             # Mix original audio at low volume under dubbed voice
             cmd = [
-                "ffmpeg",
+                str(get_settings().public.ffmpeg_bin),
                 "-y",
                 "-i",
                 str(video),
@@ -99,7 +101,7 @@ def run(
     else:
         # Replace audio with dubbed track only
         cmd = [
-            "ffmpeg",
+            str(get_settings().public.ffmpeg_bin),
             "-y",
             "-i",
             str(video),

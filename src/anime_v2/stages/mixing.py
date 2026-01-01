@@ -222,7 +222,7 @@ def mix(
             demucs_wav = out_dir / "orig_audio_44k.wav"
             subprocess.run(
                 [
-                    "ffmpeg",
+                    str(get_settings().ffmpeg_bin),
                     "-y",
                     "-i",
                     str(video_in),
