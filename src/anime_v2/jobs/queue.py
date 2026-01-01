@@ -1019,11 +1019,13 @@ class JobQueue:
                                     tts_speaker_wav = Path(wp)
                         except Exception:
                             pass
+                        review_state = base_dir / "review" / "state.json"
                         return tts.run(
                             out_dir=work_dir,
                             translated_json=translated_json if translated_json.exists() else None,
                             diarization_json=diar_json_work if diar_json_work.exists() else None,
                             wav_out=tts_wav,
+                            review_state_path=review_state if review_state.exists() else None,
                             voice_map_json_path=voice_map_json,
                             tts_lang=tts_lang,
                             tts_speaker=tts_speaker,

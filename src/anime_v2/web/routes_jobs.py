@@ -18,7 +18,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from sse_starlette.sse import EventSourceResponse  # type: ignore
 
 from anime_v2.api.deps import Identity, require_role, require_scope
@@ -191,6 +191,51 @@ def _parse_srt(path: Path) -> list[dict[str, Any]]:
         except Exception:
             continue
     return out
+
+
+def _review_state_path(base_dir: Path) -> Path:
+    return (base_dir / "review" / "state.json").resolve()
+
+
+def _review_audio_path(base_dir: Path, segment_id: int) -> Path | None:
+    try:
+        from anime_v2.review.state import load_state
+
+        st = load_state(base_dir)
+        segs = st.get("segments", [])
+        if not isinstance(segs, list):
+            return None
+        for s in segs:
+            if isinstance(s, dict) and int(s.get("segment_id") or 0) == int(segment_id):
+                p = Path(str(s.get("audio_path_current") or ""))
+                return p if p.exists() else None
+    except Exception:
+        return None
+    return None
+
+
+def _file_range_response(request: Request, path: Path, *, media_type: str) -> Response:
+    """
+    Minimal HTTP Range support for audio preview.
+    """
+    data = path.read_bytes()
+    size = len(data)
+    rng = request.headers.get("range")
+    if not rng:
+        return Response(content=data, media_type=media_type)
+    m = re.match(r"bytes=(\d+)-(\d+)?", rng)
+    if not m:
+        return Response(content=data, media_type=media_type)
+    start = int(m.group(1))
+    end = int(m.group(2)) if m.group(2) else size - 1
+    start = max(0, min(start, size))
+    end = max(start, min(end, size - 1))
+    chunk = data[start : end + 1]
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{size}",
+        "Accept-Ranges": "bytes",
+    }
+    return Response(content=chunk, status_code=206, headers=headers, media_type=media_type)
 
 
 def _fmt_ts_srt(seconds: float) -> str:
@@ -1290,6 +1335,133 @@ async def synthesize_from_approved(
             )
         )
     return {"ok": True}
+
+
+@router.get("/api/jobs/{id}/review/segments")
+async def get_job_review_segments(
+    request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    rsp = _review_state_path(base_dir)
+    if not rsp.exists():
+        try:
+            from anime_v2.review.ops import init_review
+
+            init_review(base_dir, video_path=Path(job.video_path) if job.video_path else None)
+        except Exception as ex:
+            raise HTTPException(status_code=400, detail=f"review init failed: {ex}") from ex
+
+    from anime_v2.review.state import load_state
+
+    return load_state(base_dir)
+
+
+@router.post("/api/jobs/{id}/review/segments/{segment_id}/edit")
+async def post_job_review_edit(
+    request: Request,
+    id: str,
+    segment_id: int,
+    _: Identity = Depends(require_scope("submit:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    body = await request.json()
+    text = str(body.get("text") or "")
+    from anime_v2.review.ops import edit_segment
+
+    try:
+        edit_segment(base_dir, int(segment_id), text=text)
+        return {"ok": True}
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+
+
+@router.post("/api/jobs/{id}/review/segments/{segment_id}/regen")
+async def post_job_review_regen(
+    request: Request,
+    id: str,
+    segment_id: int,
+    _: Identity = Depends(require_scope("submit:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    from anime_v2.review.ops import regen_segment
+
+    try:
+        p = regen_segment(base_dir, int(segment_id))
+        return {"ok": True, "audio_path": str(p)}
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+
+
+@router.post("/api/jobs/{id}/review/segments/{segment_id}/lock")
+async def post_job_review_lock(
+    request: Request,
+    id: str,
+    segment_id: int,
+    _: Identity = Depends(require_scope("submit:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    from anime_v2.review.ops import lock_segment
+
+    try:
+        lock_segment(base_dir, int(segment_id))
+        return {"ok": True}
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+
+
+@router.post("/api/jobs/{id}/review/segments/{segment_id}/unlock")
+async def post_job_review_unlock(
+    request: Request,
+    id: str,
+    segment_id: int,
+    _: Identity = Depends(require_scope("submit:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    from anime_v2.review.ops import unlock_segment
+
+    try:
+        unlock_segment(base_dir, int(segment_id))
+        return {"ok": True}
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+
+
+@router.get("/api/jobs/{id}/review/segments/{segment_id}/audio")
+async def get_job_review_audio(
+    request: Request,
+    id: str,
+    segment_id: int,
+    _: Identity = Depends(require_scope("read:job")),
+) -> Response:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    p = _review_audio_path(base_dir, int(segment_id))
+    if p is None:
+        raise HTTPException(status_code=404, detail="audio not found")
+    return _file_range_response(request, p, media_type="audio/wav")
 
 
 @router.get("/api/jobs/{id}/files")

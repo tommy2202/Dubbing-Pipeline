@@ -14,7 +14,7 @@ from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
 from anime_v2.timing.pacing import atempo_chain
 from anime_v2.utils.circuit import Circuit
 from anime_v2.utils.ffmpeg_safe import run_ffmpeg
-from anime_v2.utils.io import read_json, write_json
+from anime_v2.utils.io import atomic_copy, read_json, write_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.retry import retry_call
 
@@ -252,6 +252,7 @@ def run(
     voice_match_threshold: float | None = None,
     voice_auto_enroll: bool | None = None,
     voice_character_map: Path | None = None,
+    review_state_path: Path | None = None,
     tts_provider: str | None = None,
     emotion_mode: str | None = None,
     speech_rate: float | None = None,
@@ -410,6 +411,31 @@ def run(
     else:
         lines = []
 
+    # Tier-2B: review loop integration (locked segments).
+    locked: dict[int, dict[str, str]] = {}
+    try:
+        rsp = (
+            Path(review_state_path).resolve()
+            if review_state_path is not None
+            else (out_dir / "review" / "state.json")
+        )
+        if rsp.exists():
+            st = read_json(rsp, default={})
+            segs = st.get("segments", []) if isinstance(st, dict) else []
+            if isinstance(segs, list):
+                for s in segs:
+                    if not isinstance(s, dict):
+                        continue
+                    if str(s.get("status") or "") != "locked":
+                        continue
+                    sid = int(s.get("segment_id") or 0)
+                    ap = str(s.get("audio_path_current") or "")
+                    ct = str(s.get("chosen_text") or "")
+                    if sid > 0 and ap:
+                        locked[sid] = {"audio_path": ap, "chosen_text": ct}
+    except Exception:
+        locked = {}
+
     # Speaker -> representative wav from diarization segments (longest segment)
     speaker_rep_wav: dict[str, Path] = {}
     speaker_embeddings: dict[str, Path] = {}
@@ -509,6 +535,27 @@ def run(
 
         raw_clip = clips_dir / f"{i:04d}_{speaker_id}.raw.wav"
         clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
+
+        # If locked, reuse locked audio and skip synthesis.
+        lock_rec = locked.get(i + 1)
+        if lock_rec:
+            p0 = Path(str(lock_rec.get("audio_path") or ""))
+            if p0.exists():
+                try:
+                    chosen = str(lock_rec.get("chosen_text") or "").strip()
+                    if chosen:
+                        line["text"] = chosen
+                    tmp_locked = clips_dir / f"{i:04d}_{speaker_id}.locked.wav"
+                    atomic_copy(p0, tmp_locked)
+                    _ffmpeg_to_pcm16k(tmp_locked, clip)
+                    clip_paths.append(clip)
+                    if progress_cb is not None:
+                        with suppress(Exception):
+                            progress_cb(i + 1, total)
+                    continue
+                except Exception:
+                    # fall through to normal synthesis
+                    pass
 
         # Choose clone speaker wav:
         speaker_wav = (
@@ -883,7 +930,7 @@ def run(
                     logger.info("[v2] tts cache hit", key=key)
                     return wav_out
             except Exception:
-                ...
+                pass
 
     if job_id:
         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path)

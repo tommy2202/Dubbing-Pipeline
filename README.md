@@ -218,6 +218,43 @@ anime-v2 --set-character-preset SPEAKER_01 alice
 Reset:
 - Delete `data/voice_memory/` to rebuild from scratch.
 
+### Review Loop (Tier‑2 B)
+
+Edit per-segment text, regenerate audio for a single segment, preview, and lock it so future full-job re-runs reuse the locked audio/text.
+
+Initialize state (after running the pipeline at least once):
+
+```bash
+anime-v2 review init Input/Test.mp4
+```
+
+Inspect and edit:
+
+```bash
+anime-v2 review list <job>
+anime-v2 review show <job> 12
+anime-v2 review edit <job> 12 --text "Edited line…"
+```
+
+Regenerate + preview + lock:
+
+```bash
+anime-v2 review regen <job> 12
+anime-v2 review play <job> 12
+anime-v2 review lock <job> 12
+```
+
+Render final review output (rebuild episode audio from current per-segment WAVs and best-effort remux):
+
+```bash
+anime-v2 review render <job>
+```
+
+Artifacts:
+- `Output/<job>/review/state.json`
+- `Output/<job>/review/audio/<segment_id>_vN.wav`
+- `Output/<job>/review/review_render.wav` (+ `dub.review.mkv` when mux succeeds)
+
 ### Pseudo-streaming (chunk mode)
 
 ```bash

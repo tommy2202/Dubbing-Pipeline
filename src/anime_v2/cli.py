@@ -31,6 +31,28 @@ MODE_TO_MODEL: dict[str, str] = {
 }
 
 
+class DefaultGroup(click.Group):
+    """
+    Click group that supports a default command.
+
+    This preserves backwards-compatible usage:
+      anime-v2 Input/Test.mp4 ...
+    while enabling subcommands:
+      anime-v2 review ...
+    """
+
+    def __init__(self, *args, default_cmd: str = "run", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.default_cmd = str(default_cmd)
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        if args:
+            first = args[0]
+            if first not in self.commands:
+                args.insert(0, self.default_cmd)
+        return super().parse_args(ctx, args)
+
+
 def _select_device(device: str) -> str:
     device = device.lower()
     if device in {"cpu", "cuda"}:
@@ -124,7 +146,7 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     )
 
 
-@click.command()
+@click.command(name="run")
 @click.argument("video", required=False, type=click.Path(dir_okay=False, path_type=Path))
 @click.option(
     "--batch",
@@ -407,7 +429,7 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 @click.option("--dry-run", is_flag=True, default=False, help="Validate inputs/tools and exit")
 @click.option("--verbose", is_flag=True, default=False, help="Verbose logging (INFO)")
 @click.option("--debug", is_flag=True, default=False, help="Debug logging (DEBUG)")
-def cli(
+def run(
     video: Path | None,
     batch_spec: str | None,
     jobs: int,
@@ -645,7 +667,7 @@ def cli(
                 logger.info("[batch %s/%s] start: %s", idx, len(paths), vp)
                 ctx = click.get_current_context()
                 ctx.invoke(
-                    cli,
+                    run,
                     video=vp,
                     batch_spec=None,
                     jobs=1,
@@ -1520,6 +1542,13 @@ def cli(
 
     logger.info("[v2] Done in %.2fs", time.perf_counter() - t0)
     logger.info("[v2] Done. Output: %s", dub_mkv)
+
+# Public entrypoint (project.scripts -> anime_v2.cli:cli)
+from anime_v2.review.cli import review as review  # noqa: E402
+
+cli = DefaultGroup(name="anime-v2", help="anime-v2 CLI (run + review)")  # type: ignore[assignment]
+cli.add_command(run)
+cli.add_command(review)
 
 
 if __name__ == "__main__":  # pragma: no cover
