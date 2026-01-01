@@ -39,7 +39,10 @@ from anime_v2.web.routes_jobs import router as jobs_router
 from anime_v2.web.routes_webrtc import router as webrtc_router
 from anime_v2.web.routes_ui import router as ui_router
 
-OUTPUT_ROOT = Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
+def _output_root() -> Path:
+    return Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
+
+
 TEMPLATES_DIR = (Path(__file__).parent / "web" / "templates").resolve()
 STATIC_DIR = (Path(__file__).parent / "web" / "static").resolve()
 TEMPLATES = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -48,10 +51,12 @@ TEMPLATES = Jinja2Templates(directory=str(TEMPLATES_DIR))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # core pipeline stores
-    store = JobStore(OUTPUT_ROOT / "jobs.db")
+    out_root = _output_root()
+    store = JobStore(out_root / "jobs.db")
     q = JobQueue(store, concurrency=int(os.environ.get("JOBS_CONCURRENCY", "1")))
     app.state.job_store = store
     app.state.job_queue = q
+    app.state.output_root = out_root
     # runtime scheduler (in-proc)
     import asyncio as _asyncio
 
@@ -76,7 +81,7 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = sched
 
     # auth store
-    auth_store = AuthStore(OUTPUT_ROOT / "auth.db")
+    auth_store = AuthStore(out_root / "auth.db")
     app.state.auth_store = auth_store
     app.state.rate_limiter = RateLimiter()
 
@@ -232,6 +237,7 @@ app.middleware("http")(request_context_middleware)
 
 
 def _iter_videos() -> list[dict]:
+    OUTPUT_ROOT = _output_root()
     out = []
     patterns = [
         OUTPUT_ROOT.glob("*/*.dub.mkv"),
@@ -295,6 +301,22 @@ def _range_stream(path: Path, range_header: str | None):
     return gen(), start, end, size
 
 
+def _safe_output_path(rel: str) -> Path:
+    # only serve from OUTPUT_ROOT
+    OUTPUT_ROOT = _output_root()
+    if not rel:
+        raise HTTPException(status_code=404, detail="Not found")
+    rel = rel.lstrip("/").replace("\\", "/")
+    p = (OUTPUT_ROOT / rel).resolve()
+    try:
+        p.relative_to(OUTPUT_ROOT)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return p
+
+
 @app.get("/health")
 async def health():
     return {"ok": True}
@@ -327,11 +349,12 @@ async def readyz(request: Request):
         if store is None or queue is None or auth_store is None:
             raise RuntimeError("missing app state")
         # Output root should exist and be writable (read-only rootfs requires a mount here).
-        if not OUTPUT_ROOT.exists():
+        out_root = getattr(request.app.state, "output_root", None) or _output_root()
+        if not Path(out_root).exists():
             raise RuntimeError("Output dir missing")
-        if not OUTPUT_ROOT.is_dir():
+        if not Path(out_root).is_dir():
             raise RuntimeError("Output is not a directory")
-        if not os.access(str(OUTPUT_ROOT), os.W_OK):
+        if not os.access(str(out_root), os.W_OK):
             raise RuntimeError("Output not writable")
     except Exception as ex:
         raise HTTPException(status_code=503, detail=f"not ready: {ex}")
@@ -349,6 +372,28 @@ async def video(request: Request, job: str, _: object = Depends(require_scope("r
     p = _resolve_job(job)
     ctype, _ = mimetypes.guess_type(str(p))
     ctype = ctype or ("video/mp4" if p.suffix.lower() == ".mp4" else "video/x-matroska")
+
+    gen, start, end, size = _range_stream(p, request.headers.get("range"))
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Range": f"bytes {start}-{end}/{size}",
+        "Content-Length": str(end - start + 1),
+    }
+    return StreamingResponse(gen, status_code=206, media_type=ctype, headers=headers)
+
+
+@app.get("/files/{path:path}")
+async def files(request: Request, path: str, _: object = Depends(require_scope("read:job"))):
+    p = _safe_output_path(path)
+    ctype, _ = mimetypes.guess_type(str(p))
+    if not ctype:
+        # HLS / TS
+        if p.suffix.lower() == ".m3u8":
+            ctype = "application/vnd.apple.mpegurl"
+        elif p.suffix.lower() == ".ts":
+            ctype = "video/mp2t"
+        else:
+            ctype = "application/octet-stream"
 
     gen, start, end, size = _range_stream(p, request.headers.get("range"))
     headers = {

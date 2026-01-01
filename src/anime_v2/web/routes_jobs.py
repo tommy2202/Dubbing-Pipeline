@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import os
 import re
 import time
@@ -830,6 +831,94 @@ async def synthesize_from_approved(request: Request, id: str, _: Identity = Depe
     except Exception:
         pass
     return {"ok": True}
+
+
+@router.get("/api/jobs/{id}/files")
+async def job_files(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    stem = Path(job.video_path).stem if job.video_path else base_dir.name
+
+    # candidates
+    mp4 = None
+    mkv = None
+    hls = None
+
+    for cand in [base_dir / f"{stem}.dub.mp4", base_dir / "dub.mp4", *list(base_dir.glob("*.dub.mp4"))]:
+        if cand.exists():
+            mp4 = cand
+            break
+    for cand in [base_dir / f"{stem}.dub.mkv", base_dir / "dub.mkv", *list(base_dir.glob("*.dub.mkv"))]:
+        if cand.exists():
+            mkv = cand
+            break
+
+    # HLS: look for master.m3u8 under base_dir (small tree)
+    try:
+        for cand in base_dir.rglob("master.m3u8"):
+            if cand.is_file():
+                hls = cand
+                break
+    except Exception:
+        hls = None
+
+    out_root = _output_root()
+
+    def rel_url(p: Path) -> str:
+        rel = str(p.resolve().relative_to(out_root)).replace("\\", "/")
+        return f"/files/{rel}"
+
+    files: list[dict[str, Any]] = []
+    for kind, p in [("hls_manifest", hls), ("mp4", mp4), ("mkv", mkv)]:
+        if p is None:
+            continue
+        try:
+            st = p.stat()
+            files.append(
+                {
+                    "kind": kind,
+                    "name": p.name,
+                    "path": str(p),
+                    "url": rel_url(p),
+                    "size_bytes": int(st.st_size),
+                    "mtime": float(st.st_mtime),
+                }
+            )
+        except Exception:
+            continue
+
+    data: dict[str, Any] = {"files": files, "hls_manifest": None, "mp4": None, "mkv": None}
+    if hls is not None:
+        data["hls_manifest"] = {"url": rel_url(hls), "path": str(hls)}
+    if mp4 is not None:
+        data["mp4"] = {"url": rel_url(mp4), "path": str(mp4)}
+    if mkv is not None:
+        data["mkv"] = {"url": rel_url(mkv), "path": str(mkv)}
+    return data
+
+
+@router.get("/api/jobs/{id}/qrcode")
+async def job_qrcode(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    # Absolute URL to the UI job page.
+    base = str(request.base_url).rstrip("/")
+    url = f"{base}/ui/jobs/{id}"
+    try:
+        import qrcode  # type: ignore
+    except Exception as ex:  # pragma: no cover
+        raise HTTPException(status_code=500, detail=f"qrcode unavailable: {ex}")
+    img = qrcode.make(url)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    from fastapi.responses import Response as _Resp
+
+    return _Resp(content=buf.getvalue(), media_type="image/png")
 
 
 @router.websocket("/ws/jobs/{id}")
