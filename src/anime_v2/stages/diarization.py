@@ -1,21 +1,32 @@
 from __future__ import annotations
 
 import math
-import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from anime_v2.config import get_settings
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import egress_guard
 from anime_v2.utils.vad import VADConfig, detect_speech_segments
 
 
+def _hf_token_value() -> str | None:
+    s = get_settings()
+    tok = s.huggingface_token or s.hf_token
+    if tok is None:
+        return None
+    # tokens are SecretStr in settings; avoid leaking by returning the raw value only to callers that need it.
+    return tok.get_secret_value() if hasattr(tok, "get_secret_value") else str(tok)
+
+
 @dataclass(frozen=True, slots=True)
 class DiarizeConfig:
-    diarizer: str = "auto"  # auto|pyannote|speechbrain|heuristic
-    enable_pyannote: bool = bool(int(os.environ.get("ENABLE_PYANNOTE", "0") or "0"))
-    hf_token: str | None = os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
+    diarizer: str = field(
+        default_factory=lambda: str(get_settings().diarizer)
+    )  # auto|pyannote|speechbrain|heuristic
+    enable_pyannote: bool = field(default_factory=lambda: bool(get_settings().enable_pyannote))
+    hf_token: str | None = field(default_factory=_hf_token_value)
     pyannote_model: str = "pyannote/speaker-diarization-3.1"
     vad: VADConfig = VADConfig()
     max_speakers: int = 4

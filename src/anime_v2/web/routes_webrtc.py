@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 import uuid
 from contextlib import suppress
@@ -13,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from anime_v2.api.deps import require_scope
+from anime_v2.config import get_settings
 from anime_v2.jobs.models import JobState
 from anime_v2.utils.log import logger
 
@@ -27,13 +27,14 @@ def _get_store(request: Request):
 
 
 def _ice_servers() -> list[dict]:
-    stun = os.environ.get("WEBRTC_STUN", "stun:stun.l.google.com:19302").strip()
+    s = get_settings()
+    stun = str(s.webrtc_stun).strip()
     servers: list[dict] = []
     if stun:
         servers.append({"urls": [u.strip() for u in stun.split(",") if u.strip()]})
-    turn_url = os.environ.get("TURN_URL")
-    turn_user = os.environ.get("TURN_USERNAME")
-    turn_pass = os.environ.get("TURN_PASSWORD")
+    turn_url = s.turn_url
+    turn_user = s.turn_username
+    turn_pass = s.turn_password
     if turn_url and turn_user and turn_pass:
         servers.append({"urls": [turn_url], "username": turn_user, "credential": turn_pass})
     return servers
@@ -70,8 +71,14 @@ class _Peer:
 
 _peers: dict[str, _Peer] = {}
 _peers_lock = asyncio.Lock()
-_IDLE_TIMEOUT_S = int(os.environ.get("WEBRTC_IDLE_TIMEOUT_S", "300"))
-_MAX_PCS_PER_IP = int(os.environ.get("WEBRTC_MAX_PCS_PER_IP", "2"))
+
+
+def _idle_timeout_s() -> int:
+    return int(get_settings().webrtc_idle_timeout_s)
+
+
+def _max_pcs_per_ip() -> int:
+    return int(get_settings().webrtc_max_pcs_per_ip)
 
 
 async def _close_peer(token: str, reason: str) -> None:
@@ -100,7 +107,7 @@ async def _idle_watch(token: str) -> None:
             if peer is None:
                 return
             idle = time.monotonic() - peer.last_activity
-        if idle > _IDLE_TIMEOUT_S:
+        if idle > _idle_timeout_s():
             await _close_peer(token, "idle_timeout")
             return
 
@@ -136,7 +143,7 @@ async def webrtc_offer(request: Request) -> dict:
 
     async with _peers_lock:
         active_for_ip = sum(1 for p in _peers.values() if p.ip == ip)
-        if active_for_ip >= _MAX_PCS_PER_IP:
+        if active_for_ip >= _max_pcs_per_ip():
             raise HTTPException(status_code=429, detail="Too many peer connections for this IP")
 
     cfg = {"iceServers": _ice_servers()}

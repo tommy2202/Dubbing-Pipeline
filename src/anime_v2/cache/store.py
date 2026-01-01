@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
+from anime_v2.config import get_settings
 from anime_v2.utils.log import logger
 
 _lock = threading.Lock()
@@ -15,10 +15,8 @@ _lock = threading.Lock()
 
 def _cache_root() -> Path:
     # Must be writable (container rootfs is read-only); default under Output/
-    base = Path(
-        os.environ.get("ANIME_V2_CACHE_DIR")
-        or (Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output")) / "cache")
-    )
+    s = get_settings()
+    base = Path(s.cache_dir or (Path(s.output_dir) / "cache"))
     base.mkdir(parents=True, exist_ok=True)
     return base.resolve()
 

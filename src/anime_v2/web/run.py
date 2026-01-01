@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import os
-
 import uvicorn
+
+from anime_v2.config import get_settings
 
 
 def main() -> None:
+    s = get_settings()
     uvicorn.run(
         "anime_v2.server:app",
-        host=os.environ.get("HOST", "0.0.0.0"),
-        port=int(os.environ.get("PORT", "8000")),
+        host=str(s.host),
+        port=int(s.port),
         reload=False,
     )

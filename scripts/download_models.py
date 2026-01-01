@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-import os
-import sys
 import subprocess
+import sys
 from pathlib import Path
+
+from anime_v2.config import get_settings
 
 MODELS = {
     # Whisper variants
@@ -12,12 +13,20 @@ MODELS = {
     # Optional Marian (generic multi->en as placeholder)
     "marian-mul-en": ("hf", "Helsinki-NLP/opus-mt-mul-en"),
     # Wav2Lip checkpoints
-    "wav2lip-main": ("wget", "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0/wav2lip.pth"),
-    "wav2lip-gan": ("wget", "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0/wav2lip_gan.pth"),
+    "wav2lip-main": (
+        "wget",
+        "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0/wav2lip.pth",
+    ),
+    "wav2lip-gan": (
+        "wget",
+        "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0/wav2lip_gan.pth",
+    ),
     # Demucs models are fetched via demucs on first run; allow cache warm-up
 }
 
-CACHE = Path(os.environ.get("TRANSFORMERS_CACHE", "/models/hf-cache"))
+s = get_settings()
+_cache = s.transformers_cache or (Path(s.models_dir) / "hf-cache")
+CACHE = Path(_cache)
 CACHE.mkdir(parents=True, exist_ok=True)
 
 
@@ -28,7 +37,19 @@ def run(cmd):
 
 def download_hf(model_id: str):
     # Use huggingface-cli to prefetch snapshots
-    run([sys.executable, "-m", "huggingface_hub", "download", model_id, "--repo-type", "model", "--local-dir", str(CACHE / model_id.replace("/", "__"))])
+    run(
+        [
+            sys.executable,
+            "-m",
+            "huggingface_hub",
+            "download",
+            model_id,
+            "--repo-type",
+            "model",
+            "--local-dir",
+            str(CACHE / model_id.replace("/", "__")),
+        ]
+    )
 
 
 def download_whisper(size: str):
@@ -43,7 +64,7 @@ def download_wget(url: str, out_dir: Path):
 
 
 def main():
-    base = Path("/models")
+    base = Path(s.models_dir)
     base.mkdir(parents=True, exist_ok=True)
 
     for name, (kind, ref) in MODELS.items():
@@ -63,12 +84,28 @@ def main():
     try:
         repo_dir = base / "Wav2Lip"
         if not repo_dir.exists():
-            run(["git", "clone", "--depth", "1", "https://github.com/Rudrabha/Wav2Lip", str(repo_dir)])
+            run(
+                [
+                    "git",
+                    "clone",
+                    "--depth",
+                    "1",
+                    "https://github.com/Rudrabha/Wav2Lip",
+                    str(repo_dir),
+                ]
+            )
         sfd_dir = repo_dir / "face_detection" / "detection" / "sfd"
         sfd_dir.mkdir(parents=True, exist_ok=True)
         s3fd = sfd_dir / "s3fd.pth"
         if not s3fd.exists():
-            run(["wget", "-O", str(s3fd), "https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth"])
+            run(
+                [
+                    "wget",
+                    "-O",
+                    str(s3fd),
+                    "https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth",
+                ]
+            )
     except Exception as ex:
         print(f"Skipping Wav2Lip repo clone or s3fd weights: {ex}")
 

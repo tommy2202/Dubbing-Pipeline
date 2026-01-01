@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
-import os
 import re
 import time
 from collections.abc import Iterator
@@ -14,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from starlette.templating import Jinja2Templates
 
+from anime_v2.config import get_settings
 from anime_v2.jobs.queue import JobQueue
 from anime_v2.jobs.store import JobStore
 from anime_v2.utils.log import logger
@@ -21,14 +21,19 @@ from anime_v2.utils.security import verify_api_key
 from anime_v2.web.routes_jobs import router as jobs_router
 from anime_v2.web.routes_webrtc import router as webrtc_router
 
-OUTPUT_ROOT = Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+def _output_root() -> Path:
+    return Path(get_settings().output_dir).resolve()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    store = JobStore(OUTPUT_ROOT / "jobs.db")
-    q = JobQueue(store, concurrency=int(os.environ.get("JOBS_CONCURRENCY", "1")))
+    s = get_settings()
+    out_root = Path(s.output_dir).resolve()
+    store = JobStore(out_root / "jobs.db")
+    q = JobQueue(store, concurrency=int(s.jobs_concurrency))
     app.state.job_store = store
     app.state.job_queue = q
     await q.start()
@@ -74,12 +79,13 @@ def _iter_videos() -> list[dict]:
     List dubbed videos from Output/*/*.mkv (plus a couple pragmatic fallbacks).
     """
     out = []
+    out_root = _output_root()
     patterns = [
-        OUTPUT_ROOT.glob("*/*.mkv"),
-        OUTPUT_ROOT.glob("*/*.mp4"),
-        OUTPUT_ROOT.glob("*.dub.mkv"),
-        OUTPUT_ROOT.glob("*.mkv"),
-        OUTPUT_ROOT.glob("*.mp4"),
+        out_root.glob("*/*.mkv"),
+        out_root.glob("*/*.mp4"),
+        out_root.glob("*.dub.mkv"),
+        out_root.glob("*.mkv"),
+        out_root.glob("*.mp4"),
     ]
     seen = set()
     for it in patterns:
@@ -87,7 +93,7 @@ def _iter_videos() -> list[dict]:
             try:
                 if not p.is_file():
                     continue
-                rel = p.resolve().relative_to(OUTPUT_ROOT)
+                rel = p.resolve().relative_to(out_root)
                 key = str(rel)
                 if key in seen:
                     continue
@@ -118,11 +124,12 @@ def _resolve_job(job: str) -> Path:
 
     if not JOB_RE.match(job):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    out_root = _output_root()
     for v in _iter_videos():
         if v["job"] == job:
             try:
-                target = (OUTPUT_ROOT / v["rel"]).resolve()
-                target.relative_to(OUTPUT_ROOT)
+                target = (out_root / v["rel"]).resolve()
+                target.relative_to(out_root)
                 return target
             except Exception:
                 break

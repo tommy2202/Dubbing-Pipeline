@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 import sys
 from contextvars import ContextVar
@@ -10,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+
+from anime_v2.config import get_settings
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 user_id_var: ContextVar[str | None] = ContextVar("user_id", default=None)
@@ -24,7 +25,8 @@ def set_user_id(uid: str | None) -> None:
 
 
 def _log_path() -> Path:
-    return Path(os.environ.get("ANIME_V2_LOG_DIR", "logs")) / "app.log"
+    s = get_settings()
+    return Path(s.log_dir) / "app.log"
 
 
 _JWT_RE = re.compile(r"\beyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\b")
@@ -67,7 +69,8 @@ def rename_event_to_msg(_, __, event_dict: dict[str, Any]) -> dict[str, Any]:
 
 
 def _configure_structlog() -> structlog.stdlib.BoundLogger:
-    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    s = get_settings()
+    level = str(s.log_level).upper()
     log_path = _log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -107,8 +110,8 @@ def _configure_structlog() -> structlog.stdlib.BoundLogger:
 
     file_handler = RotatingFileHandler(
         filename=str(log_path),
-        maxBytes=int(os.environ.get("LOG_MAX_BYTES", str(5 * 1024 * 1024))),
-        backupCount=int(os.environ.get("LOG_BACKUP_COUNT", "3")),
+        maxBytes=int(s.log_max_bytes),
+        backupCount=int(s.log_backup_count),
         encoding="utf-8",
     )
     file_handler.setFormatter(formatter)

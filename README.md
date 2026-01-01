@@ -131,15 +131,16 @@ Device selection:
 
 ---
 
-## `.env` setup + API token (web UI)
+## `.env` + `.env.secrets` setup (web UI)
 
 Copy and edit:
 
 ```bash
 cp .env.example .env
+cp .env.secrets.example .env.secrets
 ```
 
-Set at least:
+Set at least (in `.env.secrets` or environment):
 
 - `API_TOKEN` (use a long random value)
 

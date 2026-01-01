@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -8,6 +7,7 @@ import uuid
 from contextlib import suppress
 from pathlib import Path
 
+from config.settings import get_settings
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse
 
@@ -17,9 +17,9 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-
-UPLOADS_DIR = REPO_ROOT / "uploads"
-OUTPUTS_DIR = REPO_ROOT / "outputs"
+_s = get_settings()
+UPLOADS_DIR = Path(_s.uploads_dir)
+OUTPUTS_DIR = Path(_s.outputs_dir)
 
 
 app = FastAPI(title="Anime Dubbing Server")
@@ -174,9 +174,12 @@ async def dub_endpoint(file: UploadFile | None = File(default=None)) -> FileResp
 if __name__ == "__main__":
     import uvicorn
 
+    from anime_v2.config import get_settings
+
+    s = get_settings()
     uvicorn.run(
         "main:app",
-        host=os.environ.get("HOST", "0.0.0.0"),
-        port=int(os.environ.get("PORT", "8000")),
+        host=str(s.host),
+        port=int(s.port),
         reload=False,
     )

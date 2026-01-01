@@ -89,8 +89,9 @@ def purge_old_logs(*, app_root: Path, days: int) -> int:
     cutoff = _cutoff_days(days)
     removed = 0
 
+    s = get_settings()
     # global logs/
-    logs_dir = (app_root / "logs").resolve()
+    logs_dir = Path(s.log_dir).resolve()
     for p in _iter_files(logs_dir):
         try:
             if not p.is_file():
@@ -104,7 +105,7 @@ def purge_old_logs(*, app_root: Path, days: int) -> int:
             continue
 
     # per-job logs: Output/**/job.log
-    out_dir = (app_root / "Output").resolve()
+    out_dir = Path(s.output_dir).resolve()
     for p in out_dir.glob("**/job.log"):
         try:
             if p.is_file() and p.stat().st_mtime < cutoff:
@@ -123,11 +124,7 @@ class RetentionResult:
 
 def run_once(*, app_root: Path | None = None) -> RetentionResult:
     s = get_settings()
-    root = (
-        Path(app_root)
-        if app_root
-        else Path(os.environ.get("APP_ROOT") or ("/app" if Path("/app").exists() else Path.cwd()))
-    ).resolve()
+    root = (Path(app_root) if app_root else Path(s.app_root)).resolve()
     inputs_removed = purge_old_inputs(app_root=root, days=s.retention_days_input)
     logs_removed = purge_old_logs(app_root=root, days=s.retention_days_logs)
     logger.info("retention_done", inputs_removed=inputs_removed, logs_removed=logs_removed)

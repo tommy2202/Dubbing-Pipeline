@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
-import os
 import re
 import time
 from contextlib import suppress
@@ -60,12 +59,7 @@ def _new_short_id(prefix: str = "p_") -> str:
 
 
 def _app_root() -> Path:
-    env = os.environ.get("APP_ROOT")
-    if env:
-        return Path(env).resolve()
-    if Path("/app").exists():
-        return Path("/app").resolve()
-    return Path.cwd().resolve()
+    return Path(get_settings().app_root).resolve()
 
 
 def _sanitize_video_path(p: str) -> Path:
@@ -132,7 +126,7 @@ def _get_scheduler(request: Request):
 
 
 def _output_root() -> Path:
-    return Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
+    return Path(get_settings().output_dir).resolve()
 
 
 def _player_job_for_path(p: Path) -> str | None:
@@ -268,7 +262,7 @@ async def create_job(
         # basic bounds to avoid abuse
         if len(idem_key) > 200:
             raise HTTPException(status_code=400, detail="Idempotency-Key too long")
-        ttl = int(os.environ.get("IDEMPOTENCY_TTL_SEC", "86400"))
+        ttl = int(get_settings().idempotency_ttl_sec)
         hit = store.get_idempotency(idem_key)
         if hit:
             jid, ts = hit
@@ -295,11 +289,7 @@ async def create_job(
 
     # Disk guard: refuse new jobs when storage is low.
     s = get_settings()
-    out_root = (
-        Path(str(getattr(store, "db_path", Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output")))))
-        .resolve()
-        .parent
-    )
+    out_root = Path(str(getattr(store, "db_path", Path(s.output_dir)))).resolve().parent
     out_root.mkdir(parents=True, exist_ok=True)
     ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
 
@@ -489,11 +479,7 @@ async def create_jobs_batch(
 
     # Disk guard once per batch
     s = get_settings()
-    out_root = (
-        Path(str(getattr(store, "db_path", Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output")))))
-        .resolve()
-        .parent
-    )
+    out_root = Path(str(getattr(store, "db_path", Path(s.output_dir)))).resolve().parent
     out_root.mkdir(parents=True, exist_ok=True)
     ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
 

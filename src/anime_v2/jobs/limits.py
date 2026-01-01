@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from anime_v2.config import get_settings
 from anime_v2.jobs.models import Job, JobState
 
 
@@ -24,24 +24,18 @@ class Limits:
 
 
 def get_limits() -> Limits:
-    def _i(name: str, default: int) -> int:
-        try:
-            v = int(os.environ.get(name, str(default)))
-            return max(0, v)
-        except Exception:
-            return default
-
+    s = get_settings()
     return Limits(
-        max_video_min=_i("MAX_VIDEO_MIN", 120),
-        max_upload_mb=_i("MAX_UPLOAD_MB", 2048),
-        max_concurrent_per_user=_i("MAX_CONCURRENT", 2),
-        daily_processing_minutes=_i("DAILY_PROCESSING_MINUTES", 240),
-        timeout_audio_s=_i("WATCHDOG_AUDIO_S", 10 * 60),
-        timeout_diarize_s=_i("WATCHDOG_DIARIZE_S", 20 * 60),
-        timeout_whisper_s=_i("WATCHDOG_WHISPER_S", 45 * 60),
-        timeout_translate_s=_i("WATCHDOG_TRANSLATE_S", 10 * 60),
-        timeout_tts_s=_i("WATCHDOG_TTS_S", 30 * 60),
-        timeout_mix_s=_i("WATCHDOG_MIX_S", 20 * 60),
+        max_video_min=max(0, int(s.max_video_min)),
+        max_upload_mb=max(0, int(s.max_upload_mb)),
+        max_concurrent_per_user=max(0, int(s.max_concurrent_per_user)),
+        daily_processing_minutes=max(0, int(s.daily_processing_minutes)),
+        timeout_audio_s=max(0, int(s.watchdog_audio_s)),
+        timeout_diarize_s=max(0, int(s.watchdog_diarize_s)),
+        timeout_whisper_s=max(0, int(s.watchdog_whisper_s)),
+        timeout_translate_s=max(0, int(s.watchdog_translate_s)),
+        timeout_tts_s=max(0, int(s.watchdog_tts_s)),
+        timeout_mix_s=max(0, int(s.watchdog_mix_s)),
     )
 
 

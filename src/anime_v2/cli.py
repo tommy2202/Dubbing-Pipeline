@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 from pathlib import Path
 
 import click
 
+from anime_v2.config import get_settings
 from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.align import AlignConfig, realign_srt
 from anime_v2.stages.character_store import CharacterStore
@@ -150,7 +150,7 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
 @click.option(
     "--char-sim-thresh",
     type=float,
-    default=float(os.environ.get("CHAR_SIM_THRESH", "0.72")),
+    default=float(get_settings().char_sim_thresh),
     show_default=True,
 )
 @click.option(
@@ -162,7 +162,7 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
 @click.option(
     "--mt-lowconf-thresh",
     type=float,
-    default=float(os.environ.get("MT_LOWCONF_THRESH", "-0.45")),
+    default=float(get_settings().mt_lowconf_thresh),
     show_default=True,
     help="Avg logprob threshold for Whisper translate fallback",
 )
@@ -177,20 +177,24 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
 @click.option(
     "--max-stretch",
     type=float,
-    default=0.15,
+    default=float(get_settings().max_stretch),
     show_default=True,
     help="Max +/- time-stretch applied to TTS clips",
 )
 @click.option(
     "--mix-profile",
     type=click.Choice(["streaming", "broadcast", "simple"], case_sensitive=False),
-    default=os.environ.get("MIX_PROFILE", "streaming"),
+    default=str(get_settings().mix_profile),
     show_default=True,
 )
-@click.option("--separate-vocals/--no-separate-vocals", default=False, show_default=True)
+@click.option(
+    "--separate-vocals/--no-separate-vocals",
+    default=bool(get_settings().separate_vocals),
+    show_default=True,
+)
 @click.option(
     "--emit",
-    default=os.environ.get("EMIT_FORMATS", "mkv,mp4"),
+    default=str(get_settings().emit_formats),
     show_default=True,
     help="Comma list (always includes mkv,mp4): mkv,mp4,fmp4,hls",
 )

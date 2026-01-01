@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import threading
 import time
 from dataclasses import dataclass
@@ -47,17 +46,11 @@ class Circuit:
 
     def _threshold(self) -> int:
         s = get_settings()
-        try:
-            return int(s.cb_fail_threshold)
-        except Exception:
-            return int(os.environ.get("CB_FAIL_THRESHOLD", "5"))
+        return int(s.cb_fail_threshold)
 
     def _cooldown(self) -> float:
         s = get_settings()
-        try:
-            return float(s.cb_cooldown_sec)
-        except Exception:
-            return float(os.environ.get("CB_COOLDOWN_SEC", "60"))
+        return float(s.cb_cooldown_sec)
 
     def snapshot(self) -> CircuitState:
         with self._lock:

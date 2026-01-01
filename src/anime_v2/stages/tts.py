@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 import wave
@@ -157,7 +156,7 @@ def run(
     #   {"SPEAKER_01": "alice", "SPEAKER_02": "bob"}
     voice_map: dict[str, str] = {}
     try:
-        voice_map_path = os.environ.get("VOICE_BANK_MAP") or os.environ.get("VOICE_MAP")
+        voice_map_path = settings.voice_bank_map_path or settings.voice_map_path
         if voice_map_path:
             vm = read_json(Path(voice_map_path), default={})
             if isinstance(vm, dict):
@@ -172,7 +171,7 @@ def run(
     per_speaker_wav_override: dict[str, Path] = {}
     per_speaker_preset_override: dict[str, str] = {}
     try:
-        vmj = os.environ.get("VOICE_MAP_JSON") or ""
+        vmj = settings.voice_map_json or ""
         if vmj:
             data = read_json(Path(vmj), default={})
             if isinstance(data, dict) and isinstance(data.get("items"), list):
@@ -331,9 +330,9 @@ def run(
 
             return retry_call(
                 fn,
-                retries=int(os.environ.get("RETRY_MAX", "3")),
-                base=float(os.environ.get("RETRY_BASE_SEC", "0.5")),
-                cap=float(os.environ.get("RETRY_CAP_SEC", "8.0")),
+                retries=int(settings.retry_max),
+                base=float(settings.retry_base_sec),
+                cap=float(settings.retry_cap_sec),
                 jitter=True,
                 on_retry=_on_retry,
             )
@@ -413,9 +412,7 @@ def run(
                 from anime_v2.runtime.model_manager import ModelManager
 
                 require_coqui_tos()
-                basic_model = (
-                    os.environ.get("TTS_BASIC_MODEL") or "tts_models/en/ljspeech/tacotron2-DDC"
-                )
+                basic_model = str(settings.tts_basic_model)
                 dev = pick_device("auto")
                 tts_basic = ModelManager.instance().get_tts(basic_model, dev)
 
@@ -470,7 +467,7 @@ def run(
 
     # Cross-job cache (coarse): if audio_hash provided and tts config stable, reuse tts wav + manifest.
     if audio_hash:
-        sig = os.environ.get("SPEAKER_SIGNATURE")  # optional precomputed override
+        sig = settings.speaker_signature  # optional precomputed override
         if not sig:
             from anime_v2.utils.hashio import speaker_signature
 
@@ -529,7 +526,7 @@ def run(
 
     if audio_hash:
         with suppress(Exception):
-            sig = os.environ.get("SPEAKER_SIGNATURE") or ""
+            sig = settings.speaker_signature or ""
             if not sig:
                 from anime_v2.utils.hashio import speaker_signature
 

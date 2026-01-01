@@ -141,13 +141,7 @@ class JobQueue:
         if app_root is not None:
             self.app_root = app_root.resolve()
         else:
-            env = os.environ.get("APP_ROOT")
-            if env:
-                self.app_root = Path(env).resolve()
-            elif Path("/app").exists():
-                self.app_root = Path("/app").resolve()
-            else:
-                self.app_root = Path.cwd().resolve()
+            self.app_root = Path(get_settings().app_root).resolve()
 
     async def start(self) -> None:
         if self._tasks:
@@ -266,10 +260,7 @@ class JobQueue:
 
         # Establish work/log paths before writing logs.
         video_path = Path(job.video_path)
-        # Prefer ANIME_V2_OUTPUT_DIR (server-configured) over APP_ROOT/Output.
-        out_root = Path(
-            os.environ.get("ANIME_V2_OUTPUT_DIR", str(self.app_root / "Output"))
-        ).resolve()
+        out_root = Path(get_settings().output_dir).resolve()
         # Optional project output subdir (stored on job.runtime by batch/project submission).
         runtime = dict(job.runtime or {})
         proj_sub = ""
@@ -406,7 +397,7 @@ class JobQueue:
             try:
                 self.store.update(job_id, progress=0.12, message="Diarizing speakers")
                 self.store.append_log(job_id, f"[{now_utc()}] diarize")
-                cfg = DiarizeConfig(diarizer=os.environ.get("DIARIZER", "auto"))
+                cfg = DiarizeConfig(diarizer=str(settings.diarizer))
                 utts = diarize_v2(str(wav), device=_select_device(job.device), cfg=cfg)
 
                 seg_dir = work_dir / "segments"
@@ -425,8 +416,8 @@ class JobQueue:
                         seg_wav = Path(str(wav))
                     by_label.setdefault(lab, []).append((s, e, seg_wav))
 
-                show = os.environ.get("SHOW_ID") or video_path.stem
-                sim = float(os.environ.get("CHAR_SIM_THRESH", "0.72"))
+                show = str(settings.show_id) if settings.show_id else video_path.stem
+                sim = float(settings.char_sim_thresh)
                 store_chars = CharacterStore.default()
                 store_chars.load()
                 thresholds = {"sim": sim}
@@ -775,11 +766,11 @@ class JobQueue:
                     from anime_v2.utils.io import write_json
 
                     cfg = TranslationConfig(
-                        mt_engine=(os.environ.get("MT_ENGINE") or "auto"),
-                        mt_lowconf_thresh=float(os.environ.get("MT_LOWCONF_THRESH", "-0.45")),
-                        glossary_path=os.environ.get("GLOSSARY"),
-                        style_path=os.environ.get("STYLE"),
-                        show_id=os.environ.get("SHOW_ID") or video_path.stem,
+                        mt_engine=str(settings.mt_engine),
+                        mt_lowconf_thresh=float(settings.mt_lowconf_thresh),
+                        glossary_path=settings.glossary_path,
+                        style_path=settings.style_path,
+                        show_id=(str(settings.show_id) if settings.show_id else video_path.stem),
                         whisper_model=model_name,
                         audio_path=str(wav),
                         device=device,
@@ -885,7 +876,7 @@ class JobQueue:
                             # callbacks omitted (not picklable); progress updates remain coarse for this phase
                             progress_cb=None,
                             cancel_cb=None,
-                            max_stretch=float(os.environ.get("MAX_STRETCH", "0.15")),
+                            max_stretch=float(settings.max_stretch),
                             job_id=job_id,
                             audio_hash=audio_hash,
                         )
@@ -988,11 +979,10 @@ class JobQueue:
                         if existing and existing.output_srt and Path(existing.output_srt).exists():
                             subs_srt_path = Path(existing.output_srt)
                     else:
+                        emit_env = str(settings.emit_formats or "mkv,mp4")
                         cfg_mix = MixConfig(
-                            profile=os.environ.get("MIX_PROFILE", "streaming"),
-                            separate_vocals=bool(
-                                int(os.environ.get("SEPARATE_VOCALS", "0") or "0")
-                            ),
+                            profile=str(settings.mix_profile),
+                            separate_vocals=bool(settings.separate_vocals),
                             emit=tuple(
                                 sorted(
                                     {
@@ -1000,11 +990,7 @@ class JobQueue:
                                         "mp4",
                                         *[
                                             p.strip().lower()
-                                            for p in (
-                                                os.environ.get("EMIT_FORMATS")
-                                                or os.environ.get("EMIT")
-                                                or "mkv,mp4"
-                                            ).split(",")
+                                            for p in emit_env.split(",")
                                             if p.strip()
                                         ],
                                     }

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import os
 import re
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from anime_v2.config import get_settings
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import egress_guard
 
@@ -18,7 +18,7 @@ class TranslationConfig:
     glossary_path: str | None = None
     style_path: str | None = None
     show_id: str | None = None
-    whisper_model: str = os.environ.get("WHISPER_MODEL", "medium")
+    whisper_model: str = field(default_factory=lambda: str(get_settings().whisper_model))
     audio_path: str | None = None
     device: str = "cpu"
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -9,10 +8,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 
 from anime_v2.api.deps import Identity, current_identity
+from anime_v2.config import get_settings
 
 
 def _audit_dir() -> Path:
-    return Path(os.environ.get("ANIME_V2_LOG_DIR", "logs")).resolve()
+    return Path(get_settings().log_dir).resolve()
 
 
 def _audit_path_today() -> Path:

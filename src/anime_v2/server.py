@@ -44,7 +44,7 @@ from anime_v2.web.routes_webrtc import router as webrtc_router
 
 
 def _output_root() -> Path:
-    return Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
+    return Path(get_settings().output_dir).resolve()
 
 
 TEMPLATES_DIR = (Path(__file__).parent / "web" / "templates").resolve()
@@ -58,9 +58,10 @@ async def lifespan(app: FastAPI):
     with suppress(Exception):
         lifecycle.end_draining()
     # core pipeline stores
-    out_root = _output_root()
+    s = get_settings()
+    out_root = Path(s.output_dir).resolve()
     store = JobStore(out_root / "jobs.db")
-    q = JobQueue(store, concurrency=int(os.environ.get("JOBS_CONCURRENCY", "1")))
+    q = JobQueue(store, concurrency=int(s.jobs_concurrency))
     app.state.job_store = store
     app.state.job_queue = q
     app.state.output_root = out_root
@@ -96,7 +97,6 @@ async def lifespan(app: FastAPI):
         app.state.user_settings_store = None
 
     # bootstrap admin user
-    s = get_settings()
     install_egress_policy()
     audit.emit(
         "policy.egress",
@@ -136,7 +136,7 @@ async def lifespan(app: FastAPI):
                 periodic_prune_tick(output_root=out_root)
             except Exception as ex:
                 logger.warning("workdir_prune_failed", error=str(ex))
-            await _asyncio2.sleep(float(os.environ.get("WORK_PRUNE_INTERVAL_SEC", "3600")))
+            await _asyncio2.sleep(float(s.work_prune_interval_sec))
 
     try:
         # run one tick at boot, then start loop
@@ -152,11 +152,11 @@ async def lifespan(app: FastAPI):
         logger.warning("model_prewarm_exception", error=str(ex))
     yield
     # Graceful drain on shutdown (or if signals have already initiated drain).
-    lifecycle.begin_draining(timeout_sec=int(os.environ.get("DRAIN_TIMEOUT_SEC", "120")))
+    lifecycle.begin_draining(timeout_sec=int(s.drain_timeout_sec))
     with suppress(Exception):
         sched.stop()
     try:
-        await q.graceful_shutdown(timeout_s=int(os.environ.get("DRAIN_TIMEOUT_SEC", "120")))
+        await q.graceful_shutdown(timeout_s=int(s.drain_timeout_sec))
     finally:
         if _prune_task is not None:
             _prune_task.cancel()
@@ -175,7 +175,7 @@ try:
 
     def _handle_term(signum, _frame=None):
         if not lifecycle.is_draining():
-            lifecycle.begin_draining(timeout_sec=int(os.environ.get("DRAIN_TIMEOUT_SEC", "120")))
+            lifecycle.begin_draining(timeout_sec=int(get_settings().drain_timeout_sec))
 
     for _sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(_sig, _handle_term)
@@ -184,7 +184,7 @@ except Exception:
     _sig_registered = False
 
 # OpenTelemetry (opt-in via OTEL_EXPORTER_OTLP_ENDPOINT)
-_otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+_otel_endpoint = get_settings().otel_exporter_otlp_endpoint
 if _otel_endpoint:
     try:
         from opentelemetry import trace  # type: ignore
@@ -196,9 +196,7 @@ if _otel_endpoint:
         from opentelemetry.sdk.trace import TracerProvider  # type: ignore
         from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore
 
-        resource = Resource.create(
-            {"service.name": os.environ.get("OTEL_SERVICE_NAME", "anime_v2")}
-        )
+        resource = Resource.create({"service.name": str(get_settings().otel_service_name)})
         provider = TracerProvider(resource=resource)
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=_otel_endpoint)))
         trace.set_tracer_provider(provider)

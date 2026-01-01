@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from anime_v2.config import get_settings
 from anime_v2.stages.export import export_hls, export_mkv, export_mp4
 from anime_v2.utils.log import logger
 
@@ -20,7 +20,7 @@ class MixConfig:
     separate_vocals: bool = False
     emit: tuple[str, ...] = ("mkv", "mp4")  # mkv,mp4
     demucs_timeout_s: int = 600
-    enable_demucs_env: bool = bool(int(os.environ.get("ENABLE_DEMUCS", "0") or "0"))
+    enable_demucs_env: bool = field(default_factory=lambda: bool(get_settings().enable_demucs))
 
 
 def _ffprobe_duration_s(path: Path) -> float | None:
