@@ -1,0 +1,61 @@
+services:
+  api:
+    # Prefer a published GHCR image:
+    #   GHCR_IMAGE=ghcr.io/<owner>/anime-v2:<tag>
+    # Or build locally by uncommenting build: below.
+    image: ${GHCR_IMAGE:-ghcr.io/REPLACE_ME/anime-v2:latest}
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile
+    environment:
+      - APP_ROOT=/app
+      - ANIME_V2_OUTPUT_DIR=/app/Output
+      - ANIME_V2_LOG_DIR=/app/logs
+      - JOBS_CONCURRENCY=${JOBS_CONCURRENCY:-1}
+      # If you’re serving behind Caddy on the same host, set cookie security:
+      - COOKIE_SECURE=1
+      # Optional: allow Origins for your domain
+      - CORS_ORIGINS=https://${DOMAIN}
+    env_file:
+      - ../.env
+    volumes:
+      - ../Output:/app/Output
+      - ../data:/app/data
+      - ../logs:/app/logs
+      - api_cache:/home/appuser/.cache
+      - api_local:/home/appuser/.local
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+      - CADDY_EMAIL=${CADDY_EMAIL}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
+  api_cache:
+  api_local:
+
