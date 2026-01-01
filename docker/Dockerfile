@@ -9,6 +9,7 @@ ENV COQUI_TOS_AGREED=1
 ENV HF_HOME=/root/.cache/huggingface
 ENV TORCH_HOME=/root/.cache/torch
 ENV TTS_HOME=/root/.local/share/tts
+ENV ENABLE_PYANNOTE=0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \

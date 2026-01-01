@@ -2,14 +2,13 @@
   "audio_path": "/workspace/Output/sample/audio.wav",
   "segments": [
     {
-      "diar_label": "SPEAKER_00",
-      "end": 7.7090625,
-      "speaker_id": "Speaker1",
+      "conf": 0.3,
+      "diar_label": "SPEAKER_01",
+      "end": 7.7100000000000195,
+      "speaker_id": "SPEAKER_01",
       "start": 0.0,
-      "wav_path": "/workspace/Output/sample/segments/0000_SPEAKER_00.wav"
+      "wav_path": "/workspace/Output/sample/segments/0000_SPEAKER_01.wav"
     }
   ],
-  "speaker_embeddings": {
-    "Speaker1": "/workspace/voices/embeddings/Speaker1.npy"
-  }
+  "speaker_embeddings": {}
 }

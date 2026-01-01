@@ -4,13 +4,17 @@ import asyncio
 import os
 import re
 import shutil
+import subprocess
 import time
 from dataclasses import replace
 from pathlib import Path
 
 from anime_v2.jobs.models import Job, JobState, now_utc
 from anime_v2.jobs.store import JobStore
-from anime_v2.stages import audio_extractor, diarize, mkv_export, tts
+from anime_v2.stages import audio_extractor, mkv_export, tts
+from anime_v2.stages.character_store import CharacterStore
+from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
+from anime_v2.utils.embeds import ecapa_embedding
 from anime_v2.stages.transcription import transcribe
 from anime_v2.stages.translate import translate_lines
 from anime_v2.utils.log import logger
@@ -206,7 +210,52 @@ class JobQueue:
             try:
                 self.store.update(job_id, progress=0.12, message="Diarizing speakers")
                 self.store.append_log(job_id, f"[{now_utc()}] diarize")
-                diar_segments, speaker_embeddings = diarize.identify(audio_path=wav, out_dir=out_dir)
+                cfg = DiarizeConfig(diarizer=os.environ.get("DIARIZER", "auto"))
+                utts = diarize_v2(str(wav), device=_select_device(job.device), cfg=cfg)
+
+                seg_dir = out_dir / "segments"
+                seg_dir.mkdir(parents=True, exist_ok=True)
+                by_label: dict[str, list[tuple[float, float, Path]]] = {}
+                for i, u in enumerate(utts):
+                    s = float(u["start"])
+                    e = float(u["end"])
+                    lab = str(u["speaker"])
+                    seg_wav = seg_dir / f"{i:04d}_{lab}.wav"
+                    try:
+                        subprocess.run(
+                            ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-to", f"{e:.3f}", "-i", str(wav), "-ac", "1", "-ar", "16000", str(seg_wav)],
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    except Exception:
+                        seg_wav = Path(str(wav))
+                    by_label.setdefault(lab, []).append((s, e, seg_wav))
+
+                show = os.environ.get("SHOW_ID") or video_path.stem
+                sim = float(os.environ.get("CHAR_SIM_THRESH", "0.72"))
+                store_chars = CharacterStore.default()
+                store_chars.load()
+                thresholds = {"sim": sim}
+                lab_to_char: dict[str, str] = {}
+                for lab, segs in by_label.items():
+                    rep_wav = sorted(segs, key=lambda t: (t[1] - t[0]), reverse=True)[0][2]
+                    emb = ecapa_embedding(rep_wav, device=_select_device(job.device))
+                    if emb is None:
+                        lab_to_char[lab] = lab
+                        continue
+                    cid = store_chars.match_or_create(emb, show_id=show, thresholds=thresholds)
+                    store_chars.link_speaker_wav(cid, str(rep_wav))
+                    lab_to_char[lab] = cid
+                store_chars.save()
+
+                diar_segments = []
+                for lab, segs in by_label.items():
+                    for s, e, wav_p in segs:
+                        diar_segments.append(
+                            {"start": s, "end": e, "diar_label": lab, "speaker_id": lab_to_char.get(lab, lab), "wav_path": str(wav_p)}
+                        )
+
                 from anime_v2.utils.io import write_json
 
                 write_json(diar_json, {"audio_path": str(wav), "segments": diar_segments, "speaker_embeddings": speaker_embeddings})

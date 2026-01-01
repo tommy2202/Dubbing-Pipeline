@@ -6,13 +6,17 @@ from pathlib import Path
 import click
 
 from anime_v2.stages import audio_extractor, mkv_export, tts
-from anime_v2.stages import diarize
+from anime_v2.stages.character_store import CharacterStore
+from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
 from anime_v2.stages.translate import translate_lines
 from anime_v2.stages.transcription import transcribe
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.paths import output_dir_for
 from anime_v2.utils.time import format_srt_timestamp
+import subprocess
+
+from anime_v2.utils.embeds import ecapa_embedding
 
 
 MODE_TO_MODEL: dict[str, str] = {
@@ -111,7 +115,21 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
 @click.option("--tgt-lang", default="en", show_default=True, help="Target language code (translate pathway outputs English)")
 @click.option("--no-translate", is_flag=True, default=False, help="Disable translate; do plain transcription")
 @click.option("--no-subs", is_flag=True, default=False, help="Do not mux subtitles into output container")
-def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_translate: bool, no_subs: bool) -> None:
+@click.option("--diarizer", type=click.Choice(["auto", "pyannote", "speechbrain", "heuristic"], case_sensitive=False), default="auto", show_default=True)
+@click.option("--show-id", default=None, help="Show id used for persistent character IDs (default: input basename)")
+@click.option("--char-sim-thresh", type=float, default=0.72, show_default=True)
+def cli(
+    video: Path,
+    device: str,
+    mode: str,
+    src_lang: str,
+    tgt_lang: str,
+    no_translate: bool,
+    no_subs: bool,
+    diarizer: str,
+    show_id: str | None,
+    char_sim_thresh: float,
+) -> None:
     """
     Run pipeline-v2 on VIDEO.
 
@@ -158,12 +176,80 @@ def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_tr
         logger.error("[v2] Done. Output: (failed early)")
         return
 
-    # 2) diarize.identify
+    # 2) diarization + persistent character IDs
     diar_segments: list[dict] = []
     speaker_embeddings: dict[str, str] = {}
     try:
         t_stage = time.perf_counter()
-        diar_segments, speaker_embeddings = diarize.identify(audio_path=extracted, out_dir=out_dir)
+        show = show_id or video.stem
+        cfg = DiarizeConfig(diarizer=diarizer.lower())
+        utts = diarize_v2(str(extracted), device=chosen_device, cfg=cfg)
+
+        # Extract per-utterance wavs and compute per-speaker embeddings for re-ID
+        seg_dir = out_dir / "segments"
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        by_label: dict[str, list[tuple[float, float, Path]]] = {}
+        for i, u in enumerate(utts):
+            s = float(u["start"])
+            e = float(u["end"])
+            lab = str(u["speaker"])
+            seg_wav = seg_dir / f"{i:04d}_{lab}.wav"
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-to", f"{e:.3f}", "-i", str(extracted), "-ac", "1", "-ar", "16000", str(seg_wav)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                seg_wav = Path(str(extracted))
+            by_label.setdefault(lab, []).append((s, e, seg_wav))
+
+        store = CharacterStore.default()
+        store.load()
+        thresholds = {"sim": float(char_sim_thresh)}
+        # Map diar speaker label -> persistent character id
+        lab_to_char: dict[str, str] = {}
+        for lab, segs in by_label.items():
+            # pick longest seg wav for embedding
+            segs_sorted = sorted(segs, key=lambda t: (t[1] - t[0]), reverse=True)
+            rep_wav = segs_sorted[0][2]
+            emb = ecapa_embedding(rep_wav, device=chosen_device)
+            if emb is None:
+                # no embeddings => stable ID per show label
+                lab_to_char[lab] = lab
+                continue
+            cid = store.match_or_create(emb, show_id=show, thresholds=thresholds)
+            store.link_speaker_wav(cid, str(rep_wav))
+            lab_to_char[lab] = cid
+            # also persist npy for downstream preset matching (optional)
+            try:
+                import numpy as np  # type: ignore
+
+                emb_dir = Path("voices") / "embeddings"
+                emb_dir.mkdir(parents=True, exist_ok=True)
+                emb_path = emb_dir / f"{cid}.npy"
+                np.save(str(emb_path), emb.astype("float32"))
+                speaker_embeddings[cid] = str(emb_path)
+            except Exception:
+                pass
+
+        store.save()
+
+        diar_segments = []
+        for lab, segs in by_label.items():
+            for s, e, wav_p in segs:
+                diar_segments.append(
+                    {
+                        "start": s,
+                        "end": e,
+                        "diar_label": lab,
+                        "speaker_id": lab_to_char.get(lab, lab),
+                        "wav_path": str(wav_p),
+                        "conf": float(next((u["conf"] for u in utts if str(u["speaker"]) == lab), 0.0)),
+                    }
+                )
+
         write_json(
             diar_json,
             {
