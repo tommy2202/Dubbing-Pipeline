@@ -14,6 +14,7 @@ from anime_v2.jobs.store import JobStore
 from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
+from anime_v2.stages.mixing import MixConfig, mix
 from anime_v2.utils.embeds import ecapa_embedding
 from anime_v2.stages.transcription import transcribe
 from anime_v2.stages.translation import TranslationConfig, translate_segments
@@ -421,11 +422,23 @@ class JobQueue:
             self.store.update(job_id, progress=0.95, message="TTS done")
             await self._check_canceled(job_id)
 
-            # f) mkv_export.mux (~1.00)
+            # f) mixing (~1.00)
             out_mkv = out_dir / "dub.mkv"
-            self.store.update(job_id, progress=0.97, message="Muxing MKV")
-            self.store.append_log(job_id, f"[{now_utc()}] mux")
-            mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv)
+            out_mp4 = out_dir / "dub.mp4"
+            self.store.update(job_id, progress=0.97, message="Mixing & muxing")
+            self.store.append_log(job_id, f"[{now_utc()}] mix")
+            try:
+                cfg_mix = MixConfig(
+                    profile=os.environ.get("MIX_PROFILE", "streaming"),
+                    separate_vocals=bool(int(os.environ.get("SEPARATE_VOCALS", "0") or "0")),
+                    emit=tuple([p.strip().lower() for p in (os.environ.get("EMIT", "mkv,mp4")).split(",") if p.strip()]),
+                )
+                outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=out_dir, cfg=cfg_mix)
+                out_mkv = outs.get("mkv", out_mkv)
+                out_mp4 = outs.get("mp4", out_mp4)
+            except Exception as ex:
+                self.store.append_log(job_id, f"[{now_utc()}] mix failed: {ex} (falling back to mux)")
+                mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv)
 
             self.store.update(
                 job_id,

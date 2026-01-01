@@ -21,6 +21,9 @@ pyannote.audio>=3.1.0
 resemblyzer>=0.1.4
 torch>=2.0.0
 
+[mixing]
+demucs>=4.0.1
+
 [translation]
 langdetect>=1.0.9
 transformers>=4.45.0

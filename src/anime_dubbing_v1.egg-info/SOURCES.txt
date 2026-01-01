@@ -34,6 +34,7 @@ src/anime_v2/stages/audio_extractor.py
 src/anime_v2/stages/character_store.py
 src/anime_v2/stages/diarization.py
 src/anime_v2/stages/diarize.py
+src/anime_v2/stages/mixing.py
 src/anime_v2/stages/mkv_export.py
 src/anime_v2/stages/transcription.py
 src/anime_v2/stages/translate.py

@@ -9,6 +9,7 @@ from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.align import AlignConfig, realign_srt
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
+from anime_v2.stages.mixing import MixConfig, mix
 from anime_v2.stages.translation import TranslationConfig, translate_segments
 from anime_v2.stages.transcription import transcribe
 from anime_v2.utils.io import read_json, write_json
@@ -125,6 +126,9 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
 @click.option("--style", default=None, help="Style YAML path or directory")
 @click.option("--aligner", type=click.Choice(["auto", "aeneas", "heuristic"], case_sensitive=False), default="auto", show_default=True)
 @click.option("--max-stretch", type=float, default=0.15, show_default=True, help="Max +/- time-stretch applied to TTS clips")
+@click.option("--mix-profile", type=click.Choice(["streaming", "broadcast", "simple"], case_sensitive=False), default="streaming", show_default=True)
+@click.option("--separate-vocals/--no-separate-vocals", default=False, show_default=True)
+@click.option("--emit", default="mkv,mp4", show_default=True, help="Comma list: mkv,mp4")
 def cli(
     video: Path,
     device: str,
@@ -142,6 +146,9 @@ def cli(
     style: str | None,
     aligner: str,
     max_stretch: float,
+    mix_profile: str,
+    separate_vocals: bool,
+    emit: str,
 ) -> None:
     """
     Run pipeline-v2 on VIDEO.
@@ -172,6 +179,7 @@ def cli(
     translated_json = out_dir / "translated.json"
     tts_wav = out_dir / f"{stem}.tts.wav"
     dub_mkv = out_dir / "dub.mkv"
+    dub_mp4 = out_dir / "dub.mp4"
 
     logger.info("[v2] Starting dub: video=%s mode=%s model=%s device=%s", video, mode, chosen_model, chosen_device)
     logger.info("[v2] Languages: src_lang=%s tgt_lang=%s translate=%s", src_lang, tgt_lang, (not no_translate))
@@ -460,22 +468,39 @@ def cli(
         except Exception:
             pass
 
-    # 6) mkv_export.mux
+    # 6) mix (broadcast-quality) + emit mkv/mp4
     t_stage = time.perf_counter()
     try:
-        mkv_export.run(
-            video=video,
-            dubbed_audio=tts_wav,
-            srt_path=None if no_subs else subs_srt_path,
-            mkv_out=dub_mkv,
-            ckpt_dir=out_dir,
+        emit_set = tuple([p.strip().lower() for p in (emit or "").split(",") if p.strip()])
+        cfg_mix = MixConfig(profile=mix_profile.lower(), separate_vocals=bool(separate_vocals), emit=emit_set)
+        outs = mix(
+            video_in=video,
+            tts_wav=tts_wav,
+            srt=None if no_subs else subs_srt_path,
             out_dir=out_dir,
+            cfg=cfg_mix,
         )
-        logger.info("[v2] mux: ok (%.2fs) → %s", time.perf_counter() - t_stage, dub_mkv)
+        if "mkv" in outs:
+            dub_mkv = outs["mkv"]
+        if "mp4" in outs:
+            dub_mp4 = outs["mp4"]
+        logger.info("[v2] mix: ok (%.2fs) → %s", time.perf_counter() - t_stage, ", ".join(str(p) for p in outs.values()))
     except Exception as ex:
-        logger.exception("[v2] mux failed: %s", ex)
-        logger.error("[v2] Done. Output: (mux failed)")
-        return
+        logger.exception("[v2] mix failed; falling back to simple mux: %s", ex)
+        try:
+            mkv_export.run(
+                video=video,
+                dubbed_audio=tts_wav,
+                srt_path=None if no_subs else subs_srt_path,
+                mkv_out=dub_mkv,
+                ckpt_dir=out_dir,
+                out_dir=out_dir,
+            )
+            logger.info("[v2] mux fallback: ok → %s", dub_mkv)
+        except Exception as ex2:
+            logger.exception("[v2] mux fallback failed: %s", ex2)
+            logger.error("[v2] Done. Output: (mux failed)")
+            return
 
     logger.info("[v2] Done in %.2fs", time.perf_counter() - t0)
     logger.info("[v2] Done. Output: %s", dub_mkv)

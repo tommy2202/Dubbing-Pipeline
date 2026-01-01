@@ -44,6 +44,10 @@ align = [
   "librosa>=0.11.0",
   "pyloudnorm>=0.1.1",
 ]
+
+mixing = [
+  "demucs>=4.0.1",
+]
 dev = [
   "pytest>=8.0.0",
 ]

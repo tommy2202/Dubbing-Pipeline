@@ -318,3 +318,138 @@ subprocess.CalledProcessError: Command '['ffmpeg', '-y', '-i', '/workspace/Outpu
 2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] mux: ok (0.22s) → /workspace/Output/sample/dub.mkv
 2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] Done in 0.50s
 2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] Done. Output: /workspace/Output/sample/dub.mkv
+2026-01-01 01:37:46 INFO anime_v2 [10114] [v2] Starting dub: video=/workspace/samples/sample.mp4 mode=low model=small device=cpu
+2026-01-01 01:37:46 INFO anime_v2 [10114] [v2] Languages: src_lang=auto tgt_lang=en translate=False
+2026-01-01 01:37:46 INFO anime_v2 [10114] [v2] Extracting audio → /workspace/Output/sample/audio.wav
+2026-01-01 01:37:46 INFO anime_v2 [10114] [v2] audio_extractor: ok path=/workspace/Output/sample/audio.wav (0.05s)
+2026-01-01 01:37:47 WARNING anime_v2 [10114] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:37:47 WARNING anime_v2 [10114] diarize engine=speechbrain failed (no segments)
+2026-01-01 01:37:47 INFO anime_v2 [10114] diarize engine=heuristic segments=1
+2026-01-01 01:37:47 WARNING anime_v2 [10114] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] diarize: diar_segments=1 stable_speakers=1 (0.16s)
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en
+2026-01-01 01:37:47 WARNING anime_v2 [10114] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] transcription: segments=0 (0.00s) → /workspace/Output/sample/sample.srt
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] translate: disabled (--no-translate)
+2026-01-01 01:37:47 WARNING anime_v2 [10114] [v2] align: aeneas failed (aeneas not installed: No module named 'aeneas'); falling back to heuristic
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] align: ok (no-translate) segments=1 aligner=auto
+2026-01-01 01:37:47 WARNING anime_v2 [10114] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:37:47 WARNING anime_v2 [10114] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:37:47 WARNING anime_v2 [10114] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] TTS done → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] tts: ok (0.04s) → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:37:47 WARNING anime_v2 [10114] [v2] mixing: loudnorm pass1 failed (Command '['ffmpeg', '-y', '-i', '/workspace/samples/sample.mp4', '-i', '/workspace/Output/sample/sample.tts.wav', '-filter_complex', '[0:a:0]aresample=48000,volume=0.85[bg];[1:a:0]aresample=48000,volume=1.00[tts];[bg][tts]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250:makeup=0:level_in=1:level_sc=1[duck];[duck]volume=1.0[mixbg];[mixbg][tts]amix=inputs=2:normalize=0[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:print_format=json[mix2];[mix2]anull[mixout];', '-map', '[mixout]', '-f', 'null', '-']' returned non-zero exit status 222.); using single-pass
+2026-01-01 01:37:47 ERROR anime_v2 [10114] [v2] mix failed; falling back to simple mux: Command '['ffmpeg', '-y', '-i', '/workspace/samples/sample.mp4', '-i', '/workspace/Output/sample/sample.tts.wav', '-i', '/workspace/Output/sample/sample.aligned.srt', '-filter_complex', '[0:a:0]aresample=48000,volume=0.85[bg];[1:a:0]aresample=48000,volume=1.00[tts];[bg][tts]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250:makeup=0:level_in=1:level_sc=1[duck];[duck]volume=1.0[mixbg];[mixbg][tts]amix=inputs=2:normalize=0[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:linear=true:print_format=summary[mix2];[mix2]alimiter=limit=0.891[mixout];', '-map', '0:v:0', '-map', '[mixout]', '-map', '2:s:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-metadata:s:a:0', 'language=eng', '-c:s', 'srt', '-disposition:s:0', 'default', '-metadata:s:s:0', 'language=eng', '-t', '7.709', '/workspace/Output/sample/dub.mkv']' returned non-zero exit status 222.
+Traceback (most recent call last):
+  File "/workspace/src/anime_v2/cli.py", line 476, in cli
+    outs = mix(
+           ^^^^
+  File "/workspace/src/anime_v2/stages/mixing.py", line 338, in mix
+    _run_once(out_mkv, container="mkv", vcodec="copy", acodec="aac", scodec="srt", loudnorm_filter=loudnorm_pass2)
+  File "/workspace/src/anime_v2/stages/mixing.py", line 301, in _run_once
+    subprocess.run(cmd, check=True)
+  File "/usr/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['ffmpeg', '-y', '-i', '/workspace/samples/sample.mp4', '-i', '/workspace/Output/sample/sample.tts.wav', '-i', '/workspace/Output/sample/sample.aligned.srt', '-filter_complex', '[0:a:0]aresample=48000,volume=0.85[bg];[1:a:0]aresample=48000,volume=1.00[tts];[bg][tts]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250:makeup=0:level_in=1:level_sc=1[duck];[duck]volume=1.0[mixbg];[mixbg][tts]amix=inputs=2:normalize=0[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:linear=true:print_format=summary[mix2];[mix2]alimiter=limit=0.891[mixout];', '-map', '0:v:0', '-map', '[mixout]', '-map', '2:s:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-metadata:s:a:0', 'language=eng', '-c:s', 'srt', '-disposition:s:0', 'default', '-metadata:s:s:0', 'language=eng', '-t', '7.709', '/workspace/Output/sample/dub.mkv']' returned non-zero exit status 222.
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] mux complete → /workspace/Output/sample/dub.mkv
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] mux fallback: ok → /workspace/Output/sample/dub.mkv
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] Done in 0.59s
+2026-01-01 01:37:47 INFO anime_v2 [10114] [v2] Done. Output: /workspace/Output/sample/dub.mkv
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] Starting dub: video=/workspace/samples/sample.mp4 mode=low model=small device=cpu
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] Languages: src_lang=auto tgt_lang=en translate=False
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] Extracting audio → /workspace/Output/sample/audio.wav
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] audio_extractor: ok path=/workspace/Output/sample/audio.wav (0.05s)
+2026-01-01 01:38:07 WARNING anime_v2 [10301] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:38:07 WARNING anime_v2 [10301] diarize engine=speechbrain failed (no segments)
+2026-01-01 01:38:07 INFO anime_v2 [10301] diarize engine=heuristic segments=1
+2026-01-01 01:38:07 WARNING anime_v2 [10301] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] diarize: diar_segments=1 stable_speakers=1 (0.17s)
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en
+2026-01-01 01:38:07 WARNING anime_v2 [10301] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] transcription: segments=0 (0.00s) → /workspace/Output/sample/sample.srt
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] translate: disabled (--no-translate)
+2026-01-01 01:38:07 WARNING anime_v2 [10301] [v2] align: aeneas failed (aeneas not installed: No module named 'aeneas'); falling back to heuristic
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] align: ok (no-translate) segments=1 aligner=auto
+2026-01-01 01:38:07 WARNING anime_v2 [10301] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:38:07 WARNING anime_v2 [10301] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:38:07 WARNING anime_v2 [10301] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] TTS done → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] tts: ok (0.04s) → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:38:07 WARNING anime_v2 [10301] [v2] mixing: loudnorm pass1 failed (Command '['ffmpeg', '-y', '-i', '/workspace/samples/sample.mp4', '-i', '/workspace/Output/sample/sample.tts.wav', '-filter_complex', '[0:a:0]aresample=48000,volume=0.85[bg];[1:a:0]aresample=48000,volume=1.00[tts];[bg][tts]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250:level_in=1:level_sc=1[duck];[duck]volume=1.0[mixbg];[mixbg][tts]amix=inputs=2:normalize=0[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:print_format=json[mix2];[mix2]anull[mixout];', '-map', '[mixout]', '-f', 'null', '-']' returned non-zero exit status 234.); using single-pass
+2026-01-01 01:38:07 ERROR anime_v2 [10301] [v2] mix failed; falling back to simple mux: Command '['ffmpeg', '-y', '-i', '/workspace/samples/sample.mp4', '-i', '/workspace/Output/sample/sample.tts.wav', '-i', '/workspace/Output/sample/sample.aligned.srt', '-filter_complex', '[0:a:0]aresample=48000,volume=0.85[bg];[1:a:0]aresample=48000,volume=1.00[tts];[bg][tts]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250:level_in=1:level_sc=1[duck];[duck]volume=1.0[mixbg];[mixbg][tts]amix=inputs=2:normalize=0[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:linear=true:print_format=summary[mix2];[mix2]alimiter=limit=0.891[mixout];', '-map', '0:v:0', '-map', '[mixout]', '-map', '2:s:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-metadata:s:a:0', 'language=eng', '-c:s', 'srt', '-disposition:s:0', 'default', '-metadata:s:s:0', 'language=eng', '-t', '7.709', '/workspace/Output/sample/dub.mkv']' returned non-zero exit status 234.
+Traceback (most recent call last):
+  File "/workspace/src/anime_v2/cli.py", line 476, in cli
+    outs = mix(
+           ^^^^
+  File "/workspace/src/anime_v2/stages/mixing.py", line 337, in mix
+    _run_once(out_mkv, container="mkv", vcodec="copy", acodec="aac", scodec="srt", loudnorm_filter=loudnorm_pass2)
+  File "/workspace/src/anime_v2/stages/mixing.py", line 300, in _run_once
+    subprocess.run(cmd, check=True)
+  File "/usr/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['ffmpeg', '-y', '-i', '/workspace/samples/sample.mp4', '-i', '/workspace/Output/sample/sample.tts.wav', '-i', '/workspace/Output/sample/sample.aligned.srt', '-filter_complex', '[0:a:0]aresample=48000,volume=0.85[bg];[1:a:0]aresample=48000,volume=1.00[tts];[bg][tts]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250:level_in=1:level_sc=1[duck];[duck]volume=1.0[mixbg];[mixbg][tts]amix=inputs=2:normalize=0[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:linear=true:print_format=summary[mix2];[mix2]alimiter=limit=0.891[mixout];', '-map', '0:v:0', '-map', '[mixout]', '-map', '2:s:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-metadata:s:a:0', 'language=eng', '-c:s', 'srt', '-disposition:s:0', 'default', '-metadata:s:s:0', 'language=eng', '-t', '7.709', '/workspace/Output/sample/dub.mkv']' returned non-zero exit status 234.
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] mux complete → /workspace/Output/sample/dub.mkv
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] mux fallback: ok → /workspace/Output/sample/dub.mkv
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] Done in 0.60s
+2026-01-01 01:38:07 INFO anime_v2 [10301] [v2] Done. Output: /workspace/Output/sample/dub.mkv
+2026-01-01 01:39:28 INFO anime_v2 [10610] [v2] Starting dub: video=/workspace/samples/sample.mp4 mode=low model=small device=cpu
+2026-01-01 01:39:28 INFO anime_v2 [10610] [v2] Languages: src_lang=auto tgt_lang=en translate=False
+2026-01-01 01:39:28 INFO anime_v2 [10610] [v2] Extracting audio → /workspace/Output/sample/audio.wav
+2026-01-01 01:39:28 INFO anime_v2 [10610] [v2] audio_extractor: ok path=/workspace/Output/sample/audio.wav (0.06s)
+2026-01-01 01:39:29 WARNING anime_v2 [10610] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:39:29 WARNING anime_v2 [10610] diarize engine=speechbrain failed (no segments)
+2026-01-01 01:39:29 INFO anime_v2 [10610] diarize engine=heuristic segments=1
+2026-01-01 01:39:29 WARNING anime_v2 [10610] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] diarize: diar_segments=1 stable_speakers=1 (0.18s)
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en
+2026-01-01 01:39:29 WARNING anime_v2 [10610] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] transcription: segments=0 (0.00s) → /workspace/Output/sample/sample.srt
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] translate: disabled (--no-translate)
+2026-01-01 01:39:29 WARNING anime_v2 [10610] [v2] align: aeneas failed (aeneas not installed: No module named 'aeneas'); falling back to heuristic
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] align: ok (no-translate) segments=1 aligner=auto
+2026-01-01 01:39:29 WARNING anime_v2 [10610] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:39:29 WARNING anime_v2 [10610] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:39:29 WARNING anime_v2 [10610] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] TTS done → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] tts: ok (0.05s) → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:39:29 WARNING anime_v2 [10610] [v2] mixing: loudnorm pass1 failed (Command '['ffmpeg', '-y', '-i', '/workspace/samples/sample.mp4', '-i', '/workspace/Output/sample/sample.tts.wav', '-filter_complex', '[0:a:0]aresample=48000,volume=0.85[bg];[1:a:0]aresample=48000,volume=1.00[key];[bg][key]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250:level_in=1:level_sc=1[duck];[duck]volume=1.0[mixbg];[mixbg][key]amix=inputs=2:normalize=0[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:print_format=json[mix2];[mix2]anull[mixout];', '-map', '[mixout]', '-f', 'null', '-']' returned non-zero exit status 234.); using single-pass
+2026-01-01 01:39:29 ERROR anime_v2 [10610] [v2] mix failed; falling back to simple mux: Command '['ffmpeg', '-y', '-i', '/workspace/samples/sample.mp4', '-i', '/workspace/Output/sample/sample.tts.wav', '-i', '/workspace/Output/sample/sample.aligned.srt', '-filter_complex', '[0:a:0]aresample=48000,volume=0.85[bg];[1:a:0]aresample=48000,volume=1.00[key];[bg][key]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250:level_in=1:level_sc=1[duck];[duck]volume=1.0[mixbg];[mixbg][key]amix=inputs=2:normalize=0[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:linear=true:print_format=summary[mix2];[mix2]alimiter=limit=0.891[mixout];', '-map', '0:v:0', '-map', '[mixout]', '-map', '2:s:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-metadata:s:a:0', 'language=eng', '-c:s', 'srt', '-disposition:s:0', 'default', '-metadata:s:s:0', 'language=eng', '-t', '7.709', '/workspace/Output/sample/dub.mkv']' returned non-zero exit status 234.
+Traceback (most recent call last):
+  File "/workspace/src/anime_v2/cli.py", line 476, in cli
+    outs = mix(
+           ^^^^
+  File "/workspace/src/anime_v2/stages/mixing.py", line 338, in mix
+    _run_once(out_mkv, container="mkv", vcodec="copy", acodec="aac", scodec="srt", loudnorm_filter=loudnorm_pass2)
+  File "/workspace/src/anime_v2/stages/mixing.py", line 301, in _run_once
+    subprocess.run(cmd, check=True)
+  File "/usr/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['ffmpeg', '-y', '-i', '/workspace/samples/sample.mp4', '-i', '/workspace/Output/sample/sample.tts.wav', '-i', '/workspace/Output/sample/sample.aligned.srt', '-filter_complex', '[0:a:0]aresample=48000,volume=0.85[bg];[1:a:0]aresample=48000,volume=1.00[key];[bg][key]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250:level_in=1:level_sc=1[duck];[duck]volume=1.0[mixbg];[mixbg][key]amix=inputs=2:normalize=0[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:linear=true:print_format=summary[mix2];[mix2]alimiter=limit=0.891[mixout];', '-map', '0:v:0', '-map', '[mixout]', '-map', '2:s:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-metadata:s:a:0', 'language=eng', '-c:s', 'srt', '-disposition:s:0', 'default', '-metadata:s:s:0', 'language=eng', '-t', '7.709', '/workspace/Output/sample/dub.mkv']' returned non-zero exit status 234.
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] mux complete → /workspace/Output/sample/dub.mkv
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] mux fallback: ok → /workspace/Output/sample/dub.mkv
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] Done in 0.68s
+2026-01-01 01:39:29 INFO anime_v2 [10610] [v2] Done. Output: /workspace/Output/sample/dub.mkv
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] Starting dub: video=/workspace/samples/sample.mp4 mode=low model=small device=cpu
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] Languages: src_lang=auto tgt_lang=en translate=False
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] Extracting audio → /workspace/Output/sample/audio.wav
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] audio_extractor: ok path=/workspace/Output/sample/audio.wav (0.06s)
+2026-01-01 01:41:00 WARNING anime_v2 [10978] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:41:00 WARNING anime_v2 [10978] diarize engine=speechbrain failed (no segments)
+2026-01-01 01:41:00 INFO anime_v2 [10978] diarize engine=heuristic segments=1
+2026-01-01 01:41:00 WARNING anime_v2 [10978] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] diarize: diar_segments=1 stable_speakers=1 (0.17s)
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en
+2026-01-01 01:41:00 WARNING anime_v2 [10978] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] transcription: segments=0 (0.00s) → /workspace/Output/sample/sample.srt
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] translate: disabled (--no-translate)
+2026-01-01 01:41:00 WARNING anime_v2 [10978] [v2] align: aeneas failed (aeneas not installed: No module named 'aeneas'); falling back to heuristic
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] align: ok (no-translate) segments=1 aligner=auto
+2026-01-01 01:41:00 WARNING anime_v2 [10978] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:41:00 WARNING anime_v2 [10978] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:41:00 WARNING anime_v2 [10978] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] TTS done → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] tts: ok (0.04s) → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:41:00 INFO anime_v2 [10978] [v2] mixing: loudnorm pass1 ok (0.21s)
+2026-01-01 01:41:01 INFO anime_v2 [10978] [v2] mix: ok (0.91s) → /workspace/Output/sample/dub.mkv, /workspace/Output/sample/dub.mp4
+2026-01-01 01:41:01 INFO anime_v2 [10978] [v2] Done in 1.20s
+2026-01-01 01:41:01 INFO anime_v2 [10978] [v2] Done. Output: /workspace/Output/sample/dub.mkv
