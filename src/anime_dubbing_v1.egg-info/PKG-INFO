@@ -104,6 +104,36 @@ docker run --rm ^
    -v "%cd%":/app ^
    anime-v1 /data/in/Talking.mp4
 
+---
+
+## Windows (PowerShell / CMD) – anime-v2 examples
+
+### Build (GPU image)
+
+```bat
+docker build -f docker\Dockerfile -t anime-v2-gpu .
+```
+
+### Run dubbing (GPU)
+
+```bat
+docker run --rm --gpus all ^
+  -v "%cd%":/app ^
+  -v "%cd%\Input":/app/Input ^
+  -v "%cd%\Output":/app/Output ^
+  anime-v2-gpu /app/Input/Test.mp4 --mode high --device cuda
+```
+
+### Run web player (GPU)
+
+```bat
+docker run --rm --gpus all -p 8000:8000 ^
+  -e API_TOKEN=change-me ^
+  -v "%cd%":/app ^
+  -v "%cd%\Output":/app/Output ^
+  anime-v2-gpu anime-v2-web
+```
+
 
 Task: Run Web GUI (Alpha only)
 
