@@ -11,6 +11,8 @@ from pathlib import Path
 
 from anime_v2.jobs.models import Job, JobState, now_utc
 from anime_v2.jobs.store import JobStore
+from anime_v2.jobs.limits import get_limits
+from anime_v2.jobs.watchdog import PhaseTimeout, run_with_timeout
 from anime_v2.ops.metrics import job_errors, jobs_finished, whisper_seconds, tts_seconds
 from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.character_store import CharacterStore
@@ -19,6 +21,7 @@ from anime_v2.stages.mixing import MixConfig, mix
 from anime_v2.utils.embeds import ecapa_embedding
 from anime_v2.stages.transcription import transcribe
 from anime_v2.stages.translation import TranslationConfig, translate_segments
+from anime_v2.utils.ffmpeg_safe import extract_audio_mono_16k
 from anime_v2.utils.log import logger
 from anime_v2.utils.paths import output_dir_for
 from anime_v2.utils.time import format_srt_timestamp
@@ -177,6 +180,7 @@ class JobQueue:
         job = self.store.get(job_id)
         if job is None:
             return
+        limits = get_limits()
 
         if await self._is_canceled(job_id):
             self.store.update(job_id, state=JobState.CANCELED, progress=0.0, message="Canceled before start")
@@ -205,7 +209,17 @@ class JobQueue:
             # a) audio_extractor.extract (~0.10)
             self.store.update(job_id, progress=0.05, message="Extracting audio")
             self.store.append_log(job_id, f"[{now_utc()}] audio_extractor")
-            wav = audio_extractor.extract(video=video_path, out_dir=out_dir, wav_out=out_dir / "audio.wav")
+            try:
+                wav = run_with_timeout(
+                    "audio_extract",
+                    timeout_s=limits.timeout_audio_s,
+                    fn=audio_extractor.extract,
+                    args=(),
+                    kwargs={"video": video_path, "out_dir": out_dir, "wav_out": out_dir / "audio.wav"},
+                )
+            except PhaseTimeout as ex:
+                job_errors.labels(stage="audio_timeout").inc()
+                raise RuntimeError(str(ex))
             self.store.update(job_id, progress=0.10, message="Audio extracted")
             await self._check_canceled(job_id)
 
@@ -228,12 +242,7 @@ class JobQueue:
                     lab = str(u["speaker"])
                     seg_wav = seg_dir / f"{i:04d}_{lab}.wav"
                     try:
-                        subprocess.run(
-                            ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-to", f"{e:.3f}", "-i", str(wav), "-ac", "1", "-ar", "16000", str(seg_wav)],
-                            check=True,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
+                        extract_audio_mono_16k(src=Path(str(wav)), dst=seg_wav, start_s=s, end_s=e, timeout_s=120)
                     except Exception:
                         seg_wav = Path(str(wav))
                     by_label.setdefault(lab, []).append((s, e, seg_wav))
@@ -409,19 +418,28 @@ class JobQueue:
             self.store.append_log(job_id, f"[{now_utc()}] tts")
             try:
                 t_tts0 = time.perf_counter()
-                tts.run(
-                    out_dir=out_dir,
-                    translated_json=translated_json if translated_json.exists() else None,
-                    diarization_json=diar_json if diar_json.exists() else None,
-                    wav_out=tts_wav,
-                    progress_cb=on_tts_progress,
-                    cancel_cb=cancel_cb,
-                    max_stretch=float(os.environ.get("MAX_STRETCH", "0.15")),
-                )
+                # Run TTS in a separate process so watchdog can SIGKILL if it hangs.
+                def _tts_phase():
+                    return tts.run(
+                        out_dir=out_dir,
+                        translated_json=translated_json if translated_json.exists() else None,
+                        diarization_json=diar_json if diar_json.exists() else None,
+                        wav_out=tts_wav,
+                        # callbacks omitted (not picklable); progress updates remain coarse for this phase
+                        progress_cb=None,
+                        cancel_cb=None,
+                        max_stretch=float(os.environ.get("MAX_STRETCH", "0.15")),
+                    )
+
+                run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
                 tts_seconds.observe(max(0.0, time.perf_counter() - t_tts0))
             except tts.TTSCanceled:
                 job_errors.labels(stage="tts").inc()
                 raise JobCanceled()
+            except PhaseTimeout as ex:
+                job_errors.labels(stage="tts_timeout").inc()
+                self.store.append_log(job_id, f"[{now_utc()}] tts watchdog timeout: {ex}")
+                raise RuntimeError(str(ex))
             except JobCanceled:
                 job_errors.labels(stage="tts").inc()
                 raise

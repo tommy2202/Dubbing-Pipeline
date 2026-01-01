@@ -14,6 +14,8 @@ from anime_v2.jobs.models import Job, JobState, new_id, now_utc
 from anime_v2.api.deps import Identity, require_scope
 from anime_v2.api.models import AuthStore
 from anime_v2.api.security import decode_token
+from anime_v2.jobs.limits import concurrent_jobs_for_user, get_limits, used_minutes_today
+from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_duration_seconds
 from anime_v2.ops.metrics import jobs_queued
 from anime_v2.utils.log import request_id_var
 from anime_v2.utils.crypto import verify_secret
@@ -23,6 +25,13 @@ from anime_v2.utils.ratelimit import RateLimiter
 router = APIRouter()
 
 _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9._/\-]+$")
+_ALLOWED_UPLOAD_MIME = {
+    "video/mp4",
+    "video/quicktime",
+    "video/x-matroska",
+    "video/webm",
+    "application/octet-stream",  # some browsers
+}
 
 
 def _app_root() -> Path:
@@ -82,6 +91,7 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     store = _get_store(request)
     queue = _get_queue(request)
+    limits = get_limits()
 
     ctype = (request.headers.get("content-type") or "").lower()
     mode = "medium"
@@ -89,6 +99,7 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     src_lang = "auto"
     tgt_lang = "en"
     video_path: Path | None = None
+    duration_s = 0.0
 
     if "application/json" in ctype:
         body = await request.json()
@@ -104,6 +115,8 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
         video_path = _sanitize_video_path(vp)
         if not video_path.exists():
             raise HTTPException(status_code=400, detail="video_path does not exist")
+        if not video_path.is_file():
+            raise HTTPException(status_code=400, detail="video_path must be a file")
     else:
         # multipart/form-data
         form = await request.form()
@@ -121,9 +134,14 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
             video_path = _sanitize_video_path(str(vp))
             if not video_path.exists():
                 raise HTTPException(status_code=400, detail="video_path does not exist")
+            if not video_path.is_file():
+                raise HTTPException(status_code=400, detail="video_path must be a file")
         else:
             # Save upload to Input/uploads/<uuid>.mp4 under APP_ROOT
             upload = file  # starlette.datastructures.UploadFile
+            ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()
+            if ctype_u and ctype_u not in _ALLOWED_UPLOAD_MIME:
+                raise HTTPException(status_code=400, detail=f"Unsupported upload content-type: {ctype_u}")
             root = _app_root()
             up_dir = (root / "Input" / "uploads").resolve()
             up_dir.mkdir(parents=True, exist_ok=True)
@@ -133,21 +151,58 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
             if "." in name:
                 ext = "." + name.rsplit(".", 1)[-1][:8]
             dest = up_dir / f"{jid}{ext}"
-            with dest.open("wb") as f:
-                while True:
-                    chunk = await upload.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    f.write(chunk)
+            max_bytes = int(limits.max_upload_mb) * 1024 * 1024
+            written = 0
+            try:
+                with dest.open("wb") as f:
+                    while True:
+                        chunk = await upload.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise HTTPException(status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)")
+                        f.write(chunk)
+            except HTTPException:
+                try:
+                    dest.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise
             video_path = dest
 
     assert video_path is not None
+    # Validate duration using ffprobe (no user-controlled args).
+    try:
+        duration_s = float(ffprobe_duration_seconds(video_path))
+    except FFmpegError as ex:
+        raise HTTPException(status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}")
+    if duration_s <= 0.5:
+        raise HTTPException(status_code=400, detail="Video duration is too short or unreadable")
+    if duration_s > float(limits.max_video_min) * 60.0:
+        raise HTTPException(status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)")
+
     jid = new_id()
     created = now_utc()
 
+    # Per-user quotas (concurrency + daily processing minutes)
+    all_jobs = store.list(limit=1000)
+    conc = concurrent_jobs_for_user(all_jobs, user_id=ident.user.id)
+    if conc >= limits.max_concurrent_per_user:
+        raise HTTPException(status_code=429, detail=f"Too many concurrent jobs (limit={limits.max_concurrent_per_user})")
+    used_min = used_minutes_today(all_jobs, user_id=ident.user.id, now_iso=created)
+    req_min = duration_s / 60.0
+    if (used_min + req_min) > float(limits.daily_processing_minutes):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily quota exceeded (limit={limits.daily_processing_minutes} min, used={used_min:.1f} min, requested={req_min:.1f} min)",
+        )
+
     job = Job(
         id=jid,
+        owner_id=ident.user.id,
         video_path=str(video_path),
+        duration_s=float(duration_s),
         request_id=(request_id_var.get() or ""),
         mode=mode,
         device=device,

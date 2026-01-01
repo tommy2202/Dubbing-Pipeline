@@ -26,7 +26,9 @@ def new_id() -> str:
 @dataclass(slots=True)
 class Job:
     id: str
+    owner_id: str
     video_path: str
+    duration_s: float
     mode: str
     device: str
     src_lang: str
@@ -51,6 +53,11 @@ class Job:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Job":
         dd = dict(d)
+        # Backwards-compatible defaults for older persisted jobs.
+        dd.setdefault("owner_id", "")
+        dd.setdefault("duration_s", 0.0)
+        dd.setdefault("request_id", "")
+        dd.setdefault("error", None)
         st = dd["state"]
         if isinstance(st, str) and st.startswith("JobState."):
             st = st.split(".", 1)[1]
