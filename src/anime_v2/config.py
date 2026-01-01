@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     retention_days_input: int = Field(default=7, alias="RETENTION_DAYS_INPUT")
     retention_days_logs: int = Field(default=14, alias="RETENTION_DAYS_LOGS")
 
+    # storage guard + workdir cleanup
+    min_free_gb: int = Field(default=10, alias="MIN_FREE_GB")
+    work_stale_max_hours: int = Field(default=24, alias="WORK_STALE_MAX_HOURS")
+
     # runtime model manager / allocator
     prewarm_whisper: str = Field(default="", alias="PREWARM_WHISPER")  # comma-separated models
     prewarm_tts: str = Field(default="", alias="PREWARM_TTS")  # comma-separated models

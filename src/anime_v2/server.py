@@ -26,6 +26,7 @@ from anime_v2.jobs.queue import JobQueue
 from anime_v2.jobs.store import JobStore
 from anime_v2.ops import audit
 from anime_v2.ops.metrics import REGISTRY
+from anime_v2.ops.storage import periodic_prune_tick
 from anime_v2.runtime.model_manager import ModelManager
 from anime_v2.runtime.scheduler import Scheduler
 from anime_v2.runtime import lifecycle
@@ -97,6 +98,26 @@ async def lifespan(app: FastAPI):
             logger.warning("admin bootstrap failed (%s)", ex)
 
     await q.start()
+    # Periodic cleanup of stale work/ directories (best-effort).
+    import asyncio as _asyncio2
+
+    _prune_task: _asyncio2.Task | None = None
+
+    async def _prune_loop() -> None:
+        while True:
+            try:
+                periodic_prune_tick(output_root=OUTPUT_ROOT)
+            except Exception as ex:
+                logger.warning("workdir_prune_failed", error=str(ex))
+            await _asyncio2.sleep(float(os.environ.get("WORK_PRUNE_INTERVAL_SEC", "3600")))
+
+    try:
+        # run one tick at boot, then start loop
+        periodic_prune_tick(output_root=OUTPUT_ROOT)
+        _prune_task = _asyncio2.create_task(_prune_loop())
+    except Exception:
+        _prune_task = None
+
     # Optional model pre-warm (env-controlled). Never prevent boot.
     try:
         ModelManager.instance().prewarm()
@@ -112,6 +133,8 @@ async def lifespan(app: FastAPI):
     try:
         await q.graceful_shutdown(timeout_s=int(os.environ.get("DRAIN_TIMEOUT_SEC", "120")))
     finally:
+        if _prune_task is not None:
+            _prune_task.cancel()
         await q.stop()
 
 

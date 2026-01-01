@@ -216,10 +216,13 @@ class JobQueue:
 
         # Establish work/log paths before writing logs.
         video_path = Path(job.video_path)
-        out_dir = output_dir_for(video_path, self.app_root)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        log_path = out_dir / "job.log"
-        ckpt_path = out_dir / ".checkpoint.json"
+        base_dir = output_dir_for(video_path, self.app_root)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        # Temp artifacts live under Output/<stem>/work/<job_id>/...
+        work_dir = (base_dir / "work" / job_id).resolve()
+        work_dir.mkdir(parents=True, exist_ok=True)
+        log_path = base_dir / "job.log"
+        ckpt_path = base_dir / ".checkpoint.json"
         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or {}
         # runtime report fields persisted on the job
         runtime = dict(job.runtime or {})
@@ -228,10 +231,10 @@ class JobQueue:
         runtime.setdefault("breaker_state", {})
         self.store.update(
             job_id,
-            work_dir=str(out_dir),
+            work_dir=str(work_dir),
             log_path=str(log_path),
-            output_mkv=str(out_dir / "dub.mkv"),
-            output_srt=str(out_dir / f"{video_path.stem}.translated.srt"),
+            output_mkv=str(base_dir / f"{video_path.stem}.dub.mkv"),
+            output_srt=str(base_dir / f"{video_path.stem}.translated.srt"),
             runtime=runtime,
         )
 
@@ -257,7 +260,7 @@ class JobQueue:
             self.store.update(job_id, progress=0.05, message="Extracting audio")
             self.store.append_log(job_id, f"[{now_utc()}] audio_extractor")
             try:
-                wav_guess = out_dir / "audio.wav"
+                wav_guess = work_dir / "audio.wav"
                 if wav_guess.exists() and stage_is_done(ckpt, "audio"):
                     wav = wav_guess
                     self.store.append_log(job_id, f"[{now_utc()}] audio_extractor (checkpoint hit)")
@@ -268,7 +271,7 @@ class JobQueue:
                             timeout_s=limits.timeout_audio_s,
                             fn=audio_extractor.extract,
                             args=(),
-                            kwargs={"video": video_path, "out_dir": out_dir, "wav_out": out_dir / "audio.wav", "job_id": job_id},
+                            kwargs={"video": video_path, "out_dir": work_dir, "wav_out": work_dir / "audio.wav", "job_id": job_id},
                         )
                     else:
                         with sched.phase("audio"):
@@ -277,10 +280,10 @@ class JobQueue:
                                 timeout_s=limits.timeout_audio_s,
                                 fn=audio_extractor.extract,
                                 args=(),
-                                kwargs={"video": video_path, "out_dir": out_dir, "wav_out": out_dir / "audio.wav", "job_id": job_id},
+                                kwargs={"video": video_path, "out_dir": work_dir, "wav_out": work_dir / "audio.wav", "job_id": job_id},
                             )
                     try:
-                        write_ckpt(job_id, "audio", {"audio_wav": Path(str(wav))}, {"work_dir": str(out_dir)}, ckpt_path=ckpt_path)
+                        write_ckpt(job_id, "audio", {"audio_wav": Path(str(wav))}, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path)
                         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
                     except Exception:
                         pass
@@ -291,7 +294,8 @@ class JobQueue:
             await self._check_canceled(job_id)
 
             # b) diarize.identify (~0.25) (optional)
-            diar_json = out_dir / "diarization.json"
+            diar_json_work = work_dir / "diarization.work.json"
+            diar_json_public = base_dir / "diarization.json"
             diar_segments: list[dict] = []
             speaker_embeddings: dict[str, str] = {}
             try:
@@ -300,7 +304,7 @@ class JobQueue:
                 cfg = DiarizeConfig(diarizer=os.environ.get("DIARIZER", "auto"))
                 utts = diarize_v2(str(wav), device=_select_device(job.device), cfg=cfg)
 
-                seg_dir = out_dir / "segments"
+                seg_dir = work_dir / "segments"
                 seg_dir.mkdir(parents=True, exist_ok=True)
                 by_label: dict[str, list[tuple[float, float, Path]]] = {}
                 for i, u in enumerate(utts):
@@ -340,7 +344,23 @@ class JobQueue:
 
                 from anime_v2.utils.io import write_json
 
-                write_json(diar_json, {"audio_path": str(wav), "segments": diar_segments, "speaker_embeddings": speaker_embeddings})
+                # Work version includes wav_path for TTS voice selection.
+                write_json(diar_json_work, {"audio_path": str(wav), "segments": diar_segments, "speaker_embeddings": speaker_embeddings})
+                # Public version excludes temp wav paths (workdir is pruned after completion).
+                pub_segments = []
+                for seg in diar_segments:
+                    try:
+                        pub_segments.append(
+                            {
+                                "start": float(seg["start"]),
+                                "end": float(seg["end"]),
+                                "diar_label": str(seg.get("diar_label") or ""),
+                                "speaker_id": str(seg.get("speaker_id") or ""),
+                            }
+                        )
+                    except Exception:
+                        continue
+                write_json(diar_json_public, {"audio_path": str(wav), "segments": pub_segments})
                 self.store.update(job_id, progress=0.25, message=f"Diarized ({len(set(s.get('speaker_id') for s in diar_segments))} speakers)")
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] diarize failed: {ex}")
@@ -351,7 +371,9 @@ class JobQueue:
             mode = (job.mode or "medium").lower()
             model_name = MODE_TO_MODEL.get(mode, "medium")
             device = _select_device(job.device)
-            srt_out = out_dir / f"{video_path.stem}.srt"
+            srt_out = work_dir / f"{video_path.stem}.srt"
+            # Persist a stable copy in Output/<stem>/ for inspection / playback.
+            srt_public = base_dir / f"{video_path.stem}.srt"
             self.store.update(job_id, progress=0.30, message=f"Transcribing (Whisper {model_name})")
             self.store.append_log(job_id, f"[{now_utc()}] transcribe model={model_name} device={device}")
             t_wh0 = time.perf_counter()
@@ -401,7 +423,7 @@ class JobQueue:
                             job_id,
                             "transcribe",
                             {"srt": srt_out, "meta": srt_meta},
-                            {"work_dir": str(out_dir), "model": model_name, "device": device},
+                            {"work_dir": str(work_dir), "model": model_name, "device": device},
                             ckpt_path=ckpt_path,
                         )
                         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
@@ -412,6 +434,12 @@ class JobQueue:
                 raise
             finally:
                 whisper_seconds.observe(max(0.0, time.perf_counter() - t_wh0))
+            try:
+                srt_public.write_bytes(srt_out.read_bytes())
+                if srt_out.with_suffix(".json").exists():
+                    srt_public.with_suffix(".json").write_bytes(srt_out.with_suffix(".json").read_bytes())
+            except Exception:
+                pass
             # Prefer rich segment metadata (avg_logprob) when available.
             cues: list[dict] = []
             try:
@@ -478,11 +506,11 @@ class JobQueue:
                         )
                     except Exception:
                         continue
-            translated_json = out_dir / "translated.json"
-            translated_srt = out_dir / f"{video_path.stem}.translated.srt"
+            translated_json = base_dir / "translated.json"
+            translated_srt = base_dir / f"{video_path.stem}.translated.srt"
 
             do_translate = job.src_lang.lower() != job.tgt_lang.lower()
-            subs_srt_path: Path | None = srt_out
+            subs_srt_path: Path | None = srt_public
             if do_translate:
                 self.store.update(job_id, progress=0.62, message="Translating subtitles")
                 self.store.append_log(job_id, f"[{now_utc()}] translate src={job.src_lang} tgt={job.tgt_lang}")
@@ -513,7 +541,7 @@ class JobQueue:
             await self._check_canceled(job_id)
 
             # e) tts.synthesize aligned track (~0.95)
-            tts_wav = out_dir / f"{video_path.stem}.tts.wav"
+            tts_wav = work_dir / f"{video_path.stem}.tts.wav"
 
             def on_tts_progress(done: int, total: int) -> None:
                 # map [0..1] => [0.76..0.95]
@@ -530,9 +558,9 @@ class JobQueue:
                 # Run TTS in a separate process so watchdog can SIGKILL if it hangs.
                 def _tts_phase():
                     return tts.run(
-                        out_dir=out_dir,
+                        out_dir=work_dir,
                         translated_json=translated_json if translated_json.exists() else None,
-                        diarization_json=diar_json if diar_json.exists() else None,
+                        diarization_json=diar_json_work if diar_json_work.exists() else None,
                         wav_out=tts_wav,
                         # callbacks omitted (not picklable); progress updates remain coarse for this phase
                         progress_cb=None,
@@ -543,7 +571,7 @@ class JobQueue:
                     )
 
                 # checkpoint-aware skip
-                tts_manifest = out_dir / "tts_manifest.json"
+                tts_manifest = work_dir / "tts_manifest.json"
                 if tts_wav.exists() and tts_manifest.exists() and stage_is_done(ckpt, "tts"):
                     self.store.append_log(job_id, f"[{now_utc()}] tts (checkpoint hit)")
                 else:
@@ -562,7 +590,7 @@ class JobQueue:
                     except Exception:
                         pass
                     try:
-                        write_ckpt(job_id, "tts", {"tts_wav": tts_wav, "manifest": tts_manifest}, {"work_dir": str(out_dir)}, ckpt_path=ckpt_path)
+                        write_ckpt(job_id, "tts", {"tts_wav": tts_wav, "manifest": tts_manifest}, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path)
                         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
                     except Exception:
                         pass
@@ -592,8 +620,10 @@ class JobQueue:
             await self._check_canceled(job_id)
 
             # f) mixing (~1.00)
-            out_mkv = out_dir / "dub.mkv"
-            out_mp4 = out_dir / "dub.mp4"
+            out_mkv = work_dir / f"{video_path.stem}.dub.mkv"
+            out_mp4 = work_dir / f"{video_path.stem}.dub.mp4"
+            final_mkv = base_dir / f"{video_path.stem}.dub.mkv"
+            final_mp4 = base_dir / f"{video_path.stem}.dub.mp4"
             self.store.update(job_id, progress=0.97, message="Mixing & muxing")
             self.store.append_log(job_id, f"[{now_utc()}] mix")
             try:
@@ -625,17 +655,17 @@ class JobQueue:
                         ),
                     )
                     if sched is None:
-                        outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=out_dir, cfg=cfg_mix)
+                        outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=work_dir, cfg=cfg_mix)
                     else:
                         with sched.phase("mux"):
-                            outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=out_dir, cfg=cfg_mix)
+                            outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=work_dir, cfg=cfg_mix)
                     out_mkv = outs.get("mkv", out_mkv)
                     out_mp4 = outs.get("mp4", out_mp4)
                     try:
                         art = {"mkv": out_mkv}
                         if out_mp4 and Path(out_mp4).exists():
                             art["mp4"] = out_mp4
-                        write_ckpt(job_id, "mix", art, {"work_dir": str(out_dir)}, ckpt_path=ckpt_path)
+                        write_ckpt(job_id, "mix", art, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path)
                         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
                     except Exception:
                         pass
@@ -647,16 +677,47 @@ class JobQueue:
                     with sched.phase("mux"):
                         mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv, job_id=job_id)
 
+            def _move_best_effort(src: Path, dst: Path) -> None:
+                try:
+                    if not src.exists():
+                        return
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        src.replace(dst)
+                    except Exception:
+                        shutil.move(str(src), str(dst))
+                except Exception:
+                    return
+
+            _move_best_effort(Path(out_mkv), final_mkv)
+            if out_mp4 and Path(out_mp4).exists():
+                _move_best_effort(Path(out_mp4), final_mp4)
+            # Update checkpoint to point at final artifacts (so a restart doesn't reference temp paths).
+            try:
+                art2 = {"mkv": final_mkv}
+                if final_mp4.exists():
+                    art2["mp4"] = final_mp4
+                write_ckpt(job_id, "mix", art2, {"work_dir": str(base_dir)}, ckpt_path=ckpt_path)
+                ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
+            except Exception:
+                pass
+
             self.store.update(
                 job_id,
                 state=JobState.DONE,
                 progress=1.0,
                 message="Done",
-                output_mkv=str(out_mkv),
+                output_mkv=str(final_mkv if final_mkv.exists() else out_mkv),
                 output_srt=str(subs_srt_path) if subs_srt_path else "",
+                work_dir=str(base_dir),
             )
             jobs_finished.labels(state="DONE").inc()
             self.store.append_log(job_id, f"[{now_utc()}] done in {time.perf_counter()-t0:.2f}s")
+            # Cleanup temp workdir (keep logs + checkpoint + final outputs in Output/<stem>/).
+            try:
+                shutil.rmtree(work_dir, ignore_errors=True)
+            except Exception:
+                pass
         except JobCanceled:
             self.store.append_log(job_id, f"[{now_utc()}] canceled")
             self.store.update(job_id, state=JobState.CANCELED, message="Canceled", error=None)

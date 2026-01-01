@@ -15,9 +15,11 @@ from anime_v2.jobs.models import Job, JobState, new_id, now_utc
 from anime_v2.api.deps import Identity, require_scope
 from anime_v2.api.models import AuthStore
 from anime_v2.api.security import decode_token
+from anime_v2.config import get_settings
 from anime_v2.jobs.limits import concurrent_jobs_for_user, get_limits, used_minutes_today
 from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_duration_seconds
 from anime_v2.ops.metrics import jobs_queued
+from anime_v2.ops.storage import ensure_free_space
 from anime_v2.utils.log import request_id_var
 from anime_v2.utils.crypto import verify_secret
 from anime_v2.utils.ratelimit import RateLimiter
@@ -122,6 +124,13 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     who = ident.user.id if ident.kind == "user" else (ident.api_key_prefix or "unknown")
     if not rl.allow(f"jobs:submit:{who}", limit=10, per_seconds=60):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    # Disk guard: refuse new jobs when storage is low.
+    s = get_settings()
+    out_root = Path(str(getattr(store, "db_path", Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output"))))).resolve().parent
+    out_root.mkdir(parents=True, exist_ok=True)
+    ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
+
     scheduler = _get_scheduler(request)
     limits = get_limits()
 
