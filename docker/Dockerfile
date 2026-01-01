@@ -5,16 +5,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Required for Coqui TTS model downloads (no interactive prompt)
 ENV COQUI_TOS_AGREED=1
 
-# Cache dirs (match .env.example defaults)
-ENV HF_HOME=/root/.cache/huggingface
-ENV TORCH_HOME=/root/.cache/torch
-ENV TTS_HOME=/root/.local/share/tts
+# Cache dirs (run as non-root; keep caches under /home/appuser)
+ENV HF_HOME=/home/appuser/.cache/huggingface
+ENV TORCH_HOME=/home/appuser/.cache/torch
+ENV TTS_HOME=/home/appuser/.local/share/tts
 ENV ENABLE_PYANNOTE=0
 ENV ESPEAKNG_DATA=/usr/lib/x86_64-linux-gnu/espeak-ng-data
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
     ffmpeg espeak-ng libespeak-ng1 libsndfile1 \
+    curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -44,4 +45,18 @@ COPY . /app
 # Install the project
 RUN python -m pip install --no-cache-dir .
 
-ENTRYPOINT ["anime-v2"]
+# Non-root runtime user
+RUN useradd -m -u 10001 -s /usr/sbin/nologin appuser && \
+    mkdir -p /app/Output /app/data /home/appuser/.cache /home/appuser/.local/share && \
+    chown -R appuser:appuser /app /home/appuser
+
+USER appuser
+
+# Default server port for containers
+ENV PORT=8080
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
+
+# Run the API server by default; override command for CLI runs.
+ENTRYPOINT ["anime-v2-web"]

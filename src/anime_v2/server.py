@@ -171,6 +171,33 @@ async def health():
     return {"ok": True}
 
 
+@app.get("/healthz")
+async def healthz():
+    # Liveness: process is up.
+    return {"ok": True}
+
+
+@app.get("/readyz")
+async def readyz(request: Request):
+    # Readiness: dependencies initialized and writable mounts present.
+    try:
+        store = getattr(request.app.state, "job_store", None)
+        queue = getattr(request.app.state, "job_queue", None)
+        auth_store = getattr(request.app.state, "auth_store", None)
+        if store is None or queue is None or auth_store is None:
+            raise RuntimeError("missing app state")
+        # Output root should exist and be writable (read-only rootfs requires a mount here).
+        if not OUTPUT_ROOT.exists():
+            raise RuntimeError("Output dir missing")
+        if not OUTPUT_ROOT.is_dir():
+            raise RuntimeError("Output is not a directory")
+        if not os.access(str(OUTPUT_ROOT), os.W_OK):
+            raise RuntimeError("Output not writable")
+    except Exception as ex:
+        raise HTTPException(status_code=503, detail=f"not ready: {ex}")
+    return {"ok": True}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request, _: object = Depends(require_role(Role.viewer))):
     videos = _iter_videos()
