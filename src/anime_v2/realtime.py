@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +10,13 @@ from anime_v2.config import get_settings
 from anime_v2.stages import audio_extractor, tts
 from anime_v2.stages.transcription import transcribe
 from anime_v2.stages.translation import TranslationConfig, translate_segments
-from anime_v2.utils.ffmpeg_safe import FFmpegError, extract_audio_mono_16k, ffprobe_duration_seconds
+from anime_v2.timing.pacing import pad_or_trim_wav
+from anime_v2.utils.ffmpeg_safe import (
+    FFmpegError,
+    extract_audio_mono_16k,
+    ffprobe_duration_seconds,
+    run_ffmpeg,
+)
 from anime_v2.utils.io import atomic_write_text, write_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.subtitles import write_srt, write_vtt
@@ -43,7 +48,7 @@ def _concat_wavs_ffmpeg(wavs: list[Path], out_wav: Path) -> Path:
         "".join([f"file '{esc(w)}'\n" for w in wavs]),
         encoding="utf-8",
     )
-    subprocess.run(
+    run_ffmpeg(
         [
             str(s.ffmpeg_bin),
             "-y",
@@ -57,9 +62,9 @@ def _concat_wavs_ffmpeg(wavs: list[Path], out_wav: Path) -> Path:
             "copy",
             str(out_wav),
         ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        timeout_s=120,
+        retries=0,
+        capture=True,
     )
     return out_wav
 
@@ -68,29 +73,7 @@ def _pad_or_trim_to(wav_in: Path, *, duration_s: float, out_wav: Path) -> Path:
     """
     Ensure audio is exactly duration_s by trimming or padding silence.
     """
-    s = get_settings()
-    out_wav.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            str(s.ffmpeg_bin),
-            "-y",
-            "-i",
-            str(wav_in),
-            "-t",
-            f"{float(duration_s):.3f}",
-            "-af",
-            f"apad=pad_dur={max(0.0, float(duration_s)):.3f}",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            str(out_wav),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return out_wav
+    return pad_or_trim_wav(wav_in, out_wav, float(duration_s), timeout_s=120)
 
 
 def realtime_dub(
@@ -266,7 +249,7 @@ def realtime_dub(
         # Optional overlap trimming for stitch: drop the first ov seconds for all chunks after the first.
         if idx > 1 and ov > 0:
             trimmed = chunk_base / "tts.trim.wav"
-            subprocess.run(
+            run_ffmpeg(
                 [
                     str(get_settings().ffmpeg_bin),
                     "-y",
@@ -280,9 +263,9 @@ def realtime_dub(
                     "16000",
                     str(trimmed),
                 ],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                timeout_s=120,
+                retries=0,
+                capture=True,
             )
             chunk_fixed = trimmed
 

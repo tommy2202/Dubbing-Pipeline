@@ -59,6 +59,15 @@ def _atempo_chain(tempo: float) -> str:
     return ",".join(parts)
 
 
+def atempo_chain(tempo: float) -> str:
+    """
+    Public wrapper for building a safe `atempo` filter chain.
+
+    Kept as a single source of truth (used by both pacing and prosody controls).
+    """
+    return _atempo_chain(tempo)
+
+
 def time_stretch_wav(
     in_wav: Path,
     out_wav: Path,

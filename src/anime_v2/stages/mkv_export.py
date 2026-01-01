@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import subprocess
 from contextlib import suppress
 from pathlib import Path
 
 from anime_v2.config import get_settings
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
-from anime_v2.utils.ffmpeg_safe import ffprobe_duration_seconds
+from anime_v2.utils.ffmpeg_safe import ffprobe_duration_seconds, run_ffmpeg
 from anime_v2.utils.log import logger
 
 
@@ -106,7 +105,7 @@ def mux(
             cmd += ["-t", f"{vid_dur:.3f}"]
 
         cmd += [str(out_mkv)]
-        subprocess.run(cmd, check=True)
+        run_ffmpeg(cmd, timeout_s=900, retries=0, capture=True)
 
     # Audio filter chain:
     # - loudnorm (1-pass) or fallback to volume

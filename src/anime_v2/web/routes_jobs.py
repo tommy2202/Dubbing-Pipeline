@@ -62,6 +62,33 @@ def _app_root() -> Path:
     return Path(get_settings().app_root).resolve()
 
 
+def _input_dir() -> Path:
+    """
+    Base directory for user-provided inputs under APP_ROOT.
+    """
+    s = get_settings()
+    root = _app_root()
+    if getattr(s, "input_dir", None):
+        try:
+            return Path(str(s.input_dir)).resolve()
+        except Exception:
+            pass
+    return (root / "Input").resolve()
+
+
+def _input_uploads_dir() -> Path:
+    """
+    Directory where the web UI/API stores uploads.
+    """
+    s = get_settings()
+    if getattr(s, "input_uploads_dir", None):
+        try:
+            return Path(str(s.input_uploads_dir)).resolve()
+        except Exception:
+            pass
+    return (_input_dir() / "uploads").resolve()
+
+
 def _sanitize_video_path(p: str) -> Path:
     if not p or not _SAFE_PATH_RE.match(p):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid video_path")
@@ -334,21 +361,31 @@ async def create_job(
             raise HTTPException(status_code=400, detail="Provide file or video_path")
 
         if vp is not None:
-            video_path = _sanitize_video_path(str(vp))
+            # Allow both:
+            # - explicit relative paths under APP_ROOT (e.g. "Input/Test.mp4")
+            # - bare filenames relative to INPUT_DIR (e.g. "Test.mp4")
+            vp_s = str(vp)
+            if vp_s and not Path(vp_s).is_absolute() and not vp_s.startswith("Input/"):
+                root = _app_root()
+                try:
+                    rel_input = _input_dir().resolve().relative_to(root)
+                    vp_s = str(Path(rel_input) / vp_s)
+                except Exception:
+                    vp_s = str(Path("Input") / vp_s)
+            video_path = _sanitize_video_path(vp_s)
             if not video_path.exists():
                 raise HTTPException(status_code=400, detail="video_path does not exist")
             if not video_path.is_file():
                 raise HTTPException(status_code=400, detail="video_path must be a file")
         else:
-            # Save upload to Input/uploads/<uuid>.mp4 under APP_ROOT
+            # Save upload to INPUT_UPLOADS_DIR/<uuid>.mp4 under APP_ROOT
             upload = file  # starlette.datastructures.UploadFile
             ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()
             if ctype_u and ctype_u not in _ALLOWED_UPLOAD_MIME:
                 raise HTTPException(
                     status_code=400, detail=f"Unsupported upload content-type: {ctype_u}"
                 )
-            root = _app_root()
-            up_dir = (root / "Input" / "uploads").resolve()
+            up_dir = _input_uploads_dir()
             up_dir.mkdir(parents=True, exist_ok=True)
             jid = new_id()
             ext = ".mp4"
@@ -583,7 +620,13 @@ async def create_jobs_batch(
             if vp.startswith("/"):
                 video_path = _sanitize_video_path(vp)
             else:
-                video_path = _sanitize_video_path(str(Path("Input") / vp))
+                # Treat filenames as relative to INPUT_DIR for safety/consistency.
+                root = _app_root()
+                try:
+                    rel_input = _input_dir().resolve().relative_to(root)
+                    video_path = _sanitize_video_path(str(Path(rel_input) / vp))
+                except Exception:
+                    video_path = _sanitize_video_path(str(Path("Input") / vp))
             if not video_path.exists() or not video_path.is_file():
                 raise HTTPException(status_code=400, detail=f"video_path does not exist: {vp}")
             mode = str(it.get("mode") or (preset.get("mode") if preset else "medium"))
@@ -625,8 +668,7 @@ async def create_jobs_batch(
         if not files:
             raise HTTPException(status_code=400, detail="Provide files")
 
-        root = _app_root()
-        up_dir = (root / "Input" / "uploads").resolve()
+        up_dir = _input_uploads_dir()
         up_dir.mkdir(parents=True, exist_ok=True)
         for upload in files:
             ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()

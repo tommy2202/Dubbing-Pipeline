@@ -49,6 +49,11 @@ class PublicConfig(BaseSettings):
     cache_dir: Path | None = Field(default=None, alias="ANIME_V2_CACHE_DIR")
     models_dir: Path = Field(default=Path("/models"), alias="MODELS_DIR")
 
+    # v2 input layout (web/API uploads)
+    # Defaults match the repo's historical container layout: <APP_ROOT>/Input/uploads
+    input_dir: Path | None = Field(default=None, alias="INPUT_DIR")
+    input_uploads_dir: Path | None = Field(default=None, alias="INPUT_UPLOADS_DIR")
+
     # --- legacy (root `main.py`) paths ---
     uploads_dir: Path = Field(
         default_factory=lambda: (Path.cwd() / "uploads").resolve(),
@@ -58,6 +63,11 @@ class PublicConfig(BaseSettings):
         default_factory=lambda: (Path.cwd() / "outputs").resolve(),
         alias="OUTPUTS_DIR",
     )
+
+    # --- legacy v1 defaults (keep historical behavior; configurable) ---
+    v1_output_dir: Path = Field(default=Path("/data/out"), alias="V1_OUTPUT_DIR")
+    v1_ui_host: str = Field(default="0.0.0.0", alias="V1_HOST")
+    v1_ui_port: int = Field(default=7860, alias="V1_PORT")
 
     # --- tool binaries ---
     ffmpeg_bin: str = Field(default="ffmpeg", alias="FFMPEG_BIN")

@@ -11,7 +11,9 @@ from anime_v2.config import get_settings
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
+from anime_v2.timing.pacing import atempo_chain
 from anime_v2.utils.circuit import Circuit
+from anime_v2.utils.ffmpeg_safe import run_ffmpeg
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.retry import retry_call
@@ -49,34 +51,20 @@ def _ffmpeg_to_pcm16k(src: Path, dst: Path) -> None:
     s = get_settings()
     if src.resolve() == dst.resolve():
         tmp = dst.with_suffix(".tmp.wav")
-        subprocess.run(
+        run_ffmpeg(
             [str(s.ffmpeg_bin), "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(tmp)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            timeout_s=120,
+            retries=1,
+            capture=True,
         )
         tmp.replace(dst)
         return
-    subprocess.run(
+    run_ffmpeg(
         [str(s.ffmpeg_bin), "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(dst)],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        timeout_s=120,
+        retries=1,
+        capture=True,
     )
-
-
-def _atempo_chain(rate: float) -> str:
-    # ffmpeg atempo supports 0.5..2.0; chain if needed.
-    r = max(0.25, min(4.0, float(rate)))
-    parts: list[str] = []
-    while r > 2.0:
-        parts.append("atempo=2.0")
-        r /= 2.0
-    while r < 0.5:
-        parts.append("atempo=0.5")
-        r /= 0.5
-    parts.append(f"atempo={r:.4f}")
-    return ",".join(parts)
 
 
 def _apply_prosody_ffmpeg(
@@ -105,15 +93,15 @@ def _apply_prosody_ffmpeg(
     # Pitch shift without changing duration: asetrate then compensate with atempo.
     if abs(p - 1.0) >= 0.01:
         filters.append(f"asetrate=16000*{p:.4f}")
-        filters.append(_atempo_chain(1.0 / p))
+        filters.append(atempo_chain(1.0 / p))
     if abs(r - 1.0) >= 0.01:
-        filters.append(_atempo_chain(r))
+        filters.append(atempo_chain(r))
     if abs(e - 1.0) >= 0.01:
         filters.append(f"volume={e:.3f}")
     filt = ",".join(filters)
 
     try:
-        subprocess.run(
+        run_ffmpeg(
             [
                 str(s.ffmpeg_bin),
                 "-y",
@@ -127,9 +115,9 @@ def _apply_prosody_ffmpeg(
                 "16000",
                 str(out),
             ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            timeout_s=120,
+            retries=0,
+            capture=True,
         )
         return out
     except Exception:

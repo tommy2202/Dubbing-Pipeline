@@ -8,6 +8,12 @@ secrets/
 
 # python caches
 __pycache__/
+*.pyc
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# runtime artifacts
+logs/
+Output/
+Input/uploads/

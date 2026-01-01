@@ -61,7 +61,15 @@ def _iter_files(root: Path) -> Iterable[Path]:
 
 def purge_old_inputs(*, app_root: Path, days: int) -> int:
     cutoff = _cutoff_days(days)
-    uploads = (app_root / "Input" / "uploads").resolve()
+    # Prefer configured uploads dir (web/API); fall back to historical APP_ROOT/Input/uploads.
+    s = get_settings()
+    uploads: Path
+    if getattr(s, "input_uploads_dir", None):
+        uploads = Path(str(s.input_uploads_dir)).resolve()
+    elif getattr(s, "input_dir", None):
+        uploads = (Path(str(s.input_dir)).resolve() / "uploads").resolve()
+    else:
+        uploads = (app_root / "Input" / "uploads").resolve()
     removed = 0
     for p in _iter_files(uploads):
         try:

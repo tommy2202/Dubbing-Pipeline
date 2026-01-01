@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import subprocess
 from contextlib import suppress
 from pathlib import Path
 
-from anime_v2.config import get_settings
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from anime_v2.utils.ffmpeg_safe import extract_audio_mono_16k
 from anime_v2.utils.log import logger
 
 
@@ -42,11 +41,7 @@ def run(
         return wav
 
     wav.parent.mkdir(parents=True, exist_ok=True)
-    s = get_settings()
-    subprocess.run(
-        [str(s.ffmpeg_bin), "-y", "-i", str(video), "-ac", "1", "-ar", "16000", str(wav)],
-        check=True,
-    )
+    extract_audio_mono_16k(video, wav, timeout_s=120)
     if job_id:
         with suppress(Exception):
             write_ckpt(

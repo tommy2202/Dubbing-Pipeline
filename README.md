@@ -180,6 +180,12 @@ Defaults preserve current behavior. To enable timing-aware translation fitting +
 anime-v2 Input/Test.mp4 --timing-fit --pacing --wps 2.7 --tolerance 0.10 --pacing-min-stretch 0.88 --pacing-max-stretch 1.18
 ```
 
+Notes:
+
+- `--min-stretch` is an alias for `--pacing-min-stretch`
+- `--pace-max-stretch` is an alias for `--pacing-max-stretch`
+- `--max-stretch` (without the `pacing-` prefix) is the **legacy retime** bound used by the aligner path.
+
 Debug artifacts (per segment):
 
 ```bash

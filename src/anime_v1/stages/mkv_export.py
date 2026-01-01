@@ -40,7 +40,7 @@ def run(
     if not dubbed.exists():
         logger.info("No dubbed.wav – export skipped.")
         return
-    out_dir = out_dir or pathlib.Path("/data/out")
+    out_dir = out_dir or pathlib.Path(str(get_settings().v1_output_dir))
     out_dir.mkdir(parents=True, exist_ok=True)
     mkv_path = out_dir / f"{video.stem}_dubbed.mkv"
     srt_path = out_dir / f"{video.stem}.srt"

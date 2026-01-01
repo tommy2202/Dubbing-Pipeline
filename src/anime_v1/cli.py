@@ -1,6 +1,7 @@
 import pathlib
 
 import click
+from config.settings import get_settings
 
 from anime_v1.stages import (
     audio_extractor,
@@ -86,7 +87,7 @@ def _resolve_defaults(mode: str, lipsync: bool | None, keep_bg: bool | None, voi
 @click.option(
     "--out-dir",
     type=click.Path(file_okay=False),
-    default="/data/out",
+    default=str(get_settings().v1_output_dir),
     show_default=True,
     help="Output directory for final file",
 )

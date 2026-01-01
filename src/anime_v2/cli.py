@@ -297,12 +297,16 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 @click.option("--pacing/--no-pacing", default=bool(get_settings().pacing), show_default=True)
 @click.option(
     "--pacing-min-stretch",
+    "--min-stretch",
+    "pacing_min_stretch",
     type=float,
     default=float(get_settings().pacing_min_ratio),
     show_default=True,
 )
 @click.option(
     "--pacing-max-stretch",
+    "--pace-max-stretch",
+    "pacing_max_stretch",
     type=float,
     default=float(get_settings().pacing_max_ratio),
     show_default=True,

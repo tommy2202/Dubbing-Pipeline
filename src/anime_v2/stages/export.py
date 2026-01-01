@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 from anime_v2.config import get_settings
+from anime_v2.utils.ffmpeg_safe import run_ffmpeg
 from anime_v2.utils.log import logger
 
 
@@ -61,7 +61,7 @@ def export_mkv(video_in: Path, dub_wav: Path, srt: Path | None, out_path: Path) 
         "make_zero",
         str(out_path),
     ]
-    subprocess.run(cmd, check=True)
+    run_ffmpeg(cmd, timeout_s=600, retries=0, capture=True)
     logger.info("[v2] export mkv → %s", out_path)
     return out_path
 
@@ -123,7 +123,7 @@ def export_mp4(
         movflags.append("+separate_moof")
     cmd += ["-movflags", "".join(movflags)]
     cmd += ["-avoid_negative_ts", "make_zero", str(out_path)]
-    subprocess.run(cmd, check=True)
+    run_ffmpeg(cmd, timeout_s=900, retries=0, capture=True)
     logger.info("[v2] export mp4%s → %s", " (fragmented)" if fragmented else "", out_path)
     return out_path
 
@@ -183,7 +183,7 @@ def export_hls(video_in: Path, dub_wav: Path, srt: Path | None, out_dir: Path) -
         str(seg_pat),
         str(variant),
     ]
-    subprocess.run(cmd, check=True)
+    run_ffmpeg(cmd, timeout_s=900, retries=0, capture=True)
 
     master = out_dir / "master.m3u8"
     master.write_text(

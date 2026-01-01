@@ -26,6 +26,12 @@ def main() -> int:
         for mod in (
             "config.settings",
             "anime_v2.config",
+            "anime_v2.audio.separation",
+            "anime_v2.audio.mix",
+            "anime_v2.timing.fit_text",
+            "anime_v2.timing.pacing",
+            "anime_v2.jobs.queue",
+            "anime_v2.realtime",
             "anime_v2.server",
             "anime_v2.web.app",
             "anime_v2.cli",

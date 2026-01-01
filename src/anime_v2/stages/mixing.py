@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import Any
 
 from anime_v2.config import get_settings
 from anime_v2.stages.export import export_hls, export_mkv, export_mp4
+from anime_v2.utils.ffmpeg_safe import ffprobe_duration_seconds, run_ffmpeg
 from anime_v2.utils.log import logger
 
 
@@ -24,24 +24,8 @@ class MixConfig:
 
 def _ffprobe_duration_s(path: Path) -> float | None:
     try:
-        p = subprocess.run(
-            [
-                str(get_settings().ffprobe_bin),
-                "-v",
-                "error",
-                "-print_format",
-                "json",
-                "-show_entries",
-                "format=duration",
-                str(path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        data = json.loads(p.stdout)
-        dur = float(data["format"]["duration"])
-        return dur if dur > 0 else None
+        d = float(ffprobe_duration_seconds(path, timeout_s=20))
+        return d if d > 0 else None
     except Exception:
         return None
 
@@ -200,7 +184,7 @@ def mix(
         try:
             # Extract original audio to a demucs-friendly WAV (stereo 44.1k)
             demucs_wav = out_dir / "orig_audio_44k.wav"
-            subprocess.run(
+            run_ffmpeg(
                 [
                     str(get_settings().ffmpeg_bin),
                     "-y",
@@ -213,9 +197,9 @@ def mix(
                     "44100",
                     str(demucs_wav),
                 ],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                timeout_s=240,
+                retries=0,
+                capture=True,
             )
             bed = _run_demucs_if_enabled(
                 audio_wav=demucs_wav, out_dir=out_dir, timeout_s=int(cfg.demucs_timeout_s)
@@ -266,7 +250,7 @@ def mix(
             "pcm_s16le",
             str(mixed_wav),
         ]
-        subprocess.run(cmd, check=True)
+        run_ffmpeg(cmd, timeout_s=900, retries=0, capture=True)
 
     # Loudnorm 2-pass for streaming/broadcast
     loudnorm_pass2: str | None = None
@@ -312,8 +296,8 @@ def mix(
                 )
             cmd += [fg]
             cmd += ["-map", f"[{out_bus}]", "-f", "null", "-"]
-            p = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            meas = _parse_loudnorm_json(p.stderr)
+            p = run_ffmpeg(cmd, timeout_s=600, retries=0, capture=True)
+            meas = _parse_loudnorm_json(p.stderr if p and p.stderr else "")
             if meas:
                 loudnorm_pass2 = (
                     "loudnorm="
