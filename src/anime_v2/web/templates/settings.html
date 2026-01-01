@@ -1,0 +1,180 @@
+{% extends "_base.html" %}
+
+{% block title %}Settings • anime_v2{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Settings</h1>
+    <p class="mt-1 text-sm text-slate-400">Per-user defaults and notifications.</p>
+  </div>
+</div>
+
+<div class="mt-6 grid gap-4 lg:grid-cols-2" x-data="settingsPage()" x-init="init()">
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <h2 class="text-sm text-slate-300">Defaults (new uploads)</h2>
+    <p class="mt-1 text-xs text-slate-500">These pre-fill the Upload Wizard for your account.</p>
+
+    <div class="mt-4 grid gap-4 sm:grid-cols-2 text-sm">
+      <div>
+        <label class="block text-sm text-slate-300" for="defMode">Mode</label>
+        <select id="defMode" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3"
+                x-model="form.defaults.mode">
+          <option value="high">high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-300" for="defDevice">Device</label>
+        <select id="defDevice" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3"
+                x-model="form.defaults.device">
+          <option value="auto">auto</option>
+          <option value="cpu">cpu</option>
+          <option value="cuda">cuda</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-300" for="defSrc">Source lang</label>
+        <input id="defSrc" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3"
+               placeholder="ja" x-model="form.defaults.src_lang" />
+      </div>
+      <div>
+        <label class="block text-sm text-slate-300" for="defTgt">Target lang</label>
+        <input id="defTgt" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3"
+               placeholder="en" x-model="form.defaults.tgt_lang" />
+      </div>
+      <div>
+        <label class="block text-sm text-slate-300" for="defTtsLang">TTS lang</label>
+        <input id="defTtsLang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3"
+               placeholder="en" x-model="form.defaults.tts_lang" />
+      </div>
+      <div>
+        <label class="block text-sm text-slate-300" for="defTtsSpeaker">TTS speaker</label>
+        <input id="defTtsSpeaker" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3"
+               placeholder="default" x-model="form.defaults.tts_speaker" />
+      </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      <button class="rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-3 text-sm font-medium" @click="save()">
+        Save
+      </button>
+      <div class="text-sm text-red-200" role="alert" aria-live="polite" x-show="error" x-cloak x-text="error"></div>
+      <div class="text-sm text-emerald-200" aria-live="polite" x-show="toast" x-cloak x-text="toast"></div>
+    </div>
+  </div>
+
+  <div class="space-y-4">
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <h2 class="text-sm text-slate-300">Notifications</h2>
+      <p class="mt-1 text-xs text-slate-500">Optional. Webhook test uses outbound network access.</p>
+
+      <div class="mt-4 grid gap-4 text-sm">
+        <div>
+          <label class="block text-sm text-slate-300" for="notifEmail">Email (stored only)</label>
+          <input id="notifEmail" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3"
+                 placeholder="you@example.com" x-model="form.notifications.email" />
+          <div class="mt-1 text-xs text-slate-500">Delivery not implemented yet; kept for future.</div>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300" for="notifDiscord">Discord webhook</label>
+          <input id="notifDiscord" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3"
+                 placeholder="https://discord.com/api/webhooks/..." x-model="form.notifications.discord_webhook" />
+        </div>
+      </div>
+
+      <div class="mt-4 flex flex-wrap items-center gap-2">
+        <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" @click="save()">
+          Save notifications
+        </button>
+        <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
+                @click="sendTest()" :disabled="sendingTest">
+          <span x-show="!sendingTest">Send test</span>
+          <span x-show="sendingTest" x-cloak>Sending…</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <h2 class="text-sm text-slate-300">Runtime limits (read-only)</h2>
+      <div class="mt-3 text-sm text-slate-200 space-y-1">
+        <div><span class="text-slate-500">MAX_CONCURRENCY_GLOBAL:</span> {{ system.limits.max_concurrency_global }}</div>
+        <div><span class="text-slate-500">MAX_CONCURRENCY_TRANSCRIBE:</span> {{ system.limits.max_concurrency_transcribe }}</div>
+        <div><span class="text-slate-500">MAX_CONCURRENCY_TTS:</span> {{ system.limits.max_concurrency_tts }}</div>
+        <div><span class="text-slate-500">BACKPRESSURE_Q_MAX:</span> {{ system.limits.backpressure_q_max }}</div>
+      </div>
+
+      <h3 class="mt-4 text-sm text-slate-300">Latency budgets (read-only)</h3>
+      <div class="mt-2 text-sm text-slate-200 space-y-1">
+        <div><span class="text-slate-500">BUDGET_TRANSCRIBE_SEC:</span> {{ system.budgets.budget_transcribe_sec }}</div>
+        <div><span class="text-slate-500">BUDGET_TTS_SEC:</span> {{ system.budgets.budget_tts_sec }}</div>
+        <div><span class="text-slate-500">BUDGET_MUX_SEC:</span> {{ system.budgets.budget_mux_sec }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function settingsPage() {
+    return {
+      error: "",
+      toast: "",
+      sendingTest: false,
+      form: {
+        defaults: {
+          mode: "{{ ((cfg.defaults.mode if cfg and cfg.defaults and cfg.defaults.mode else 'medium') | e) }}",
+          device: "{{ ((cfg.defaults.device if cfg and cfg.defaults and cfg.defaults.device else 'auto') | e) }}",
+          src_lang: "{{ ((cfg.defaults.src_lang if cfg and cfg.defaults and cfg.defaults.src_lang else 'ja') | e) }}",
+          tgt_lang: "{{ ((cfg.defaults.tgt_lang if cfg and cfg.defaults and cfg.defaults.tgt_lang else 'en') | e) }}",
+          tts_lang: "{{ ((cfg.defaults.tts_lang if cfg and cfg.defaults and cfg.defaults.tts_lang else 'en') | e) }}",
+          tts_speaker: "{{ ((cfg.defaults.tts_speaker if cfg and cfg.defaults and cfg.defaults.tts_speaker else 'default') | e) }}",
+        },
+        notifications: {
+          email: "{{ ((cfg.notifications.email if cfg and cfg.notifications and cfg.notifications.email else '') | e) }}",
+          discord_webhook: "{{ ((cfg.notifications.discord_webhook if cfg and cfg.notifications and cfg.notifications.discord_webhook else '') | e) }}",
+        },
+      },
+      init() {},
+      async save() {
+        this.error = "";
+        this.toast = "";
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/settings", {
+          method: "PUT",
+          credentials: "include",
+          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify(this.form),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this.error = d.detail || ("Save failed (" + r.status + ")");
+          return;
+        }
+        this.toast = "Saved.";
+        setTimeout(() => { this.toast = ""; }, 1200);
+      },
+      async sendTest() {
+        this.error = "";
+        this.toast = "";
+        this.sendingTest = true;
+        try {
+          await this.save();
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/settings/notifications/test", { method: "POST", credentials: "include", headers: { "X-CSRF-Token": csrf }});
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.error = d.detail || ("Test failed (" + r.status + ")");
+            return;
+          }
+          this.toast = "Test sent.";
+          setTimeout(() => { this.toast = ""; }, 1500);
+        } finally {
+          this.sendingTest = false;
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}
+

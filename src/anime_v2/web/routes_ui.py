@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
 from anime_v2.api.deps import current_identity
+from anime_v2.api.routes_settings import UserSettingsStore
 from anime_v2.api.security import issue_csrf_token
 from anime_v2.config import get_settings
 
@@ -54,6 +55,11 @@ def _render(request: Request, template: str, ctx: dict[str, Any]) -> HTMLRespons
     resp = templates.TemplateResponse(request, template, context)
     _with_csrf_cookie(resp, csrf)
     return resp
+
+
+def _user_settings_store(request: Request) -> UserSettingsStore | None:
+    st = getattr(request.app.state, "user_settings_store", None)
+    return st if isinstance(st, UserSettingsStore) else None
 
 
 @router.get("/health")
@@ -111,7 +117,16 @@ async def ui_upload(request: Request) -> HTMLResponse:
     user = _current_user_optional(request)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
-    return _render(request, "upload_wizard.html", {})
+    defaults: dict[str, Any] = {}
+    try:
+        st = _user_settings_store(request)
+        if st is not None:
+            cfg = st.get_user(user.id)
+            if isinstance(cfg.get("defaults"), dict):
+                defaults = dict(cfg.get("defaults") or {})
+    except Exception:
+        defaults = {}
+    return _render(request, "upload_wizard.html", {"user_defaults": defaults})
 
 
 @router.get("/presets")
@@ -128,4 +143,39 @@ async def ui_projects(request: Request) -> HTMLResponse:
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
     return _render(request, "projects.html", {})
+
+
+@router.get("/settings")
+async def ui_settings(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    st = _user_settings_store(request)
+    cfg = {}
+    if st is not None:
+        try:
+            cfg = st.get_user(user.id)
+        except Exception:
+            cfg = {}
+    s = get_settings()
+    return _render(
+        request,
+        "settings.html",
+        {
+            "cfg": cfg,
+            "system": {
+                "limits": {
+                    "max_concurrency_global": int(s.max_concurrency_global),
+                    "max_concurrency_transcribe": int(s.max_concurrency_transcribe),
+                    "max_concurrency_tts": int(s.max_concurrency_tts),
+                    "backpressure_q_max": int(s.backpressure_q_max),
+                },
+                "budgets": {
+                    "budget_transcribe_sec": int(s.budget_transcribe_sec),
+                    "budget_tts_sec": int(s.budget_tts_sec),
+                    "budget_mux_sec": int(s.budget_mux_sec),
+                },
+            },
+        },
+    )
 

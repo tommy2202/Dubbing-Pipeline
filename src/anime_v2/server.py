@@ -22,6 +22,7 @@ from anime_v2.api.models import AuthStore, Role, User, now_ts
 from anime_v2.api.routes_auth import router as auth_router
 from anime_v2.api.routes_keys import router as keys_router
 from anime_v2.api.routes_runtime import router as runtime_router
+from anime_v2.api.routes_settings import UserSettingsStore, router as settings_router
 from anime_v2.config import get_settings
 from anime_v2.jobs.queue import JobQueue
 from anime_v2.jobs.store import JobStore
@@ -50,6 +51,11 @@ TEMPLATES = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure clean boot state (tests reuse the same process).
+    try:
+        lifecycle.end_draining()
+    except Exception:
+        pass
     # core pipeline stores
     out_root = _output_root()
     store = JobStore(out_root / "jobs.db")
@@ -84,6 +90,11 @@ async def lifespan(app: FastAPI):
     auth_store = AuthStore(out_root / "auth.db")
     app.state.auth_store = auth_store
     app.state.rate_limiter = RateLimiter()
+    # per-user UI/API settings (stored on disk, default under ~/.anime_v2/settings.json)
+    try:
+        app.state.user_settings_store = UserSettingsStore()
+    except Exception:
+        app.state.user_settings_store = None
 
     # bootstrap admin user
     s = get_settings()
@@ -213,6 +224,7 @@ app.include_router(auth_router)
 app.include_router(auth_router, prefix="/api")
 app.include_router(keys_router)
 app.include_router(runtime_router)
+app.include_router(settings_router)
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
 app.include_router(ui_router)
