@@ -8,6 +8,7 @@ from anime_v2.utils.log import logger
 from anime_v2.utils.time import format_srt_timestamp
 from anime_v2.utils.net import egress_guard
 from anime_v2.runtime.model_manager import ModelManager
+from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 
 
 def _write_srt(segments: list[dict], srt_path: Path) -> None:
@@ -29,6 +30,7 @@ def transcribe(
     src_lang: str,
     *,
     tgt_lang: str = "en",
+    job_id: str | None = None,
 ) -> Path:
     """
     Whisper transcription/translation producing SRT and JSON metadata next to it.
@@ -61,6 +63,14 @@ def transcribe(
 
     t0 = time.perf_counter()
 
+    ckpt_path = srt_out.parent / ".checkpoint.json"
+    if job_id:
+        ckpt = read_ckpt(job_id, ckpt_path=ckpt_path)
+        meta_path = srt_out.with_suffix(".json")
+        if srt_out.exists() and meta_path.exists() and stage_is_done(ckpt, "transcribe"):
+            logger.info("[v2] transcribe stage checkpoint hit")
+            return srt_out
+
     try:
         import whisper  # type: ignore
     except Exception as ex:  # pragma: no cover
@@ -86,6 +96,17 @@ def transcribe(
         }
         meta_path = srt_out.with_suffix(".json")
         meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+        if job_id:
+            try:
+                write_ckpt(
+                    job_id,
+                    "transcribe",
+                    {"srt": srt_out, "meta": meta_path},
+                    {"work_dir": str(srt_out.parent), "model": model_name, "device": device, "task": task},
+                    ckpt_path=ckpt_path,
+                )
+            except Exception:
+                pass
         return srt_out
 
     with egress_guard():
@@ -139,6 +160,18 @@ def transcribe(
     }
     meta_path = srt_out.with_suffix(".json")
     meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+
+    if job_id:
+        try:
+            write_ckpt(
+                job_id,
+                "transcribe",
+                {"srt": srt_out, "meta": meta_path},
+                {"work_dir": str(srt_out.parent), "model": model_name, "device": device, "task": task},
+                ckpt_path=ckpt_path,
+            )
+        except Exception:
+            pass
 
     logger.info("[v2] Wrote SRT → %s", srt_out)
     logger.info("[v2] Wrote metadata → %s", meta_path)

@@ -10,6 +10,7 @@ from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
+from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 
 
 class TTSCanceled(Exception):
@@ -117,6 +118,7 @@ def run(
     progress_cb=None,
     cancel_cb=None,
     max_stretch: float = 0.15,
+    job_id: str | None = None,
     **_,
 ) -> Path:
     """
@@ -128,6 +130,7 @@ def run(
     """
     settings = get_settings()
     out_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path = out_dir / ".checkpoint.json"
 
     # Optional per-speaker preset mapping (voice bank map):
     #   {"SPEAKER_01": "alice", "SPEAKER_02": "bob"}
@@ -338,6 +341,13 @@ def run(
         # default: <stem>.tts.wav (stem is output folder name)
         wav_out = out_dir / f"{out_dir.name}.tts.wav"
 
+    if job_id:
+        ckpt = read_ckpt(job_id, ckpt_path=ckpt_path)
+        manifest = out_dir / "tts_manifest.json"
+        if wav_out.exists() and manifest.exists() and stage_is_done(ckpt, "tts"):
+            logger.info("[v2] tts stage checkpoint hit")
+            return wav_out
+
     render_aligned_track(lines, clip_paths, wav_out)
 
     # Optional metadata
@@ -348,6 +358,12 @@ def run(
         )
     except Exception:
         pass
+
+    if job_id:
+        try:
+            write_ckpt(job_id, "tts", {"tts_wav": wav_out, "manifest": out_dir / "tts_manifest.json"}, {"work_dir": str(out_dir)}, ckpt_path=ckpt_path)
+        except Exception:
+            pass
 
     logger.info("[v2] TTS done → %s", wav_out)
     return wav_out

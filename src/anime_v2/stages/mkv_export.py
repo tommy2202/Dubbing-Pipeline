@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from anime_v2.utils.log import logger
+from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 
 
 def _ffprobe_duration_s(path: Path) -> float | None:
@@ -31,7 +32,7 @@ def _ffprobe_duration_s(path: Path) -> float | None:
         return None
 
 
-def mux(src_video: Path, dub_wav: Path, srt_path: Path | None, out_mkv: Path) -> Path:
+def mux(src_video: Path, dub_wav: Path, srt_path: Path | None, out_mkv: Path, *, job_id: str | None = None) -> Path:
     """
     Mux:
       - video copied (no re-encode)
@@ -43,6 +44,12 @@ def mux(src_video: Path, dub_wav: Path, srt_path: Path | None, out_mkv: Path) ->
       - audio padded/truncated to match video duration (best-effort)
     """
     out_mkv.parent.mkdir(parents=True, exist_ok=True)
+    ckpt_path = out_mkv.parent / ".checkpoint.json"
+    if job_id and out_mkv.exists():
+        ckpt = read_ckpt(job_id, ckpt_path=ckpt_path)
+        if stage_is_done(ckpt, "mux"):
+            logger.info("[v2] mux stage checkpoint hit")
+            return out_mkv
 
     vid_dur = _ffprobe_duration_s(src_video)
     if vid_dur is None:
@@ -127,6 +134,18 @@ def mux(src_video: Path, dub_wav: Path, srt_path: Path | None, out_mkv: Path) ->
     except Exception as ex:
         logger.warning("[v2] loudnorm failed; retrying with volume filter (%s)", ex)
         _run(vol_filter)
+
+    if job_id:
+        try:
+            write_ckpt(
+                job_id,
+                "mux",
+                {"mkv": out_mkv},
+                {"work_dir": str(out_mkv.parent), "src_video": str(src_video), "dub_wav": str(dub_wav)},
+                ckpt_path=ckpt_path,
+            )
+        except Exception:
+            pass
 
     logger.info("[v2] mux complete → %s", out_mkv)
     return out_mkv
