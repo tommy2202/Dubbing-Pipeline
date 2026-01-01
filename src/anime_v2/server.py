@@ -20,6 +20,7 @@ from anime_v2.api.deps import require_role, require_scope
 from anime_v2.api.middleware import request_context_middleware
 from anime_v2.api.models import AuthStore, Role, User, now_ts
 from anime_v2.api.routes_auth import router as auth_router
+from anime_v2.api.routes_audit import router as audit_router
 from anime_v2.api.routes_keys import router as keys_router
 from anime_v2.api.routes_runtime import router as runtime_router
 from anime_v2.api.routes_settings import UserSettingsStore, router as settings_router
@@ -222,6 +223,7 @@ app.add_middleware(
 app.include_router(auth_router)
 # Also expose auth endpoints under /api/auth/* for browser-friendly UI wiring.
 app.include_router(auth_router, prefix="/api")
+app.include_router(audit_router)
 app.include_router(keys_router)
 app.include_router(runtime_router)
 app.include_router(settings_router)

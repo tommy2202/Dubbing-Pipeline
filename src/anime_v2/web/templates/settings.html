@@ -149,9 +149,11 @@
         const d = await r.json().catch(() => ({}));
         if (!r.ok) {
           this.error = d.detail || ("Save failed (" + r.status + ")");
+          try { window.showToast(this.error, "error"); } catch (e) {}
           return;
         }
         this.toast = "Saved.";
+        try { window.showToast("Settings saved", "success"); } catch (e) {}
         setTimeout(() => { this.toast = ""; }, 1200);
       },
       async sendTest() {
@@ -165,9 +167,11 @@
           const d = await r.json().catch(() => ({}));
           if (!r.ok) {
             this.error = d.detail || ("Test failed (" + r.status + ")");
+            try { window.showToast(this.error, "error"); } catch (e) {}
             return;
           }
           this.toast = "Test sent.";
+          try { window.showToast("Test sent", "success"); } catch (e) {}
           setTimeout(() => { this.toast = ""; }, 1500);
         } finally {
           this.sendingTest = false;

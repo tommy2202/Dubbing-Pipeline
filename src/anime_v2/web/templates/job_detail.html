@@ -420,13 +420,16 @@
           const data = await r.json().catch(() => ({}));
           if (!r.ok) {
             this.voiceError = data.detail || ("Save failed (" + r.status + ")");
+            try { window.showToast(this.voiceError, "error"); } catch (e) {}
             return;
           }
           this.voiceItems = Array.isArray(data.items) ? data.items : this.voiceItems;
           this.voiceSaved = true;
+          try { window.showToast("Saved speaker mapping", "success"); } catch (e) {}
           setTimeout(() => { this.voiceSaved = false; }, 1500);
         } catch (e) {
           this.voiceError = "Save failed";
+          try { window.showToast(this.voiceError, "error"); } catch (e) {}
         }
       },
       async doAction(action) {
