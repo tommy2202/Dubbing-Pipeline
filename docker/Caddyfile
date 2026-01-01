@@ -1,0 +1,14 @@
+:443 {
+  encode zstd gzip
+
+  # Basic hardening headers (add CSP when you know your frontend needs)
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "no-referrer"
+  }
+
+  reverse_proxy api:8080
+}
+

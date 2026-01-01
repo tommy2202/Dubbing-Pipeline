@@ -1,0 +1,14 @@
+{
+  "audio_path": "/workspace/Output/sample/audio.wav",
+  "segments": [
+    {
+      "conf": 0.3,
+      "diar_label": "SPEAKER_01",
+      "end": 7.7100000000000195,
+      "speaker_id": "SPEAKER_01",
+      "start": 0.0,
+      "wav_path": "/workspace/Output/sample/segments/0000_SPEAKER_01.wav"
+    }
+  ],
+  "speaker_embeddings": {}
+}

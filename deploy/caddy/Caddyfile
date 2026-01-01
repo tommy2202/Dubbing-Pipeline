@@ -1,0 +1,30 @@
+{
+	# Optional: set email via env
+	email {$CADDY_EMAIL}
+	# Keep logs simple; app itself emits structured JSON.
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Hardened headers
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		# Minimal CSP; adjust if you embed other origins
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; script-src 'self'; style-src 'self' 'unsafe-inline'"
+		-Server
+	}
+
+	# Reverse proxy to the app container
+	reverse_proxy api:8080 {
+		# Preserve original client IP info
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-For {remote}
+	}
+}
+

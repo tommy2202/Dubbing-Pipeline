@@ -1,0 +1,12 @@
+{
+  "label_map": {
+    "SPEAKER_00": "Speaker1"
+  },
+  "speakers": {
+    "Speaker1": {
+      "count": 0,
+      "embedding_path": "/workspace/voices/embeddings/Speaker1.npy"
+    }
+  },
+  "version": 1
+}

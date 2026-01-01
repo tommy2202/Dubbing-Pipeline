@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=68.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,85 @@ version = "1.0.0b0"
 authors = [{name="Your Name"}]
 description = "Offline anime dubbing suite - Version 1 slice 1"
 readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "click>=8.1.0",
+  "fastapi>=0.110.0",
+  "uvicorn>=0.27.0",
+  "jinja2>=3.1.0",
+  "python-multipart>=0.0.9",
+  "aiofiles>=23.2.1",
+  "qrcode>=7.4.2",
+  "pillow>=10.4.0",
+  "sqlitedict>=2.1.0",
+  "websockets>=12.0",
+  "sse-starlette>=2.1.2",
+  "pydantic>=2.9.2",
+  "pydantic-settings>=2.6.1",
+  "itsdangerous>=2.2.0",
+  "pyjwt>=2.9.0",
+  "argon2-cffi>=23.1.0",
+  "pyotp>=2.9.0",
+  "redis>=5.1.1",
+  "slowapi>=0.1.9",
+  "structlog>=24.4.0",
+  "opentelemetry-sdk>=1.27.0",
+  "opentelemetry-exporter-otlp>=1.27.0",
+  "opentelemetry-instrumentation-fastapi>=0.48b0",
+  "prometheus-client>=0.21.0",
+  "cryptography>=43.0.0",
+]
+
+[project.optional-dependencies]
+diarization = [
+  "numpy>=1.24",
+  "pyannote.audio>=3.1.0",
+  "resemblyzer>=0.1.4",
+  "torch>=2.0.0",
+]
+translation = [
+  "langdetect>=1.0.9",
+  "transformers>=4.45.0",
+  "sentencepiece>=0.2.0",
+  "sacremoses>=0.1.1",
+]
+tts = [
+  "numpy>=1.24",
+  "resemblyzer>=0.1.4",
+  "TTS>=0.22.0",
+]
+
+align = [
+  "aeneas>=1.7.3",
+  "librosa>=0.11.0",
+  "pyloudnorm>=0.1.1",
+]
+
+mixing = [
+  "demucs>=4.0.1",
+]
+dev = [
+  "pytest>=8.0.0",
+]
+
+webrtc = [
+  "aiortc==1.9.0",
+  "av==12.3.0",
+]
 
 [project.scripts]
 anime-v1 = "anime_v1.cli:cli"
+anime-v2 = "anime_v2.cli:cli"
+anime-v2-web = "anime_v2.web.run:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["anime_v1*", "anime_v2*"]
+
+[tool.pytest.ini_options]
+markers = [
+  "smoke: minimal integration smoke tests",
+]

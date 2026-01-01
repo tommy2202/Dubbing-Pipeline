@@ -1,0 +1,204 @@
+<div x-data="transcriptEditor('{{ job_id }}')"
+     x-init="init()"
+     class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <div class="text-sm text-slate-300">Transcript (target text)</div>
+      <div class="mt-1 text-xs text-slate-500">
+        Edit target text only. Approve segments you want to synthesize.
+        <span x-show="version !== null">Version: <span x-text="version"></span></span>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+              @click="saveNow()" :disabled="saving || Object.keys(dirty).length===0 || {{ 'true' if (user and user.role and user.role.value == 'viewer') else 'false' }}">
+        <span x-show="!saving">Save</span>
+        <span x-show="saving" x-cloak>Saving…</span>
+      </button>
+      <button class="rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-3 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+              @click="synthesizeApproved()" :disabled="synthRunning || {{ 'true' if (user and user.role and user.role.value == 'viewer') else 'false' }}">
+        Synthesize from Approved
+      </button>
+    </div>
+  </div>
+  {% if user and user.role and user.role.value == "viewer" %}
+    <div class="mt-2 text-sm text-slate-500">Viewer role: read-only.</div>
+  {% endif %}
+
+  <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="error" x-cloak x-text="error"></div>
+  <div class="mt-3 text-sm text-emerald-200" aria-live="polite" x-show="toast" x-cloak x-text="toast"></div>
+
+  <div class="mt-4 flex items-center justify-between gap-2 text-sm">
+    <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+            @click="prevPage()" :disabled="page<=1">Prev</button>
+    <div class="text-slate-400">
+      Page <span x-text="page"></span> / <span x-text="totalPages"></span>
+      (<span x-text="total"></span> segments)
+    </div>
+    <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+            @click="nextPage()" :disabled="page>=totalPages">Next</button>
+  </div>
+
+  <div class="mt-4 space-y-3">
+    <template x-for="seg in items" :key="seg.index">
+      <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="text-xs font-mono text-slate-400">
+            #<span x-text="seg.index"></span>
+            <span class="ml-2" x-text="seg.start"></span> → <span x-text="seg.end"></span>
+          </div>
+          <div class="flex items-center gap-4 text-xs text-slate-300">
+            <label class="flex items-center gap-2">
+              <input type="checkbox" class="h-5 w-5"
+                     :checked="!!seg.approved"
+                     @change="seg.approved = $event.target.checked; markDirty(seg)">
+              <span>Approved</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" class="h-5 w-5"
+                     :checked="hasFlag(seg,'needs_retranslate')"
+                     @change="toggleFlag(seg,'needs_retranslate',$event.target.checked); markDirty(seg)">
+              <span>Needs re-translate</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="mt-3 grid gap-3 lg:grid-cols-2">
+          <div>
+            <div class="text-xs text-slate-500">Source (read-only)</div>
+            <div class="mt-1 whitespace-pre-wrap rounded bg-black/20 border border-slate-900 p-2 text-sm text-slate-300"
+                 x-text="seg.src_text || ''"></div>
+          </div>
+          <div>
+            <div class="text-xs text-slate-500">Target (editable)</div>
+            <textarea class="mt-1 w-full min-h-[96px] rounded bg-slate-950 border border-slate-800 p-3 text-sm text-slate-100 {% if user and user.role and user.role.value == 'viewer' %}opacity-80{% endif %}"
+                      :value="seg.tgt_text || ''"
+                      @input="seg.tgt_text = $event.target.value; markDirty(seg)"
+                      :aria-label="`Target text for segment ${seg.index}`"
+                      {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}
+                      placeholder="(target text)"></textarea>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+  function transcriptEditor(jobId) {
+    return {
+      jobId,
+      page: 1,
+      perPage: 50,
+      total: 0,
+      totalPages: 1,
+      version: null,
+      items: [],
+      dirty: {}, // index -> patch
+      saving: false,
+      synthRunning: false,
+      error: "",
+      toast: "",
+      _debounce: null,
+      async init() {
+        await this.loadPage(1);
+      },
+      hasFlag(seg, flag) {
+        const f = seg.flags;
+        if (!f) return false;
+        if (Array.isArray(f)) return f.includes(flag);
+        return false;
+      },
+      toggleFlag(seg, flag, on) {
+        let f = seg.flags;
+        if (!Array.isArray(f)) f = [];
+        const set = new Set(f);
+        if (on) set.add(flag);
+        else set.delete(flag);
+        seg.flags = Array.from(set);
+      },
+      async loadPage(p) {
+        this.error = "";
+        try {
+          const r = await fetch(`/api/jobs/${encodeURIComponent(this.jobId)}/transcript?page=${p}&per_page=${this.perPage}`, { credentials: "include" });
+          if (!r.ok) return;
+          const data = await r.json();
+          this.items = Array.isArray(data.items) ? data.items : [];
+          this.total = Number(data.total || 0);
+          this.page = Number(data.page || 1);
+          this.perPage = Number(data.per_page || this.perPage);
+          this.totalPages = Math.max(1, Math.ceil(this.total / this.perPage));
+          this.version = (data.version === undefined) ? null : data.version;
+        } catch (e) {}
+      },
+      prevPage() { if (this.page > 1) this.loadPage(this.page - 1); },
+      nextPage() { if (this.page < this.totalPages) this.loadPage(this.page + 1); },
+      markDirty(seg) {
+        this.dirty[String(seg.index)] = {
+          index: seg.index,
+          tgt_text: seg.tgt_text,
+          approved: !!seg.approved,
+          flags: Array.isArray(seg.flags) ? seg.flags : [],
+        };
+        if (this._debounce) clearTimeout(this._debounce);
+        this._debounce = setTimeout(() => this.saveNow(), 900);
+      },
+      async saveNow() {
+        const keys = Object.keys(this.dirty);
+        if (!keys.length) return;
+        this.saving = true;
+        this.error = "";
+        this.toast = "";
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const updates = keys.map(k => this.dirty[k]);
+          const r = await fetch(`/api/jobs/${encodeURIComponent(this.jobId)}/transcript`, {
+            method: "PUT",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ updates }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.error = data.detail || ("Save failed (" + r.status + ")");
+            return;
+          }
+          this.dirty = {};
+          if (data.version !== undefined) this.version = data.version;
+          this.toast = "Saved.";
+          setTimeout(() => { this.toast = ""; }, 1200);
+        } catch (e) {
+          this.error = "Save failed";
+        } finally {
+          this.saving = false;
+        }
+      },
+      async synthesizeApproved() {
+        this.synthRunning = true;
+        this.error = "";
+        this.toast = "";
+        try {
+          await this.saveNow();
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch(`/api/jobs/${encodeURIComponent(this.jobId)}/transcript/synthesize`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "X-CSRF-Token": csrf },
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.error = data.detail || ("Synthesize failed (" + r.status + ")");
+            return;
+          }
+          this.toast = "Synthesis queued.";
+          setTimeout(() => { this.toast = ""; }, 1500);
+        } catch (e) {
+          this.error = "Synthesize failed";
+        } finally {
+          this.synthRunning = false;
+        }
+      },
+    };
+  }
+</script>
+

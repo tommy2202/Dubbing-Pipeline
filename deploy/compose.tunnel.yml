@@ -1,0 +1,47 @@
+services:
+  api:
+    image: ${GHCR_IMAGE:-ghcr.io/REPLACE_ME/anime-v2:latest}
+    environment:
+      - APP_ROOT=/app
+      - ANIME_V2_OUTPUT_DIR=/app/Output
+      - ANIME_V2_LOG_DIR=/app/logs
+      - JOBS_CONCURRENCY=${JOBS_CONCURRENCY:-1}
+      # If you use browser cookies through a tunnel, secure cookies are recommended.
+      - COOKIE_SECURE=1
+      # If you have a stable hostname, set it here:
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+    env_file:
+      - ../.env
+    volumes:
+      - ../Output:/app/Output
+      - ../data:/app/data
+      - ../logs:/app/logs
+      - api_cache:/home/appuser/.cache
+      - api_local:/home/appuser/.local
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  cloudflared:
+    image: cloudflare/cloudflared:2024.12.0
+    depends_on:
+      api:
+        condition: service_healthy
+    # Zero inbound ports: cloudflared makes outbound-only tunnel.
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    environment:
+      - TUNNEL_METRICS=0.0.0.0:2000
+    restart: unless-stopped
+
+volumes:
+  api_cache:
+  api_local:
+

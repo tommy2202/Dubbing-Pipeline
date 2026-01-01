@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{% block title %}anime_v2{% endblock %}</title>
+
+    <script>
+      // Theme + contrast before paint (persisted in localStorage)
+      (function () {
+        try {
+          const t = localStorage.getItem("theme") || "system"; // system|light|dark
+          const hc = (localStorage.getItem("contrast") || "0") === "1";
+          const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          const dark = (t === "dark") || (t === "system" && prefersDark);
+          const root = document.documentElement;
+          root.classList.toggle("dark", !!dark);
+          root.classList.toggle("hc", !!hc);
+        } catch (e) {}
+      })();
+    </script>
+
+    <!-- Tailwind (CDN, no build step) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: { extend: {} },
+      };
+    </script>
+
+    <!-- HTMX + Alpine (CDN) -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <style>
+      /* Visible focus rings (keyboard) */
+      :where(a, button, input, textarea, select):focus-visible {
+        outline: 2px solid rgb(99 102 241);
+        outline-offset: 2px;
+      }
+      /* High-contrast mode tweaks */
+      .hc body { color: #fff; background: #000; }
+      .hc .border-slate-800 { border-color: #fff !important; }
+      .hc .text-slate-500, .hc .text-slate-400 { color: #e5e7eb !important; }
+      .hc .bg-slate-950 { background: #000 !important; }
+      .hc .bg-slate-900\/40, .hc .bg-slate-900\/50, .hc .bg-slate-950\/20, .hc .bg-slate-950\/30, .hc .bg-slate-950\/40 { background: #000 !important; }
+    </style>
+  </head>
+
+  <body class="min-h-full bg-slate-950 text-slate-100">
+    <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 rounded bg-indigo-600 px-3 py-2 text-sm">
+      Skip to content
+    </a>
+    <!-- CSRF token for JS/HTMX -->
+    <input type="hidden" id="csrf" value="{{ csrf_token }}" />
+
+    <div class="mx-auto max-w-6xl px-4">
+      <header class="flex flex-wrap items-center justify-between gap-3 py-4">
+        <div class="flex items-center gap-3">
+          <a href="/ui/dashboard" class="text-lg font-semibold tracking-tight">anime_v2</a>
+          <span class="text-xs text-slate-400 hidden sm:inline">dub pipeline</span>
+        </div>
+
+        <nav class="flex flex-wrap items-center gap-3 text-sm" aria-label="Primary">
+          <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/dashboard">Dashboard</a>
+          {% if user and user.role and user.role.value != "viewer" %}
+          <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/upload">Upload</a>
+          {% endif %}
+          <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/presets">Presets</a>
+          <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/projects">Projects</a>
+          <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/settings">Settings</a>
+
+          <label class="sr-only" for="themeSel">Theme</label>
+          <select id="themeSel" class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-sm"
+                  onchange="try{localStorage.setItem('theme', this.value); location.reload();}catch(e){}">
+            <option value="system">system</option>
+            <option value="dark">dark</option>
+            <option value="light">light</option>
+          </select>
+
+          <button type="button"
+                  class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+                  onclick="try{const v=(localStorage.getItem('contrast')||'0')==='1'?'0':'1'; localStorage.setItem('contrast',v); location.reload();}catch(e){}"
+                  aria-pressed="false"
+                  id="hcBtn">
+            Contrast
+          </button>
+
+          <a
+            class="text-slate-200 hover:text-white"
+            href="#"
+            x-data
+            @click.prevent="
+              fetch('/api/auth/logout', {method:'POST', headers: {'X-CSRF-Token': document.getElementById('csrf').value}})
+                .finally(() => window.location='/ui/login');
+            "
+          >Logout</a>
+        </nav>
+      </header>
+
+      <main id="main" class="pb-10" tabindex="-1">
+        {% block content %}{% endblock %}
+      </main>
+
+      <footer class="py-6 text-xs text-slate-500">
+        <div class="flex items-center justify-between">
+          <div>© {{ (now() if now is defined else '') }} anime_v2</div>
+          <div class="hidden sm:block">CSRF set • cookies lax</div>
+        </div>
+      </footer>
+    </div>
+
+    <!-- Toasts (non-intrusive) -->
+    <div id="toastStack"
+         class="fixed top-3 right-3 z-50 w-[min(92vw,420px)] space-y-2"
+         role="status" aria-live="polite" aria-relevant="additions text">
+    </div>
+
+    <script>
+      // init theme selector + aria state for contrast
+      (function () {
+        try {
+          const sel = document.getElementById("themeSel");
+          if (sel) sel.value = localStorage.getItem("theme") || "system";
+          const hc = (localStorage.getItem("contrast") || "0") === "1";
+          const btn = document.getElementById("hcBtn");
+          if (btn) btn.setAttribute("aria-pressed", hc ? "true" : "false");
+        } catch (e) {}
+      })();
+
+      // Attach CSRF to HTMX requests (if used)
+      document.body.addEventListener("htmx:configRequest", function (evt) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          if (csrf) evt.detail.headers["X-CSRF-Token"] = csrf;
+        } catch (e) {}
+      });
+
+      // Toast helper
+      (function () {
+        function toast(msg, kind) {
+          try {
+            const text = String(msg || "").trim();
+            if (!text) return;
+            const k = String(kind || "info").toLowerCase();
+            const stack = document.getElementById("toastStack");
+            if (!stack) return;
+            const el = document.createElement("div");
+            const base = "rounded-lg border px-4 py-3 text-sm shadow-lg backdrop-blur";
+            const cls =
+              k === "success" ? "border-emerald-800 bg-emerald-950/70 text-emerald-50" :
+              k === "error" ? "border-red-800 bg-red-950/70 text-red-50" :
+              "border-slate-700 bg-slate-950/70 text-slate-50";
+            el.className = base + " " + cls;
+            el.tabIndex = 0;
+            el.innerHTML = `<div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">${text.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")}</div>
+              <button type="button" class="shrink-0 rounded bg-black/20 hover:bg-black/30 px-2 py-1 text-xs"
+                      aria-label="Dismiss notification">Close</button>
+            </div>`;
+            const btn = el.querySelector("button");
+            if (btn) btn.addEventListener("click", () => { try { el.remove(); } catch (e) {} });
+            stack.appendChild(el);
+            // cap stack
+            while (stack.children.length > 4) stack.removeChild(stack.firstElementChild);
+            // auto dismiss
+            setTimeout(() => { try { el.remove(); } catch (e) {} }, 5000);
+          } catch (e) {}
+        }
+        window.showToast = toast;
+        window.dispatchToast = function (message, kind) {
+          try {
+            window.dispatchEvent(new CustomEvent("toast", { detail: { message, kind } }));
+          } catch (e) {}
+        };
+        window.addEventListener("toast", (evt) => {
+          try {
+            const d = evt && evt.detail ? evt.detail : {};
+            toast(d.message || "", d.kind || "info");
+          } catch (e) {}
+        });
+      })();
+
+      // If an HTMX response is JSON with {toast:"..."} show it.
+      document.body.addEventListener("htmx:afterRequest", function (evt) {
+        try {
+          const xhr = evt.detail && evt.detail.xhr;
+          if (!xhr) return;
+          const ct = (xhr.getResponseHeader("content-type") || "").toLowerCase();
+          if (!ct.includes("application/json")) return;
+          const data = JSON.parse(xhr.responseText || "{}");
+          if (data && data.toast) window.showToast(String(data.toast), "success");
+          if (data && data.error) window.showToast(String(data.error), "error");
+        } catch (e) {}
+      });
+    </script>
+  </body>
+</html>
+

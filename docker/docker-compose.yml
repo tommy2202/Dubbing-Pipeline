@@ -1,0 +1,122 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      # server
+      PORT: "8080"
+      HOST: "0.0.0.0"
+      ANIME_V2_OUTPUT_DIR: /app/Output
+
+      # auth secrets (set these!)
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      CSRF_SECRET: ${CSRF_SECRET:?set CSRF_SECRET}
+
+      # bootstrap admin (optional)
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+
+      # offline / egress policy
+      OFFLINE_MODE: ${OFFLINE_MODE:-0}
+      ALLOW_EGRESS: ${ALLOW_EGRESS:-1}
+      ALLOW_HF_EGRESS: ${ALLOW_HF_EGRESS:-0}
+
+      # pipeline knobs
+      ENABLE_PYANNOTE: ${ENABLE_PYANNOTE:-0}
+      HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN:-}
+      COQUI_TOS_AGREED: ${COQUI_TOS_AGREED:-0}
+
+      MIX_PROFILE: ${MIX_PROFILE:-streaming}
+      EMIT_FORMATS: ${EMIT_FORMATS:-mkv,mp4}
+
+      # strict CORS (comma-separated origins)
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
+
+      # optional redis for rate limiting
+      REDIS_URL: ${REDIS_URL:-}
+    volumes:
+      - output:/app/Output
+      - data:/app/data
+      - cache:/home/appuser/.cache
+      - tts_home:/home/appuser/.local/share/tts
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ "ALL" ]
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["public_tls"]
+    depends_on:
+      - api
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    cap_drop: [ "ALL" ]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+
+  # Optional: Cloudflare Tunnel (does not expose ports directly)
+  # Requires you to provision a tunnel + token.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    depends_on:
+      - api
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN:?set CLOUDFLARED_TOKEN}
+    cap_drop: [ "ALL" ]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+
+  # Optional: Tailscale sidecar (use an auth key; route to api internally)
+  # tailscale:
+  #   image: tailscale/tailscale:stable
+  #   profiles: ["tunnel"]
+  #   hostname: anime-v2
+  #   environment:
+  #     TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY}
+  #     TS_STATE_DIR: /var/lib/tailscale
+  #   volumes:
+  #     - tailscale_state:/var/lib/tailscale
+  #     - /dev/net/tun:/dev/net/tun
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - SYS_MODULE
+  #   networks:
+  #     - internal
+
+volumes:
+  output:
+  data:
+  cache:
+  tts_home:
+  caddy_data:
+  caddy_config:
+  # tailscale_state:
+
+networks:
+  internal:
+    driver: bridge
+
