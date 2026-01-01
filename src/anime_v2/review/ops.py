@@ -285,3 +285,73 @@ def render(job_dir: Path) -> dict[str, Path]:
     save_state(job_dir, st)
     return outs
 
+
+def lock_from_tts_manifest(
+    *,
+    job_dir: Path,
+    tts_manifest: Path,
+    video_path: Path | None,
+    lock_nonempty_only: bool = True,
+) -> int:
+    """
+    Canonical bridge from the legacy "resynth approved" flow into Tier-2B review state.
+
+    Reads a tts_manifest.json produced by `anime_v2.stages.tts.run` and:
+    - copies each clip into Output/<job>/review/audio/<segment_id>_vN.wav
+    - updates Output/<job>/review/state.json
+    - locks segments with non-empty text (by default)
+    """
+    from anime_v2.utils.io import read_json
+
+    job_dir = Path(job_dir)
+    tts_manifest = Path(tts_manifest)
+    if not tts_manifest.exists():
+        raise FileNotFoundError(f"Missing tts_manifest: {tts_manifest}")
+    data = read_json(tts_manifest, default={})
+    if not isinstance(data, dict):
+        raise ValueError("Invalid tts_manifest JSON")
+    clips = data.get("clips", [])
+    lines = data.get("lines", [])
+    if not isinstance(clips, list) or not isinstance(lines, list) or len(clips) != len(lines):
+        raise ValueError("Invalid tts_manifest: expected equal-length clips + lines")
+
+    # Ensure state exists.
+    sp = review_state_path(job_dir)
+    if not sp.exists():
+        st = init_state_from_job(
+            job_dir=job_dir, video_path=video_path, pipeline_params={}, voice_mapping_snapshot={}
+        )
+        save_state(job_dir, st)
+
+    st = load_state(job_dir)
+    locked = 0
+
+    audio_dir = review_audio_dir(job_dir)
+    audio_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, (clip_s, line) in enumerate(zip(clips, lines, strict=False), 1):
+        if not isinstance(line, dict):
+            continue
+        text = str(line.get("text") or "").strip()
+        if lock_nonempty_only and not text:
+            continue
+
+        clip = Path(str(clip_s))
+        if not clip.exists():
+            continue
+
+        seg = find_segment(st, int(i))
+        if seg is None:
+            continue
+
+        v = _next_audio_version(audio_dir, int(i))
+        dest = audio_dir / f"{int(i)}_v{v}.wav"
+        atomic_copy(clip, dest)
+        seg["chosen_text"] = text
+        seg["audio_path_current"] = str(dest)
+        bump_status(seg, "locked")
+        locked += 1
+
+    save_state(job_dir, st)
+    return locked
+

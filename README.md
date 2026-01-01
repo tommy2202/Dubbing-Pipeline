@@ -218,6 +218,10 @@ anime-v2 --set-character-preset SPEAKER_01 alice
 Reset:
 - Delete `data/voice_memory/` to rebuild from scratch.
 
+Notes:
+- When `--voice-memory on` is enabled, the pipeline avoids the legacy encrypted `CharacterStore` (no key required).
+- If optional embedding deps are missing, voice memory falls back to a lightweight offline fingerprint (still deterministic).
+
 ### Review Loop (Tier‑2 B)
 
 Edit per-segment text, regenerate audio for a single segment, preview, and lock it so future full-job re-runs reuse the locked audio/text.
@@ -254,6 +258,9 @@ Artifacts:
 - `Output/<job>/review/state.json`
 - `Output/<job>/review/audio/<segment_id>_vN.wav`
 - `Output/<job>/review/review_render.wav` (+ `dub.review.mkv` when mux succeeds)
+
+Interaction with the existing transcript editor:
+- The older “approve + resynthesize” flow is preserved for compatibility, but approved-only resynth now also **writes/locks** those segments into `Output/<job>/review/state.json` so the review loop is the canonical lock store.
 
 ### Pseudo-streaming (chunk mode)
 

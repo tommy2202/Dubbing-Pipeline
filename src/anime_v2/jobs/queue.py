@@ -68,53 +68,15 @@ MODE_TO_MODEL: dict[str, str] = {
 
 
 def _parse_srt_to_cues(srt_path: Path) -> list[dict]:
-    if not srt_path.exists():
-        return []
-    text = srt_path.read_text(encoding="utf-8", errors="replace")
-    blocks = [b for b in text.split("\n\n") if b.strip()]
-    cues: list[dict] = []
+    from anime_v2.utils.cues import parse_srt_to_cues
 
-    def parse_ts(ts: str) -> float:
-        hh, mm, rest = ts.split(":")
-        ss, ms = rest.split(",")
-        return int(hh) * 3600 + int(mm) * 60 + int(ss) + int(ms) / 1000.0
-
-    for b in blocks:
-        lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
-        if len(lines) < 2 or "-->" not in lines[1]:
-            continue
-        start_s, end_s = (p.strip() for p in lines[1].split("-->", 1))
-        start = parse_ts(start_s)
-        end = parse_ts(end_s)
-        cue_text = " ".join(lines[2:]).strip() if len(lines) > 2 else ""
-        cues.append({"start": start, "end": end, "text": cue_text})
-    return cues
+    return parse_srt_to_cues(srt_path)
 
 
 def _assign_speakers(cues: list[dict], diar_segments: list[dict] | None) -> list[dict]:
-    diar_segments = diar_segments or []
-    out: list[dict] = []
-    for c in cues:
-        start = float(c["start"])
-        end = float(c["end"])
-        mid = (start + end) / 2.0
-        speaker_id = "Speaker1"
-        for seg in diar_segments:
-            try:
-                if float(seg["start"]) <= mid <= float(seg["end"]):
-                    speaker_id = str(seg.get("speaker_id") or speaker_id)
-                    break
-            except Exception:
-                continue
-        out.append(
-            {
-                "start": start,
-                "end": end,
-                "speaker_id": speaker_id,
-                "text": str(c.get("text", "") or ""),
-            }
-        )
-    return out
+    from anime_v2.utils.cues import assign_speakers
+
+    return assign_speakers(cues, diar_segments)
 
 
 def _write_srt(lines: list[dict], path: Path) -> None:
@@ -459,8 +421,6 @@ class JobQueue:
 
                 show = str(settings.show_id) if settings.show_id else video_path.stem
                 sim = float(settings.char_sim_thresh)
-                store_chars = CharacterStore.default()
-                store_chars.load()
                 thresholds = {"sim": sim}
                 lab_to_char: dict[str, str] = {}
                 # Tier-2A voice memory (optional, opt-in)
@@ -532,6 +492,15 @@ class JobQueue:
                             lab_to_char[lab] = lab
                     else:
                         # legacy path (CharacterStore)
+                        store_chars = None
+                        try:
+                            store_chars = CharacterStore.default()
+                            store_chars.load()
+                        except Exception:
+                            store_chars = None
+                        if store_chars is None:
+                            lab_to_char[lab] = lab
+                            continue
                         emb = ecapa_embedding(rep_wav, device=_select_device(job.device))
                         if emb is None:
                             lab_to_char[lab] = lab
@@ -539,8 +508,8 @@ class JobQueue:
                         cid = store_chars.match_or_create(emb, show_id=show, thresholds=thresholds)
                         store_chars.link_speaker_wav(cid, str(rep_wav))
                         lab_to_char[lab] = cid
-
-                store_chars.save()
+                        with suppress(Exception):
+                            store_chars.save()
 
                 # Persist episode mapping (best-effort)
                 if vm_store is not None and episode_key:
@@ -1145,6 +1114,24 @@ class JobQueue:
                     _write_silence_wav(tts_wav, duration_s=dur)
 
             self.store.update(job_id, progress=0.95, message="TTS done")
+
+            # Tier-2B canonicalization: if "resynth approved" was requested, persist the
+            # generated clips into review/state.json as locked segments.
+            if isinstance(resynth, dict) and str(resynth.get("type") or "") == "approved":
+                try:
+                    from anime_v2.review.ops import lock_from_tts_manifest
+
+                    n_locked = lock_from_tts_manifest(
+                        job_dir=base_dir,
+                        tts_manifest=work_dir / "tts_manifest.json",
+                        video_path=video_path,
+                        lock_nonempty_only=True,
+                    )
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] review: locked {n_locked} segments from resynth"
+                    )
+                except Exception as ex:
+                    self.store.append_log(job_id, f"[{now_utc()}] review lock-from-resynth failed: {ex}")
             await self._check_canceled(job_id)
 
             # f) mixing (~1.00)

@@ -292,10 +292,7 @@ def run(
     eff_voice_memory = (
         bool(voice_memory) if voice_memory is not None else bool(settings.voice_memory)
     )
-    eff_voice_memory_dir = Path(
-        voice_memory_dir
-        or getattr(settings, "voice_memory_dir", (Path.cwd() / "data" / "voice_memory"))
-    ).resolve()
+    eff_voice_memory_dir = Path(voice_memory_dir or settings.voice_memory_dir).resolve()
     eff_voice_character_map = (
         Path(voice_character_map).resolve()
         if voice_character_map is not None
@@ -461,10 +458,17 @@ def run(
                         continue
                 speaker_rep_wav = {sid: p for sid, (_, p) in best.items()}
 
-    # CharacterStore speaker_wavs (cross-episode persistence)
-    store = CharacterStore.default()
-    with suppress(Exception):
-        store.load()
+    # CharacterStore speaker_wavs (legacy cross-episode persistence).
+    # Tier-2A voice-memory is the canonical cross-episode identity store, so avoid
+    # loading CharacterStore when voice-memory is enabled (prevents key/crypto coupling).
+    store = None
+    if not eff_voice_memory:
+        try:
+            store = CharacterStore.default()
+            with suppress(Exception):
+                store.load()
+        except Exception:
+            store = None
 
     # Tier-2A voice memory store (optional)
     vm_store = None
@@ -594,7 +598,7 @@ def run(
                     if c.exists() and c.is_file():
                         speaker_wav = c
                         break
-        if speaker_wav is None:
+        if speaker_wav is None and store is not None:
             with suppress(Exception):
                 c = store.characters.get(speaker_id)
                 if c and c.speaker_wavs:

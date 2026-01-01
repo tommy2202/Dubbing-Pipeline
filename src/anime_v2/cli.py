@@ -72,53 +72,15 @@ def _parse_srt_to_cues(srt_path: Path) -> list[dict]:
     """
     Parse SRT into cues: [{start,end,text}]
     """
-    if not srt_path.exists():
-        return []
-    text = srt_path.read_text(encoding="utf-8", errors="replace")
-    blocks = [b for b in text.split("\n\n") if b.strip()]
-    cues: list[dict] = []
+    from anime_v2.utils.cues import parse_srt_to_cues
 
-    def parse_ts(ts: str) -> float:
-        hh, mm, rest = ts.split(":")
-        ss, ms = rest.split(",")
-        return int(hh) * 3600 + int(mm) * 60 + int(ss) + int(ms) / 1000.0
-
-    for b in blocks:
-        lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
-        if len(lines) < 2 or "-->" not in lines[1]:
-            continue
-        start_s, end_s = (p.strip() for p in lines[1].split("-->", 1))
-        start = parse_ts(start_s)
-        end = parse_ts(end_s)
-        cue_text = " ".join(lines[2:]).strip() if len(lines) > 2 else ""
-        cues.append({"start": start, "end": end, "text": cue_text})
-    return cues
+    return parse_srt_to_cues(srt_path)
 
 
 def _assign_speakers(cues: list[dict], diar_segments: list[dict] | None) -> list[dict]:
-    diar_segments = diar_segments or []
-    out: list[dict] = []
-    for c in cues:
-        start = float(c["start"])
-        end = float(c["end"])
-        mid = (start + end) / 2.0
-        speaker_id = "Speaker1"
-        for seg in diar_segments:
-            try:
-                if float(seg["start"]) <= mid <= float(seg["end"]):
-                    speaker_id = str(seg.get("speaker_id") or speaker_id)
-                    break
-            except Exception:
-                continue
-        out.append(
-            {
-                "start": start,
-                "end": end,
-                "speaker_id": speaker_id,
-                "text": str(c.get("text", "") or ""),
-            }
-        )
-    return out
+    from anime_v2.utils.cues import assign_speakers
+
+    return assign_speakers(cues, diar_segments)
 
 
 def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
@@ -520,10 +482,7 @@ def run(
         from anime_v2.voice_memory.store import VoiceMemoryStore
 
         s = get_settings()
-        root = Path(
-            voice_memory_dir
-            or getattr(s, "voice_memory_dir", (Path.cwd() / "data" / "voice_memory"))
-        )
+        root = Path(voice_memory_dir or s.voice_memory_dir).resolve()
         store = VoiceMemoryStore(root)
         if list_characters:
             for c in store.list_characters():
@@ -971,8 +930,6 @@ def run(
                 seg_wav = Path(str(extracted))
             by_label.setdefault(lab, []).append((s, e, seg_wav))
 
-        store = CharacterStore.default()
-        store.load()
         thresholds = {"sim": float(char_sim_thresh)}
         # Map diar speaker label -> persistent character id
         lab_to_char: dict[str, str] = {}
@@ -1001,6 +958,12 @@ def run(
                 episode_key = ""
         else:
             episode_key = ""
+            store = None
+            try:
+                store = CharacterStore.default()
+                store.load()
+            except Exception:
+                store = None
         for lab, segs in by_label.items():
             # pick longest seg wav for embedding
             segs_sorted = sorted(segs, key=lambda t: (t[1] - t[0]), reverse=True)
@@ -1030,6 +993,9 @@ def run(
                     logger.warning("[v2] voice-memory match failed (%s): %s", lab, ex)
                     lab_to_char[lab] = lab
             else:
+                if store is None:
+                    lab_to_char[lab] = lab
+                    continue
                 emb = ecapa_embedding(rep_wav, device=chosen_device)
                 if emb is None:
                     # no embeddings => stable ID per show label
@@ -1042,7 +1008,7 @@ def run(
                 try:
                     import numpy as np  # type: ignore
 
-                    emb_dir = Path("voices") / "embeddings"
+                    emb_dir = (out_dir / "voices" / "embeddings").resolve()
                     emb_dir.mkdir(parents=True, exist_ok=True)
                     emb_path = emb_dir / f"{cid}.npy"
                     np.save(str(emb_path), emb.astype("float32"))
@@ -1050,7 +1016,11 @@ def run(
                 except Exception:
                     pass
 
-        store.save()
+        if store is not None:
+            from contextlib import suppress
+
+            with suppress(Exception):
+                store.save()
         if vm_store is not None and episode_key:
             from contextlib import suppress
 
