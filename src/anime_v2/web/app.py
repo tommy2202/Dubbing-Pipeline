@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import mimetypes
 import os
 import re
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -11,14 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from starlette.templating import Jinja2Templates
 
-from anime_v2.utils.config import get_settings
 from anime_v2.utils.log import logger
+from anime_v2.utils.security import verify_api_key
 
 app = FastAPI(title="anime_v2 web")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -26,27 +28,22 @@ app.add_middleware(
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 OUTPUT_ROOT = Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
 
-
-def _expected_token() -> str:
-    return get_settings().api_token
+JOB_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
-def _get_token_from_request(request: Request) -> str | None:
-    t = request.query_params.get("token")
-    if t:
-        return t
-    c = request.cookies.get("auth")
-    if c:
-        return c
-    return None
-
-
-def require_auth(request: Request) -> str:
-    token = _get_token_from_request(request)
-    expected = _expected_token()
-    if not token or token != expected:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    return token
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    t0 = time.perf_counter()
+    ip = request.client.host if request.client else "unknown"
+    path = request.url.path
+    try:
+        response = await call_next(request)
+    finally:
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        # Never log tokens: only log method + path (no query string).
+        status_code = getattr(locals().get("response"), "status_code", 0)
+        logger.info("http ip=%s %s %s %s %.1fms", ip, request.method, path, status_code, dt_ms)
+    return response
 
 
 def _iter_videos() -> list[dict]:
@@ -72,11 +69,30 @@ def _iter_videos() -> list[dict]:
                 if key in seen:
                     continue
                 seen.add(key)
-                out.append({"job": key, "name": key})
+                job = hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+                out.append({"job": job, "name": key, "rel": key})
             except Exception:
                 continue
     out.sort(key=lambda x: x["name"])
     return out
+
+
+def _resolve_job(job: str) -> Path:
+    """
+    Map a safe job ID to a file path under OUTPUT_ROOT.
+    Rebuild mapping from current output directory.
+    """
+    if not JOB_RE.match(job):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    for v in _iter_videos():
+        if v["job"] == job:
+            try:
+                target = (OUTPUT_ROOT / v["rel"]).resolve()
+                target.relative_to(OUTPUT_ROOT)
+                return target
+            except Exception:
+                break
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
@@ -140,38 +156,32 @@ def health() -> dict[str, str]:
 
 
 @app.get("/login")
-def login(token: str, request: Request) -> Response:
-    if token != _expected_token():
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+def login(request: Request) -> Response:
+    # Uses the same token mechanism (?token=...).
+    verify_api_key(request)
     resp = RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
-    resp.set_cookie("auth", token, httponly=True, samesite="lax")
+    # Set cookie from query token; do not log it.
+    token = request.query_params.get("token")
+    if token:
+        resp.set_cookie("auth", token, httponly=True, samesite="lax")
     return resp
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, token: str = Depends(require_auth)) -> HTMLResponse:
-    videos = _iter_videos()
+def index(request: Request, _auth: None = Depends(verify_api_key)) -> HTMLResponse:
+    videos = [{"job": v["job"], "name": v["name"]} for v in _iter_videos()]
     return TEMPLATES.TemplateResponse(
         "index.html",
         {
             "request": request,
-            "token": token,
             "videos": videos,
         },
     )
 
 
-@app.get("/video/{job:path}")
-def video(job: str, request: Request, token: str = Depends(require_auth)) -> Response:
-    # Resolve and prevent traversal
-    try:
-        target = (OUTPUT_ROOT / job).resolve()
-        target.relative_to(OUTPUT_ROOT)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+@app.get("/video/{job}")
+def video(job: str, request: Request, _auth: None = Depends(verify_api_key)) -> Response:
+    target = _resolve_job(job)
 
     file_size = target.stat().st_size
     content_type, _ = mimetypes.guess_type(str(target))

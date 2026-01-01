@@ -30,8 +30,8 @@ def _configure_logger() -> logging.Logger:
 
     file_handler = RotatingFileHandler(
         filename=str(log_path),
-        maxBytes=int(os.environ.get("LOG_MAX_BYTES", str(10 * 1024 * 1024))),  # 10MB
-        backupCount=int(os.environ.get("LOG_BACKUP_COUNT", "5")),
+        maxBytes=int(os.environ.get("LOG_MAX_BYTES", str(5 * 1024 * 1024))),  # 5MB
+        backupCount=int(os.environ.get("LOG_BACKUP_COUNT", "3")),
         encoding="utf-8",
     )
     file_handler.setFormatter(fmt)
