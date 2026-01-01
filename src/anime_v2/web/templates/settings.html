@@ -14,6 +14,9 @@
   <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
     <h2 class="text-sm text-slate-300">Defaults (new uploads)</h2>
     <p class="mt-1 text-xs text-slate-500">These pre-fill the Upload Wizard for your account.</p>
+    {% if not can_edit_settings %}
+      <div class="mt-2 text-sm text-slate-500">Viewer role: read-only.</div>
+    {% endif %}
 
     <div class="mt-4 grid gap-4 sm:grid-cols-2 text-sm">
       <div>
@@ -57,7 +60,8 @@
     </div>
 
     <div class="mt-4 flex flex-wrap items-center gap-2">
-      <button class="rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-3 text-sm font-medium" @click="save()">
+      <button class="rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-3 text-sm font-medium {% if not can_edit_settings %}opacity-50 cursor-not-allowed{% endif %}"
+              @click="save()" {% if not can_edit_settings %}disabled{% endif %}>
         Save
       </button>
       <div class="text-sm text-red-200" role="alert" aria-live="polite" x-show="error" x-cloak x-text="error"></div>
@@ -85,11 +89,13 @@
       </div>
 
       <div class="mt-4 flex flex-wrap items-center gap-2">
-        <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" @click="save()">
+        <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm {% if not can_edit_settings %}opacity-50 cursor-not-allowed{% endif %}"
+                @click="save()" {% if not can_edit_settings %}disabled{% endif %}>
           Save notifications
         </button>
-        <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
-                @click="sendTest()" :disabled="sendingTest">
+        <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium {% if not can_edit_settings %}opacity-50 cursor-not-allowed{% endif %}"
+                @click="sendTest()" :disabled="sendingTest || {{ 'false' if can_edit_settings else 'true' }}"
+                {% if not can_edit_settings %}disabled{% endif %}>
           <span x-show="!sendingTest">Send test</span>
           <span x-show="sendingTest" x-cloak>Sending…</span>
         </button>

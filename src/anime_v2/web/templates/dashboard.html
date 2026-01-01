@@ -8,9 +8,11 @@
     <h1 class="text-2xl font-semibold">Dashboard</h1>
     <p class="mt-1 text-sm text-slate-400">Recent jobs with live progress.</p>
   </div>
+  {% if user and user.role and user.role.value != "viewer" %}
   <a href="/ui/upload" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium">
     New Job
   </a>
+  {% endif %}
 </div>
 
 <div class="mt-6 grid gap-4 lg:grid-cols-3">
@@ -42,6 +44,7 @@
       </div>
     </div>
 
+    {% if user and user.role and user.role.value != "viewer" %}
     <div class="mt-4 flex flex-wrap items-center gap-2 text-sm">
       <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
               @click="bulkAction('pause')">Pause</button>
@@ -50,6 +53,9 @@
       <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-4 py-3 text-sm text-red-100"
               @click="bulkAction('cancel')">Cancel</button>
     </div>
+    {% else %}
+    <div class="mt-4 text-sm text-slate-500">Viewer role: read-only.</div>
+    {% endif %}
 
     <div
       id="job-table"
@@ -88,7 +94,7 @@
   async function jobAction(action, jobId) {
     const csrf = document.getElementById("csrf")?.value || "";
     const url = "/api/jobs/" + encodeURIComponent(jobId) + "/" + action;
-    const r = await fetch(url, { method: "POST", headers: { "X-CSRF-Token": csrf } });
+    const r = await fetch(url, { method: "POST", credentials: "include", headers: { "X-CSRF-Token": csrf } });
     if (!r.ok) {
       try {
         const data = await r.json();

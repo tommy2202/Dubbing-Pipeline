@@ -117,6 +117,12 @@ async def ui_upload(request: Request) -> HTMLResponse:
     user = _current_user_optional(request)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
+    # Viewer is view-only: no job submissions.
+    try:
+        if getattr(user, "role", None) and str(user.role.value) == "viewer":
+            return RedirectResponse(url="/ui/dashboard", status_code=302)
+    except Exception:
+        pass
     defaults: dict[str, Any] = {}
     try:
         st = _user_settings_store(request)
@@ -163,6 +169,7 @@ async def ui_settings(request: Request) -> HTMLResponse:
         "settings.html",
         {
             "cfg": cfg,
+            "can_edit_settings": (str(user.role.value) in {"operator", "admin"}) if getattr(user, "role", None) else False,
             "system": {
                 "limits": {
                     "max_concurrency_global": int(s.max_concurrency_global),

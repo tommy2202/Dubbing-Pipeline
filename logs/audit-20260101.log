@@ -522,3 +522,5 @@
 {"ts":"2026-01-01T05:19:04.128510+00:00","event":"auth.login_ok","request_id":"b9c6cb878625400db01e09eaf2a30c4d","user_id":"u_LDf6jupR5az7cl5ibxtvKw","meta":{"username":"admin","role":"admin","session":true}}
 {"ts":"2026-01-01T05:24:53.427850+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
 {"ts":"2026-01-01T05:24:53.538598+00:00","event":"auth.login_ok","request_id":"cf784f5834a348f9981729f8257cea96","user_id":"u_hYeDkLRxHORSqW0p6nfwsw","meta":{"username":"admin","role":"admin","session":false}}
+{"ts":"2026-01-01T05:34:32.655832+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T05:34:32.765417+00:00","event":"auth.login_ok","request_id":"29a8ebc0effd463e8b73928e53b7afc3","user_id":"u_XCl2E0y-usndijAoECJU0w","meta":{"username":"admin","role":"admin","session":false}}

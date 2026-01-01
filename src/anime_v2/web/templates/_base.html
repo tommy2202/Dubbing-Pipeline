@@ -65,7 +65,9 @@
 
         <nav class="flex flex-wrap items-center gap-3 text-sm" aria-label="Primary">
           <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/dashboard">Dashboard</a>
+          {% if user and user.role and user.role.value != "viewer" %}
           <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/upload">Upload</a>
+          {% endif %}
           <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/presets">Presets</a>
           <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/projects">Projects</a>
           <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/settings">Settings</a>

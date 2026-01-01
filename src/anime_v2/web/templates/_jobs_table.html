@@ -17,6 +17,7 @@
       <div><span class="text-slate-500">State</span> <span data-job-state>{{ j.state }}</span></div>
     </div>
     <div class="mt-3 flex flex-wrap items-center gap-2">
+      {% if user and user.role and user.role.value != "viewer" %}
       {% if j.state == "QUEUED" %}
         <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
                 onclick="jobAction('pause','{{ j.id }}')">Pause</button>
@@ -27,6 +28,9 @@
       {% if j.state in ["QUEUED","RUNNING","PAUSED"] %}
         <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-sm text-red-100"
                 onclick="jobAction('cancel','{{ j.id }}')">Cancel</button>
+      {% endif %}
+      {% else %}
+        <div class="text-sm text-slate-500">Read-only</div>
       {% endif %}
     </div>
   </div>
@@ -77,6 +81,7 @@
         <td class="py-2 pr-3 text-slate-500" data-job-created>{{ j.created_at }}</td>
         <td class="py-2 text-right" onclick="event.stopPropagation();">
           <div class="flex items-center justify-end gap-2">
+            {% if user and user.role and user.role.value != "viewer" %}
             {% if j.state == "QUEUED" %}
               <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
                       onclick="jobAction('pause','{{ j.id }}')">Pause</button>
@@ -87,6 +92,9 @@
             {% if j.state in ["QUEUED","RUNNING","PAUSED"] %}
               <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-sm text-red-100"
                       onclick="jobAction('cancel','{{ j.id }}')">Cancel</button>
+            {% endif %}
+            {% else %}
+              <span class="text-xs text-slate-500">Read-only</span>
             {% endif %}
           </div>
         </td>

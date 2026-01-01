@@ -11,8 +11,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from anime_v2.api.deps import Identity, current_identity
+from anime_v2.api.deps import Identity, current_identity, require_role
 from anime_v2.api.security import verify_csrf
+from anime_v2.api.models import Role
 from anime_v2.config import get_settings
 from anime_v2.utils.net import egress_guard
 
@@ -249,8 +250,7 @@ async def get_settings_me(request: Request, ident: Identity = Depends(current_id
 
 
 @router.put("/api/settings")
-async def put_settings_me(request: Request, ident: Identity = Depends(current_identity)) -> dict[str, Any]:
-    _enforce_csrf_if_needed(request, ident)
+async def put_settings_me(request: Request, ident: Identity = Depends(require_role(Role.operator))) -> dict[str, Any]:
     body = await request.json()
     store = _get_user_settings_store(request)
     updated = store.update_user(ident.user.id, body if isinstance(body, dict) else {})
@@ -258,8 +258,7 @@ async def put_settings_me(request: Request, ident: Identity = Depends(current_id
 
 
 @router.post("/api/settings/notifications/test")
-async def test_notifications(request: Request, ident: Identity = Depends(current_identity)) -> dict[str, Any]:
-    _enforce_csrf_if_needed(request, ident)
+async def test_notifications(request: Request, ident: Identity = Depends(require_role(Role.operator))) -> dict[str, Any]:
     store = _get_user_settings_store(request)
     cfg = store.get_user(ident.user.id)
     webhook = ""
@@ -291,4 +290,21 @@ async def test_notifications(request: Request, ident: Identity = Depends(current
             raise HTTPException(status_code=502, detail=f"Webhook failed: {ex}")
 
     return {"ok": True}
+
+
+@router.get("/api/admin/users/{user_id}/settings")
+async def admin_get_user_settings(request: Request, user_id: str, _: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
+    store = _get_user_settings_store(request)
+    cfg = store.get_user(str(user_id))
+    return {"user_id": str(user_id), "defaults": cfg.get("defaults", {}), "notifications": cfg.get("notifications", {}), "updated_at": cfg.get("updated_at")}
+
+
+@router.put("/api/admin/users/{user_id}/settings")
+async def admin_put_user_settings(
+    request: Request, user_id: str, _: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
+    body = await request.json()
+    store = _get_user_settings_store(request)
+    updated = store.update_user(str(user_id), body if isinstance(body, dict) else {})
+    return {"user_id": str(user_id), "defaults": updated.get("defaults", {}), "notifications": updated.get("notifications", {}), "updated_at": updated.get("updated_at")}
 

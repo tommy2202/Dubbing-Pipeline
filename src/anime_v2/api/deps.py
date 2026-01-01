@@ -102,7 +102,15 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
 def require_role(min_role: Role):
     order = {Role.viewer: 0, Role.operator: 1, Role.admin: 2}
 
-    def dep(ident: Identity = Depends(current_identity)) -> Identity:
+    def dep(request: Request, ident: Identity = Depends(current_identity)) -> Identity:
+        # CSRF: enforce for browser/cookie sessions on state-changing requests.
+        # - API keys are exempt.
+        # - Bearer-token API clients (no cookies, no Origin) are exempt.
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and ident.kind != "api_key":
+            has_origin = bool(request.headers.get("origin"))
+            uses_cookies = bool(request.cookies.get("session") or request.cookies.get("refresh"))
+            if has_origin or uses_cookies:
+                verify_csrf(request)
         if order[ident.user.role] < order[min_role]:
             raise HTTPException(status_code=403, detail="Forbidden")
         return ident

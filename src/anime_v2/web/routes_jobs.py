@@ -14,7 +14,8 @@ from fastapi.responses import PlainTextResponse
 from sse_starlette.sse import EventSourceResponse  # type: ignore
 
 from anime_v2.jobs.models import Job, JobState, new_id, now_utc
-from anime_v2.api.deps import Identity, require_scope
+from anime_v2.api.deps import Identity, require_role, require_scope
+from anime_v2.api.models import Role
 from anime_v2.api.models import AuthStore
 from anime_v2.api.security import decode_token
 from anime_v2.config import get_settings
@@ -757,20 +758,22 @@ async def jobs_events(request: Request, _: Identity = Depends(require_scope("rea
 @router.get("/api/presets")
 async def list_presets(request: Request, ident: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
     store = _get_store(request)
-    items = store.list_presets(owner_id=ident.user.id)
+    owner = None if ident.user.role == Role.admin else ident.user.id
+    items = store.list_presets(owner_id=owner)
     return {"items": items}
 
 
 @router.post("/api/presets")
-async def create_preset(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def create_preset(request: Request, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
     store = _get_store(request)
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON")
     name = str(body.get("name") or "").strip() or "Preset"
+    owner_id = str(body.get("owner_id") or ident.user.id).strip()
     preset = {
         "id": _new_short_id("preset_"),
-        "owner_id": ident.user.id,
+        "owner_id": owner_id,
         "name": name,
         "created_at": _now_iso(),
         "mode": str(body.get("mode") or "medium"),
@@ -786,13 +789,11 @@ async def create_preset(request: Request, ident: Identity = Depends(require_scop
 
 
 @router.delete("/api/presets/{id}")
-async def delete_preset(request: Request, id: str, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def delete_preset(request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
     store = _get_store(request)
     p = store.get_preset(id)
     if p is None:
         raise HTTPException(status_code=404, detail="Not found")
-    if str(p.get("owner_id") or "") != ident.user.id and ident.user.role.value != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
     store.delete_preset(id)
     return {"ok": True}
 
@@ -801,12 +802,13 @@ async def delete_preset(request: Request, id: str, ident: Identity = Depends(req
 @router.get("/api/projects")
 async def list_projects(request: Request, ident: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
     store = _get_store(request)
-    items = store.list_projects(owner_id=ident.user.id)
+    owner = None if ident.user.role == Role.admin else ident.user.id
+    items = store.list_projects(owner_id=owner)
     return {"items": items}
 
 
 @router.post("/api/projects")
-async def create_project(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def create_project(request: Request, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
     store = _get_store(request)
     body = await request.json()
     if not isinstance(body, dict):
@@ -814,9 +816,10 @@ async def create_project(request: Request, ident: Identity = Depends(require_sco
     name = str(body.get("name") or "").strip() or "Project"
     default_preset_id = str(body.get("default_preset_id") or "").strip()
     output_subdir = str(body.get("output_subdir") or "").strip()  # under Output/
+    owner_id = str(body.get("owner_id") or ident.user.id).strip()
     proj = {
         "id": _new_short_id("proj_"),
-        "owner_id": ident.user.id,
+        "owner_id": owner_id,
         "name": name,
         "created_at": _now_iso(),
         "default_preset_id": default_preset_id,
@@ -827,13 +830,11 @@ async def create_project(request: Request, ident: Identity = Depends(require_sco
 
 
 @router.delete("/api/projects/{id}")
-async def delete_project(request: Request, id: str, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def delete_project(request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
     store = _get_store(request)
     p = store.get_project(id)
     if p is None:
         raise HTTPException(status_code=404, detail="Not found")
-    if str(p.get("owner_id") or "") != ident.user.id and ident.user.role.value != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
     store.delete_project(id)
     return {"ok": True}
 
