@@ -97,7 +97,16 @@ def _get_scheduler(request: Request):
 @router.post("/api/jobs")
 async def create_job(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, str]:
     # Idempotency-Key: return existing job when present and not expired.
+    # Supports header or multipart form field `idempotency_key` (for HTML forms).
     idem_key = (request.headers.get("idempotency-key") or "").strip()
+    parsed_form = None
+    ctype0 = (request.headers.get("content-type") or "").lower()
+    if not idem_key and "application/json" not in ctype0 and ("multipart/form-data" in ctype0 or "application/x-www-form-urlencoded" in ctype0):
+        try:
+            parsed_form = await request.form()
+            idem_key = str(parsed_form.get("idempotency_key") or "").strip()
+        except Exception:
+            parsed_form = None
     store = _get_store(request)
     if idem_key:
         # basic bounds to avoid abuse
@@ -134,7 +143,7 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     scheduler = _get_scheduler(request)
     limits = get_limits()
 
-    ctype = (request.headers.get("content-type") or "").lower()
+    ctype = ctype0
     mode = "medium"
     device = "auto"
     src_lang = "auto"
@@ -160,7 +169,7 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
             raise HTTPException(status_code=400, detail="video_path must be a file")
     else:
         # multipart/form-data
-        form = await request.form()
+        form = parsed_form or await request.form()
         mode = str(form.get("mode") or mode)
         device = str(form.get("device") or device)
         src_lang = str(form.get("src_lang") or src_lang)

@@ -24,7 +24,10 @@ def _get_templates(request: Request) -> Jinja2Templates:
 
 def _current_user_optional(request: Request):
     try:
-        ident = current_identity(request)
+        store = getattr(request.app.state, "auth_store", None)
+        if store is None:
+            return None
+        ident = current_identity(request, store)
         return ident.user
     except Exception:
         return None
@@ -79,7 +82,8 @@ async def ui_job_detail(request: Request, job_id: str) -> HTMLResponse:
     user = _current_user_optional(request)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
-    return _render(request, "job_detail.html", {"job_id": job_id})
+    created = (request.query_params.get("created") or "").strip() == "1"
+    return _render(request, "job_detail.html", {"job_id": job_id, "created": created})
 
 
 @router.get("/upload")

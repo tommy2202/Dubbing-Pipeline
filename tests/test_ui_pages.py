@@ -51,3 +51,19 @@ def test_ui_dashboard_renders_when_logged_in(tmp_path: Path) -> None:
         assert d.status_code == 200
         assert "Dashboard" in d.text
 
+
+def test_ui_job_detail_shows_created_toast(tmp_path: Path) -> None:
+    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
+    os.environ["APP_ROOT"] = "/workspace"
+    os.environ["ADMIN_USERNAME"] = "admin"
+    os.environ["ADMIN_PASSWORD"] = "adminpass"
+    os.environ["COOKIE_SECURE"] = "0"
+    get_settings.cache_clear()
+
+    with TestClient(app) as c:
+        r = c.post("/api/auth/login", json={"username": "admin", "password": "adminpass", "session": True})
+        assert r.status_code == 200
+        d = c.get("/ui/jobs/abc123?created=1")
+        assert d.status_code == 200
+        assert "Job created." in d.text
+

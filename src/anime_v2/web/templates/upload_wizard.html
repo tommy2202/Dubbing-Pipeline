@@ -3,34 +3,281 @@
 {% block title %}Upload • anime_v2{% endblock %}
 
 {% block content %}
-<div>
-  <h1 class="text-2xl font-semibold">Upload</h1>
-  <p class="mt-1 text-sm text-slate-400">Upload wizard skeleton (UX-2).</p>
-</div>
-
-<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-  <div class="text-sm text-slate-300">New Job</div>
-  <div class="mt-2 text-sm text-slate-500">
-    Placeholder for file upload + options.
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Upload Wizard</h1>
+    <p class="mt-1 text-sm text-slate-400">3 steps: File → Settings → Voice.</p>
   </div>
 </div>
-{% endblock %}
 
-{% extends "_base.html" %}
-
-{% block title %}Upload • anime_v2{% endblock %}
-
-{% block content %}
-<div>
-  <h1 class="text-2xl font-semibold">Upload</h1>
-  <p class="mt-1 text-sm text-slate-400">Upload wizard skeleton (UX-2).</p>
-</div>
-
-<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-  <div class="text-sm text-slate-300">New Job</div>
-  <div class="mt-2 text-sm text-slate-500">
-    Placeholder for file upload + options.
+<div
+  class="mt-6"
+  x-data="{
+    step: 1,
+    file: null,
+    fileName: '',
+    fileSize: 0,
+    mode: 'medium',
+    device: 'auto',
+    src_lang: 'ja',
+    tgt_lang: 'en',
+    tts_lang: 'en',
+    voiceMode: 'preset', // preset | wav
+    tts_speaker: 'default',
+    zero_shot: true,
+    useIdem: false,
+    idemKey: '',
+    error: '',
+    setFile(f) {
+      this.file = f || null;
+      this.fileName = f ? (f.name || '') : '';
+      this.fileSize = f ? (f.size || 0) : 0;
+    },
+    fmtBytes(n) {
+      try {
+        const u = ['B','KB','MB','GB'];
+        let i = 0; let x = Number(n || 0);
+        while (x >= 1024 && i < u.length-1) { x/=1024; i++; }
+        return (i===0 ? String(x) : x.toFixed(1)) + ' ' + u[i];
+      } catch(e) { return String(n||0); }
+    },
+    genIdem() {
+      try {
+        const a = new Uint8Array(16);
+        crypto.getRandomValues(a);
+        this.idemKey = Array.from(a).map(b => b.toString(16).padStart(2,'0')).join('');
+      } catch(e) {
+        this.idemKey = String(Math.random()).slice(2) + String(Date.now());
+      }
+    }
+  }"
+  @job-submit-error.window="error = ($event.detail && $event.detail.message) ? $event.detail.message : 'Job submit failed'"
+>
+  <div class="mb-4 flex items-center gap-2 text-sm">
+    <div class="flex items-center gap-2">
+      <div :class="step===1 ? 'bg-indigo-600' : 'bg-slate-800'" class="h-6 w-6 rounded-full flex items-center justify-center text-xs">1</div>
+      <div class="text-slate-300">File</div>
+    </div>
+    <div class="h-px flex-1 bg-slate-800"></div>
+    <div class="flex items-center gap-2">
+      <div :class="step===2 ? 'bg-indigo-600' : 'bg-slate-800'" class="h-6 w-6 rounded-full flex items-center justify-center text-xs">2</div>
+      <div class="text-slate-300">Settings</div>
+    </div>
+    <div class="h-px flex-1 bg-slate-800"></div>
+    <div class="flex items-center gap-2">
+      <div :class="step===3 ? 'bg-indigo-600' : 'bg-slate-800'" class="h-6 w-6 rounded-full flex items-center justify-center text-xs">3</div>
+      <div class="text-slate-300">Voice</div>
+    </div>
   </div>
+
+  <form
+    id="jobForm"
+    class="rounded-xl border border-slate-800 bg-slate-900/40 p-4"
+    hx-post="/api/jobs"
+    hx-encoding="multipart/form-data"
+    hx-swap="none"
+  >
+    <div class="mb-3 text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
+
+    <!-- Step 1 -->
+    <div x-show="step===1">
+      <div class="text-sm text-slate-300">Step 1 — Video file</div>
+      <div
+        class="mt-3 rounded-xl border border-dashed border-slate-700 bg-slate-950/30 p-6"
+        @dragover.prevent
+        @drop.prevent="
+          const f = ($event.dataTransfer.files && $event.dataTransfer.files[0]) ? $event.dataTransfer.files[0] : null;
+          setFile(f);
+          if ($event.dataTransfer.files && $refs.fileInput) { $refs.fileInput.files = $event.dataTransfer.files; }
+        "
+      >
+        <div class="text-sm text-slate-400">Drag & drop an MP4/MKV here, or pick a file.</div>
+        <div class="mt-3">
+          <input
+            x-ref="fileInput"
+            type="file"
+            name="file"
+            accept="video/*"
+            class="block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700"
+            @change="setFile($event.target.files && $event.target.files[0])"
+          />
+        </div>
+        <template x-if="file">
+          <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm">
+            <div class="text-slate-200" x-text="fileName"></div>
+            <div class="text-slate-500" x-text="fmtBytes(fileSize)"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div x-show="step===2" x-cloak>
+      <div class="text-sm text-slate-300">Step 2 — Settings</div>
+      <div class="mt-4 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm text-slate-300">Mode</label>
+          <select name="mode" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+                  x-model="mode">
+            <option value="high">high</option>
+            <option value="medium">medium</option>
+            <option value="low">low</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300">Device</label>
+          <select name="device" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+                  x-model="device">
+            <option value="auto">auto</option>
+            <option value="cpu">cpu</option>
+            <option value="cuda">cuda</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300">Source lang</label>
+          <input name="src_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+                 x-model="src_lang" placeholder="ja" />
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300">Target lang</label>
+          <input name="tgt_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+                 x-model="tgt_lang" placeholder="en" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div x-show="step===3" x-cloak>
+      <div class="text-sm text-slate-300">Step 3 — Voice (XTTS)</div>
+      <div class="mt-4 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm text-slate-300">TTS language</label>
+          <input name="tts_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+                 x-model="tts_lang" placeholder="en" />
+        </div>
+        <div class="flex items-center gap-3 pt-6">
+          <input type="checkbox" name="zero_shot" value="1" class="h-4 w-4" x-model="zero_shot" />
+          <label class="text-sm text-slate-300">Zero-shot (clone if WAV provided)</label>
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">Voice source</div>
+        <div class="mt-3 flex flex-wrap items-center gap-4 text-sm">
+          <label class="flex items-center gap-2">
+            <input type="radio" value="preset" x-model="voiceMode" />
+            <span>Preset speaker</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="radio" value="wav" x-model="voiceMode" />
+            <span>Upload speaker WAV</span>
+          </label>
+        </div>
+
+        <div class="mt-3">
+          <label class="block text-sm text-slate-300">Preset speaker</label>
+          <input
+            name="tts_speaker"
+            class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+            x-model="tts_speaker"
+            placeholder="default"
+            :disabled="voiceMode!=='preset'"
+          />
+          <div class="mt-1 text-xs text-slate-500">Disabled when uploading a speaker WAV.</div>
+        </div>
+
+        <div class="mt-3">
+          <label class="block text-sm text-slate-300">Speaker WAV</label>
+          <input
+            type="file"
+            name="tts_speaker_wav"
+            accept="audio/*"
+            class="mt-1 block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700"
+            :disabled="voiceMode!=='wav'"
+          />
+          <div class="mt-1 text-xs text-slate-500">When enabled, the client omits `tts_speaker` via disable.</div>
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <label class="flex items-center gap-3 text-sm">
+          <input type="checkbox" class="h-4 w-4" x-model="useIdem" @change="if(useIdem){genIdem()} else {idemKey=''}" />
+          <span>Use idempotency</span>
+        </label>
+        <template x-if="useIdem">
+          <div class="mt-3">
+            <div class="text-xs text-slate-500">Key (sent as `idempotency_key` form field)</div>
+            <input class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-slate-100"
+                   x-model="idemKey" readonly />
+            <input type="hidden" name="idempotency_key" :value="idemKey" />
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="mt-6 flex items-center justify-between gap-3">
+      <button type="button"
+              class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+              :disabled="step===1"
+              :class="step===1 ? 'opacity-50 cursor-not-allowed' : ''"
+              @click="step = Math.max(1, step-1); error=''">
+        Back
+      </button>
+
+      <div class="flex items-center gap-3">
+        <button type="button"
+                class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium"
+                x-show="step<3"
+                @click="
+                  error='';
+                  if(step===1 && !file){ error='Please choose a video file.'; return; }
+                  step = Math.min(3, step+1);
+                ">
+          Next
+        </button>
+
+        <button
+          type="submit"
+          x-show="step===3"
+          x-cloak
+          class="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-sm font-semibold"
+          @click="
+            error='';
+            if(!file){ error='Please choose a video file.'; $event.preventDefault(); return; }
+          "
+        >
+          Start Job
+        </button>
+      </div>
+    </div>
+  </form>
 </div>
+
+<script>
+  // Redirect to job detail after /api/jobs returns {id}
+  (function () {
+    const form = document.getElementById("jobForm");
+    if (!form) return;
+    form.addEventListener("htmx:afterRequest", function (evt) {
+      try {
+        const xhr = evt.detail.xhr;
+        if (!xhr) return;
+        const data = JSON.parse(xhr.responseText || "{}");
+        if (xhr.status !== 200) {
+          const msg = (data && (data.detail || data.error)) ? (data.detail || data.error) : ("Job submit failed (" + xhr.status + ")");
+          window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
+          return;
+        }
+        const jobId = data.id || data.job_id;
+        if (jobId) {
+          window.location = "/ui/jobs/" + encodeURIComponent(jobId) + "?created=1";
+        }
+      } catch (e) {
+        // ignore
+      }
+    });
+  })();
+</script>
 {% endblock %}
 

@@ -3,6 +3,12 @@
 {% block title %}Job {{ job_id }} • anime_v2{% endblock %}
 
 {% block content %}
+{% if created %}
+<div class="mb-4 rounded-lg border border-emerald-900/50 bg-emerald-900/20 px-4 py-3 text-sm text-emerald-100">
+  Job created.
+</div>
+{% endif %}
+
 <div>
   <h1 class="text-2xl font-semibold">Job</h1>
   <p class="mt-1 text-sm text-slate-400 break-all">{{ job_id }}</p>

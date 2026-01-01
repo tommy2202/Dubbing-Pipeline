@@ -450,3 +450,131 @@
 {"ts": "2026-01-01T04:00:47.941530Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/dashboard \"HTTP/1.1 302 Found\""}
 {"ip": "testclient", "method": "GET", "path": "/ui/login", "status": 200, "duration_ms": 0.5439878441393375, "logger": "anime_v2", "ts": "2026-01-01T04:00:47.942970Z", "level": "info", "request_id": "0b0ce0227c004ca5b6700d46c3089dd5", "msg": "http_done"}
 {"ts": "2026-01-01T04:00:47.943662Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/login \"HTTP/1.1 200 OK\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.707680Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:46.763427Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"timeout_sec": 5, "deadline_at": 1767240411.764257, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.764289Z", "level": "warning", "msg": "drain_begin"}
+{"ip": "testclient", "method": "GET", "path": "/readyz", "status": 503, "duration_ms": 0.8486809674650431, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.766288Z", "level": "info", "request_id": "282c542c7c854a149d9a69cb3d944c12", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:46.767348Z", "level": "info", "msg": "HTTP Request: GET http://testserver/readyz \"HTTP/1.1 503 Service Unavailable\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.771490Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:46.814864Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/auth/login", "status": 200, "duration_ms": 47.67722496762872, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.863748Z", "level": "info", "request_id": "2381c74c75624bb7832142290ed498a4", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:46.864806Z", "level": "info", "msg": "HTTP Request: POST http://testserver/auth/login \"HTTP/1.1 200 OK\""}
+{"timeout_sec": 5, "deadline_at": 1767240411.864994, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.865024Z", "level": "warning", "msg": "drain_begin"}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 503, "duration_ms": 2.833013888448477, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.868715Z", "level": "info", "request_id": "09d28eafc87b4f4aa5b5bb8ce1fb878c", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:46.869567Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 503 Service Unavailable\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.875235Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:46.916566Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/auth/login", "status": 200, "duration_ms": 39.38951902091503, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.957178Z", "level": "info", "request_id": "303955b9c41649b19f0b61e65b2c9a99", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:46.958015Z", "level": "info", "msg": "HTTP Request: POST http://testserver/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 200, "duration_ms": 4.335641162469983, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.963273Z", "level": "info", "request_id": "923b9e18c6e9409f8e7638b4db123b8e", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:46.963907Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 200, "duration_ms": 3.6026709713041782, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.968155Z", "level": "info", "request_id": "7c1686ce15404ecfb8c91ff87be48e26", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:46.968763Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 200 OK\""}
+{"timeout_sec": 120, "deadline_at": 1767240526.9690828, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.969092Z", "level": "warning", "msg": "drain_begin"}
+{"util": 0.99, "mem": 0.95, "util_max": 0.85, "mem_max": 0.9, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.971896Z", "level": "info", "msg": "gpu_saturated; using cpu"}
+{"kind": "whisper", "model": "a", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T04:06:46.973209Z", "level": "info", "msg": "model_loaded"}
+{"kind": "whisper", "model": "b", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T04:06:46.973390Z", "level": "info", "msg": "model_loaded"}
+{"kind": "tts", "model": "c", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T04:06:46.973513Z", "level": "info", "msg": "model_loaded"}
+{"kind": "whisper", "model": "a", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T04:06:46.973630Z", "level": "info", "msg": "model_evicted"}
+{"kind": "tts", "model": "d", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T04:06:46.973722Z", "level": "info", "msg": "model_loaded"}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:06:46.975205Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:47.016410Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "GET", "path": "/metrics", "status": 200, "duration_ms": 0.9351898916065693, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.018731Z", "level": "info", "request_id": "4124fec9872d461482625f452b1f4ca0", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.019442Z", "level": "info", "msg": "HTTP Request: GET http://testserver/metrics \"HTTP/1.1 200 OK\""}
+{"job_id": "j2", "from_mode": "high", "to_mode": "medium", "qlen": 1, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.027465Z", "level": "info", "msg": "scheduler_backpressure_degrade"}
+{"removed": 1, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.034837Z", "level": "info", "msg": "workdir_prune_done"}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.037746Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:47.081155Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/auth/login", "status": 200, "duration_ms": 37.04963717609644, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.119601Z", "level": "info", "request_id": "52d74197593d456aa20be0a97bbf0042", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.120447Z", "level": "info", "msg": "HTTP Request: POST http://testserver/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 507, "duration_ms": 1.5867119655013084, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.122733Z", "level": "info", "request_id": "29a39db3270345c3ba0d803e70220dac", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.123519Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 507 Insufficient Storage\""}
+{"timeout_sec": 120, "deadline_at": 1767240527.1237972, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.123808Z", "level": "warning", "msg": "drain_begin"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:47.125220Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:47.125794Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.128433Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:47.168173Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "GET", "path": "/ui/login", "status": 200, "duration_ms": 3.556858981028199, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.173072Z", "level": "info", "request_id": "02ca221a1f5043e7b9eed047c89addeb", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.173900Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/login \"HTTP/1.1 200 OK\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.177567Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:47.220420Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "GET", "path": "/ui/dashboard", "status": 302, "duration_ms": 0.4369751550257206, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.222038Z", "level": "info", "request_id": "7db9519507aa46018c07deeabea37bc8", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.222666Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/dashboard \"HTTP/1.1 302 Found\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.225888Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:47.266207Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/api/auth/login", "status": 200, "duration_ms": 38.535064086318016, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.306064Z", "level": "info", "request_id": "b08e2da426a447378007f805e21c900a", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.306938Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "GET", "path": "/ui/dashboard", "status": 302, "duration_ms": 0.31103799119591713, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.307848Z", "level": "info", "request_id": "20a58518833c4499a35b529cf7370216", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.308345Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/dashboard \"HTTP/1.1 302 Found\""}
+{"ip": "testclient", "method": "GET", "path": "/ui/login", "status": 200, "duration_ms": 0.5391528829932213, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.309404Z", "level": "info", "request_id": "189a503877474c56a97401d9746fcd91", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.310140Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/login \"HTTP/1.1 200 OK\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.314101Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:06:47.352970Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/api/auth/login", "status": 200, "duration_ms": 37.31780988164246, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.391702Z", "level": "info", "request_id": "70bae41be9b640abb3d2abbf97faa462", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.392537Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "GET", "path": "/ui/jobs/abc123", "status": 302, "duration_ms": 0.41966512799263, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.393659Z", "level": "info", "request_id": "7ef3be19efdb4b0daed170024f156b24", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.394388Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/jobs/abc123?created=1 \"HTTP/1.1 302 Found\""}
+{"ip": "testclient", "method": "GET", "path": "/ui/login", "status": 200, "duration_ms": 0.4620670806616545, "logger": "anime_v2", "ts": "2026-01-01T04:06:47.395425Z", "level": "info", "request_id": "827fca445f9845ec9668c7b36e9a1e99", "msg": "http_done"}
+{"ts": "2026-01-01T04:06:47.395979Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/login \"HTTP/1.1 200 OK\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.345572Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.402949Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"timeout_sec": 5, "deadline_at": 1767240459.403758, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.403790Z", "level": "warning", "msg": "drain_begin"}
+{"ip": "testclient", "method": "GET", "path": "/readyz", "status": 503, "duration_ms": 0.9294308256357908, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.405648Z", "level": "info", "request_id": "8471921327c04edc84af5a622da5cb9e", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.406477Z", "level": "info", "msg": "HTTP Request: GET http://testserver/readyz \"HTTP/1.1 503 Service Unavailable\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.410176Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.453160Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/auth/login", "status": 200, "duration_ms": 48.57127112336457, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.503498Z", "level": "info", "request_id": "27b23d7f72d3415bbfaa39ea601e987a", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.504518Z", "level": "info", "msg": "HTTP Request: POST http://testserver/auth/login \"HTTP/1.1 200 OK\""}
+{"timeout_sec": 5, "deadline_at": 1767240459.5046923, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.504708Z", "level": "warning", "msg": "drain_begin"}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 503, "duration_ms": 2.9168331529945135, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.508649Z", "level": "info", "request_id": "ff81ea5e54e54763a15fa2614cff708f", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.509366Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 503 Service Unavailable\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.514518Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.558642Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/auth/login", "status": 200, "duration_ms": 37.65143686905503, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.597453Z", "level": "info", "request_id": "adebed9471d344e7ad572d9ade1bd628", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.598253Z", "level": "info", "msg": "HTTP Request: POST http://testserver/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 200, "duration_ms": 4.562899004667997, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.603736Z", "level": "info", "request_id": "035d19d4ff404dce9acfd78b7e97b43e", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.604371Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 200, "duration_ms": 3.644081996753812, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.608639Z", "level": "info", "request_id": "27f9027bfcdf499fbd54b93cc075be2e", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.609388Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 200 OK\""}
+{"timeout_sec": 120, "deadline_at": 1767240574.609812, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.609826Z", "level": "warning", "msg": "drain_begin"}
+{"util": 0.99, "mem": 0.95, "util_max": 0.85, "mem_max": 0.9, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.613347Z", "level": "info", "msg": "gpu_saturated; using cpu"}
+{"kind": "whisper", "model": "a", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T04:07:34.614632Z", "level": "info", "msg": "model_loaded"}
+{"kind": "whisper", "model": "b", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T04:07:34.614807Z", "level": "info", "msg": "model_loaded"}
+{"kind": "tts", "model": "c", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T04:07:34.614920Z", "level": "info", "msg": "model_loaded"}
+{"kind": "whisper", "model": "a", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T04:07:34.615026Z", "level": "info", "msg": "model_evicted"}
+{"kind": "tts", "model": "d", "device": "cpu", "logger": "anime_v2", "ts": "2026-01-01T04:07:34.615114Z", "level": "info", "msg": "model_loaded"}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.616754Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.657727Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "GET", "path": "/metrics", "status": 200, "duration_ms": 0.8922589477151632, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.660000Z", "level": "info", "request_id": "854ec73e1c334b19a2744bf3d9d3d77a", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.660649Z", "level": "info", "msg": "HTTP Request: GET http://testserver/metrics \"HTTP/1.1 200 OK\""}
+{"job_id": "j2", "from_mode": "high", "to_mode": "medium", "qlen": 1, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.668113Z", "level": "info", "msg": "scheduler_backpressure_degrade"}
+{"removed": 1, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.675447Z", "level": "info", "msg": "workdir_prune_done"}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.678533Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.718973Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/auth/login", "status": 200, "duration_ms": 36.74909402616322, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.756861Z", "level": "info", "request_id": "c8d23159ab4b4e82bb613d2b1afadb77", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.757706Z", "level": "info", "msg": "HTTP Request: POST http://testserver/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 507, "duration_ms": 1.4326549135148525, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.760244Z", "level": "info", "request_id": "ccf5559017024146bc7a304a4bd69aeb", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.760865Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 507 Insufficient Storage\""}
+{"timeout_sec": 120, "deadline_at": 1767240574.7611763, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.761185Z", "level": "warning", "msg": "drain_begin"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.762695Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.763370Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.767039Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.807626Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "GET", "path": "/ui/login", "status": 200, "duration_ms": 3.5129599273204803, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.812255Z", "level": "info", "request_id": "fb91d842ce7d4b3281961734f70fb647", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.813107Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/login \"HTTP/1.1 200 OK\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.816985Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.858788Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "GET", "path": "/ui/dashboard", "status": 302, "duration_ms": 0.44147204607725143, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.860370Z", "level": "info", "request_id": "519e43b71ef64daf9ac1440b54ce5a06", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.860935Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/dashboard \"HTTP/1.1 302 Found\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.864696Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.904338Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/api/auth/login", "status": 200, "duration_ms": 37.155665922909975, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.942554Z", "level": "info", "request_id": "8a6ba0bf2de24589bce2150629fb9b75", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.943398Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "GET", "path": "/ui/dashboard", "status": 200, "duration_ms": 1.5348868910223246, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.945551Z", "level": "info", "request_id": "f767b1cb32894c6cbd151e29e3d701b0", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:34.946332Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/dashboard \"HTTP/1.1 200 OK\""}
+{"max_global": 2, "transcribe": 1, "tts": 1, "bp_qmax": 6, "logger": "anime_v2", "ts": "2026-01-01T04:07:34.950013Z", "level": "info", "msg": "scheduler_started"}
+{"logger": "anime_v2", "ts": "2026-01-01T04:07:34.989093Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/api/auth/login", "status": 200, "duration_ms": 38.01098302938044, "logger": "anime_v2", "ts": "2026-01-01T04:07:35.028369Z", "level": "info", "request_id": "c36b3851227c4e5a9fa4ee6b3dd46efc", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:35.029277Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "GET", "path": "/ui/jobs/abc123", "status": 200, "duration_ms": 1.9917478784918785, "logger": "anime_v2", "ts": "2026-01-01T04:07:35.032129Z", "level": "info", "request_id": "b91c57da9bb443059b8bfb478988f9d4", "msg": "http_done"}
+{"ts": "2026-01-01T04:07:35.032811Z", "level": "info", "msg": "HTTP Request: GET http://testserver/ui/jobs/abc123?created=1 \"HTTP/1.1 200 OK\""}
