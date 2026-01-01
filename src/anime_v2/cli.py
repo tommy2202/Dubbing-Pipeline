@@ -53,7 +53,8 @@ def _select_device(device: str) -> str:
 @click.option("--src-lang", default="auto", show_default=True, help="Source language code, or 'auto'")
 @click.option("--tgt-lang", default="en", show_default=True, help="Target language code (translate pathway outputs English)")
 @click.option("--no-translate", is_flag=True, default=False, help="Disable translate; do plain transcription")
-def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_translate: bool) -> None:
+@click.option("--no-subs", is_flag=True, default=False, help="Do not mux subtitles into output container")
+def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_translate: bool, no_subs: bool) -> None:
     """
     Run pipeline-v2 on VIDEO.
 
@@ -78,10 +79,12 @@ def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_tr
 
     wav_path = out_dir / "audio.wav"
     srt_out = out_dir / f"{stem}.srt"
+    translated_srt = out_dir / f"{stem}.translated.srt"
     diar_json = out_dir / "diarization.json"
     translated_json = out_dir / "translated.json"
     tts_wav = out_dir / f"{stem}.tts.wav"
-    dub_mkv = out_dir / "dub.mkv"
+    # Also keep final artifact easy to locate at Output/<stem>.dub.mkv
+    dub_mkv = out_dir.parent / f"{stem}.dub.mkv"
 
     logger.info("[v2] Starting dub: video=%s mode=%s model=%s device=%s", video, mode, chosen_model, chosen_device)
     logger.info("[v2] Languages: src_lang=%s tgt_lang=%s translate=%s", src_lang, tgt_lang, (not no_translate))
@@ -121,6 +124,8 @@ def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_tr
         src_lang=src_lang,
         tgt_lang=tgt_lang,
     )
+
+    subs_srt_path: Path | None = srt_out
 
     # 3.5) Separate translation stage (writes translated.json)
     if no_translate:
@@ -173,6 +178,23 @@ def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_tr
                     "lines": translated,
                 },
             )
+            # Write translated SRT preserving indices/times, UTF-8.
+            # Note: MKV mux expects SRT file, not JSON.
+            def fmt_ts(sec: float) -> str:
+                h = int(sec // 3600)
+                m = int(sec % 3600 // 60)
+                s = int(sec % 60)
+                ms = int((sec - int(sec)) * 1000)
+                return f"{h:02}:{m:02}:{s:02},{ms:03}"
+
+            with translated_srt.open("w", encoding="utf-8") as f:
+                for idx, line in enumerate(translated, 1):
+                    st = fmt_ts(float(line["start"]))
+                    en = fmt_ts(float(line["end"]))
+                    txt = str(line.get("text", "") or "").strip()
+                    f.write(f"{idx}\n{st} --> {en}\n{txt}\n\n")
+
+            subs_srt_path = translated_srt
             logger.info("[v2] translated.json written (%s lines) → %s", len(translated), translated_json)
         except Exception as ex:
             logger.warning("[v2] Translation stage failed/skipped: %s", ex)
@@ -180,7 +202,14 @@ def cli(video: Path, device: str, mode: str, src_lang: str, tgt_lang: str, no_tr
     # 4) TTS + mux (stubs for now, but keep file layout stable)
     try:
         tts.run(out_dir=out_dir, transcript_srt=srt_out, translated_json=translated_json, diarization_json=diar_json, wav_out=tts_wav)
-        mkv_export.run(video=video, dubbed_audio=tts_wav, mkv_out=dub_mkv, ckpt_dir=out_dir, out_dir=out_dir)
+        mkv_export.run(
+            video=video,
+            dubbed_audio=tts_wav,
+            srt_path=None if no_subs else subs_srt_path,
+            mkv_out=dub_mkv,
+            ckpt_dir=out_dir,
+            out_dir=out_dir,
+        )
     except Exception as ex:
         # Keep CLI usable even if downstream stages are not implemented yet.
         logger.warning("[v2] Downstream stages skipped/failed: %s", ex)
