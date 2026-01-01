@@ -88,14 +88,15 @@
     hx-encoding="multipart/form-data"
     hx-swap="none"
   >
-    <div class="mb-3 text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
+    <div id="wizardError" class="mb-3 text-sm text-red-200" role="alert" aria-live="polite"
+         x-show="error" x-cloak x-text="error"></div>
 
     <!-- Step 1 -->
     <div x-show="step===1">
       <div class="text-sm text-slate-300">Step 1 — Video file</div>
       <div class="mt-2 flex items-center gap-2 text-sm text-slate-300">
-        <input type="checkbox" class="h-4 w-4" x-model="batch" @change="setFiles([]); setFile(null)" />
-        <span>Batch mode (multiple files)</span>
+        <input id="batchMode" type="checkbox" class="h-5 w-5" x-model="batch" @change="setFiles([]); setFile(null)" />
+        <label for="batchMode">Batch mode (multiple files)</label>
       </div>
       <div
         class="mt-3 rounded-xl border border-dashed border-slate-700 bg-slate-950/30 p-6"
@@ -110,16 +111,19 @@
           if ($event.dataTransfer.files && $refs.fileInput) { $refs.fileInput.files = $event.dataTransfer.files; }
         "
       >
-        <div class="text-sm text-slate-400">Drag & drop an MP4/MKV here, or pick a file.</div>
+        <div class="text-sm text-slate-400" id="fileHelp">Drag & drop an MP4/MKV here, or pick a file.</div>
         <div class="mt-3">
+          <label class="sr-only" for="fileInputEl">Choose video file</label>
           <input
             x-ref="fileInput"
+            id="fileInputEl"
             type="file"
             :name="batch ? 'files' : 'file'"
             :multiple="batch"
             accept="video/*"
             class="block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700"
             @change="batch ? setFiles($event.target.files) : setFile($event.target.files && $event.target.files[0])"
+            aria-describedby="fileHelp"
           />
         </div>
         <template x-if="!batch && file">
@@ -150,16 +154,16 @@
       <div class="text-sm text-slate-300">Step 2 — Settings</div>
       <div class="mt-3 grid gap-4 sm:grid-cols-2">
         <div>
-          <label class="block text-sm text-slate-300">Preset (optional)</label>
-          <select name="preset_id" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+          <label class="block text-sm text-slate-300" for="presetSel">Preset (optional)</label>
+          <select id="presetSel" name="preset_id" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                   x-model="preset_id">
             <option value="">(none)</option>
           </select>
-          <div class="mt-1 text-xs text-slate-500">Loaded from /api/presets on page load (JS).</div>
+          <div class="mt-1 text-xs text-slate-500" id="presetHelp">Loaded from /api/presets on page load (JS).</div>
         </div>
         <div>
-          <label class="block text-sm text-slate-300">Project (optional)</label>
-          <select name="project_id" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+          <label class="block text-sm text-slate-300" for="projectSel">Project (optional)</label>
+          <select id="projectSel" name="project_id" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                   x-model="project_id">
             <option value="">(none)</option>
           </select>
@@ -168,8 +172,8 @@
       </div>
       <div class="mt-4 grid gap-4 sm:grid-cols-2">
         <div>
-          <label class="block text-sm text-slate-300">Mode</label>
-          <select name="mode" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+          <label class="block text-sm text-slate-300" for="modeSel">Mode</label>
+          <select id="modeSel" name="mode" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                   x-model="mode">
             <option value="high">high</option>
             <option value="medium">medium</option>
@@ -177,8 +181,8 @@
           </select>
         </div>
         <div>
-          <label class="block text-sm text-slate-300">Device</label>
-          <select name="device" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+          <label class="block text-sm text-slate-300" for="deviceSel">Device</label>
+          <select id="deviceSel" name="device" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                   x-model="device">
             <option value="auto">auto</option>
             <option value="cpu">cpu</option>
@@ -186,13 +190,13 @@
           </select>
         </div>
         <div>
-          <label class="block text-sm text-slate-300">Source lang</label>
-          <input name="src_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+          <label class="block text-sm text-slate-300" for="srcLang">Source lang</label>
+          <input id="srcLang" name="src_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                  x-model="src_lang" placeholder="ja" />
         </div>
         <div>
-          <label class="block text-sm text-slate-300">Target lang</label>
-          <input name="tgt_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+          <label class="block text-sm text-slate-300" for="tgtLang">Target lang</label>
+          <input id="tgtLang" name="tgt_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                  x-model="tgt_lang" placeholder="en" />
         </div>
       </div>
@@ -203,34 +207,35 @@
       <div class="text-sm text-slate-300">Step 3 — Voice (XTTS)</div>
       <div class="mt-4 grid gap-4 sm:grid-cols-2">
         <div>
-          <label class="block text-sm text-slate-300">TTS language</label>
-          <input name="tts_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+          <label class="block text-sm text-slate-300" for="ttsLang">TTS language</label>
+          <input id="ttsLang" name="tts_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                  x-model="tts_lang" placeholder="en" />
         </div>
         <div class="flex items-center gap-3 pt-6">
-          <input type="checkbox" name="zero_shot" value="1" class="h-4 w-4" x-model="zero_shot" />
-          <label class="text-sm text-slate-300">Zero-shot (clone if WAV provided)</label>
+          <input id="zeroShot" type="checkbox" name="zero_shot" value="1" class="h-5 w-5" x-model="zero_shot" />
+          <label class="text-sm text-slate-300" for="zeroShot">Zero-shot (clone if WAV provided)</label>
         </div>
       </div>
 
       <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
         <div class="text-sm text-slate-300">Voice source</div>
         <div class="mt-3 flex flex-wrap items-center gap-4 text-sm">
-          <label class="flex items-center gap-2">
-            <input type="radio" value="preset" x-model="voiceMode" />
+          <label class="flex items-center gap-2" for="voicePreset">
+            <input id="voicePreset" type="radio" value="preset" x-model="voiceMode" />
             <span>Preset speaker</span>
           </label>
-          <label class="flex items-center gap-2">
-            <input type="radio" value="wav" x-model="voiceMode" />
+          <label class="flex items-center gap-2" for="voiceWav">
+            <input id="voiceWav" type="radio" value="wav" x-model="voiceMode" />
             <span>Upload speaker WAV</span>
           </label>
         </div>
 
         <div class="mt-3">
-          <label class="block text-sm text-slate-300">Preset speaker</label>
+          <label class="block text-sm text-slate-300" for="ttsSpeaker">Preset speaker</label>
           <input
+            id="ttsSpeaker"
             name="tts_speaker"
-            class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+            class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
             x-model="tts_speaker"
             placeholder="default"
             :disabled="voiceMode!=='preset'"
@@ -239,8 +244,9 @@
         </div>
 
         <div class="mt-3">
-          <label class="block text-sm text-slate-300">Speaker WAV</label>
+          <label class="block text-sm text-slate-300" for="ttsWav">Speaker WAV</label>
           <input
+            id="ttsWav"
             type="file"
             name="tts_speaker_wav"
             accept="audio/*"
@@ -252,14 +258,14 @@
       </div>
 
       <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
-        <label class="flex items-center gap-3 text-sm">
-          <input type="checkbox" class="h-4 w-4" x-model="useIdem" @change="if(useIdem){genIdem()} else {idemKey=''}" />
+        <label class="flex items-center gap-3 text-sm" for="useIdem">
+          <input id="useIdem" type="checkbox" class="h-5 w-5" x-model="useIdem" @change="if(useIdem){genIdem()} else {idemKey=''}" />
           <span>Use idempotency</span>
         </label>
         <template x-if="useIdem">
           <div class="mt-3">
             <div class="text-xs text-slate-500">Key (sent as `idempotency_key` form field)</div>
-            <input class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-slate-100"
+            <input class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-xs text-slate-100"
                    x-model="idemKey" readonly />
             <input type="hidden" name="idempotency_key" :value="idemKey" />
           </div>
@@ -270,7 +276,7 @@
     <!-- Actions -->
     <div class="mt-6 flex items-center justify-between gap-3">
       <button type="button"
-              class="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+              class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
               :disabled="step===1"
               :class="step===1 ? 'opacity-50 cursor-not-allowed' : ''"
               @click="step = Math.max(1, step-1); error=''">
@@ -279,7 +285,7 @@
 
       <div class="flex items-center gap-3">
         <button type="button"
-                class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium"
+                class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
                 x-show="step<3"
                 @click="
                   error='';
@@ -293,7 +299,7 @@
           type="submit"
           x-show="step===3"
           x-cloak
-          class="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-sm font-semibold"
+          class="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-5 py-3 text-sm font-semibold"
           @click="
             error='';
             if(batch){

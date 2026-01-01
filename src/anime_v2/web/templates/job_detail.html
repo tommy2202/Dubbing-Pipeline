@@ -30,11 +30,11 @@
 
   <!-- Tabs -->
   <div class="mt-6 border-b border-slate-800">
-    <nav class="flex flex-wrap gap-2 text-sm">
+    <nav class="flex flex-wrap gap-2 text-sm" aria-label="Job sections">
       <template x-for="t in tabs" :key="t.key">
         <button
           type="button"
-          class="rounded-t-lg px-3 py-2"
+          class="rounded-t-lg px-4 py-3"
           :class="activeTab===t.key ? 'bg-slate-900/60 text-white' : 'text-slate-400 hover:text-slate-200'"
           @click="setActive(t.key)"
         >
@@ -190,7 +190,8 @@
             <div>
               <div class="text-sm text-slate-300 mb-2">Player (HLS)</div>
               <link href="https://vjs.zencdn.net/8.17.4/video-js.css" rel="stylesheet" />
-              <video id="player" class="video-js vjs-default-skin w-full rounded-lg border border-slate-800" controls playsinline preload="auto"></video>
+              <video id="player" class="video-js vjs-default-skin w-full rounded-lg border border-slate-800" controls playsinline preload="auto"
+                     aria-label="Video player"></video>
               <script src="https://vjs.zencdn.net/8.17.4/video.min.js"></script>
               <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15"></script>
             </div>
@@ -199,7 +200,8 @@
             <div>
               <div class="text-sm text-slate-300 mb-2">Player (MP4)</div>
               <link href="https://vjs.zencdn.net/8.17.4/video-js.css" rel="stylesheet" />
-              <video id="player" class="video-js vjs-default-skin w-full rounded-lg border border-slate-800" controls playsinline preload="auto"></video>
+              <video id="player" class="video-js vjs-default-skin w-full rounded-lg border border-slate-800" controls playsinline preload="auto"
+                     aria-label="Video player"></video>
               <script src="https://vjs.zencdn.net/8.17.4/video.min.js"></script>
             </div>
           </template>
@@ -235,6 +237,30 @@
   </div>
 </div>
 
+<!-- Sticky mobile player controls -->
+<div class="sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-slate-800 bg-slate-950/95 px-3 py-2"
+     x-show="activeTab==='artifacts' && hasPlayer" x-cloak
+     role="region" aria-label="Playback controls">
+  <div class="flex items-center justify-between gap-2">
+    <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+            @click="togglePlay()" aria-label="Play or pause">
+      <span x-text="playing ? 'Pause' : 'Play'"></span>
+    </button>
+    <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+            @click="toggleMute()" aria-label="Mute or unmute">
+      <span x-text="muted ? 'Unmute' : 'Mute'"></span>
+    </button>
+    <label class="sr-only" for="rateSel">Playback rate</label>
+    <select id="rateSel" class="rounded bg-slate-950 border border-slate-800 px-2 py-3 text-sm"
+            @change="setRate($event.target.value)" aria-label="Playback rate">
+      <option value="0.75">0.75×</option>
+      <option value="1" selected>1×</option>
+      <option value="1.25">1.25×</option>
+      <option value="1.5">1.5×</option>
+    </select>
+  </div>
+</div>
+
 <script>
   function jobDetail(jobId) {
     return {
@@ -260,11 +286,19 @@
       voiceSaved: false,
       voiceError: "",
       files: null,
+      hasPlayer: false,
+      playing: false,
+      muted: false,
+      _vjs: null,
       _playerInit: false,
       async init() {
         await this.refresh();
         await this.loadVoiceMap();
         await this.loadFiles();
+        try {
+          const m = document.getElementById("main");
+          if (m) m.focus();
+        } catch (e) {}
         // poll job state lightly (UI only)
         setInterval(() => { this.refresh(); }, 1500);
       },
@@ -280,6 +314,7 @@
           const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/files", { credentials: "include" });
           if (!r.ok) return;
           this.files = await r.json();
+          this.hasPlayer = !!(this.files && ((this.files.hls_manifest && this.files.hls_manifest.url) || (this.files.mp4 && this.files.mp4.url)));
           // init player if artifacts tab active
           if (this.activeTab === "artifacts") this.initPlayer();
         } catch (e) {}
@@ -291,6 +326,7 @@
         if (!playerEl) return;
         try {
           const vjs = window.videojs ? window.videojs(playerEl, { controls: true, playbackRates: [0.5, 1, 1.25, 1.5, 2] }) : null;
+          this._vjs = vjs || null;
           if (this.files.hls_manifest && this.files.hls_manifest.url) {
             const src = this.files.hls_manifest.url;
             // Prefer native/VHS; fall back to hls.js when needed.
@@ -308,7 +344,55 @@
             if (vjs) vjs.src({ src: src, type: "video/mp4" });
             else playerEl.src = src;
           }
+          if (vjs) {
+            vjs.on("play", () => { this.playing = true; });
+            vjs.on("pause", () => { this.playing = false; });
+            vjs.on("volumechange", () => { this.muted = !!vjs.muted(); });
+          } else {
+            playerEl.addEventListener("play", () => { this.playing = true; });
+            playerEl.addEventListener("pause", () => { this.playing = false; });
+            playerEl.addEventListener("volumechange", () => { this.muted = !!playerEl.muted; });
+          }
           this._playerInit = true;
+        } catch (e) {}
+      },
+      togglePlay() {
+        try {
+          if (this._vjs) {
+            if (this._vjs.paused()) this._vjs.play();
+            else this._vjs.pause();
+            return;
+          }
+          const el = document.getElementById("player");
+          if (!el) return;
+          if (el.paused) el.play();
+          else el.pause();
+        } catch (e) {}
+      },
+      toggleMute() {
+        try {
+          if (this._vjs) {
+            this._vjs.muted(!this._vjs.muted());
+            this.muted = !!this._vjs.muted();
+            return;
+          }
+          const el = document.getElementById("player");
+          if (!el) return;
+          el.muted = !el.muted;
+          this.muted = !!el.muted;
+        } catch (e) {}
+      },
+      setRate(v) {
+        try {
+          const r = Number(v || 1);
+          if (!Number.isFinite(r)) return;
+          if (this._vjs) {
+            this._vjs.playbackRate(r);
+            return;
+          }
+          const el = document.getElementById("player");
+          if (!el) return;
+          el.playbackRate = r;
         } catch (e) {}
       },
       async loadVoiceMap() {

@@ -1,5 +1,44 @@
-<div class="overflow-x-auto">
-  <table class="min-w-full text-sm">
+<!-- Mobile cards -->
+<div class="space-y-3 sm:hidden" aria-label="Jobs">
+  {% for j in jobs %}
+  <div id="job-row-{{ j.id }}" class="rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <div class="text-sm font-mono text-slate-200 truncate">{{ j.id }}</div>
+        <div class="mt-1 text-sm text-slate-200 truncate" data-job-filename>{{ j.video_path.split('/')[-1] }}</div>
+        <div class="mt-1 text-xs text-slate-500">{{ j.created_at }}</div>
+      </div>
+      <a href="/ui/jobs/{{ j.id }}" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">Open</a>
+    </div>
+    <div class="mt-3 grid grid-cols-2 gap-2 text-sm">
+      <div><span class="text-slate-500">Mode</span> <span data-job-mode>{{ j.mode }}</span></div>
+      <div><span class="text-slate-500">Lang</span> <span data-job-lang>{{ j.src_lang }}→{{ j.tgt_lang }}</span></div>
+      <div><span class="text-slate-500">Progress</span> <span data-job-progress>{{ (j.progress * 100.0) | round(0) }}%</span></div>
+      <div><span class="text-slate-500">State</span> <span data-job-state>{{ j.state }}</span></div>
+    </div>
+    <div class="mt-3 flex flex-wrap items-center gap-2">
+      {% if j.state == "QUEUED" %}
+        <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+                onclick="jobAction('pause','{{ j.id }}')">Pause</button>
+      {% elif j.state == "PAUSED" %}
+        <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+                onclick="jobAction('resume','{{ j.id }}')">Resume</button>
+      {% endif %}
+      {% if j.state in ["QUEUED","RUNNING","PAUSED"] %}
+        <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-sm text-red-100"
+                onclick="jobAction('cancel','{{ j.id }}')">Cancel</button>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  {% if not jobs %}
+    <div class="py-6 text-sm text-slate-500">No jobs found.</div>
+  {% endif %}
+</div>
+
+<!-- Desktop table -->
+<div class="overflow-x-auto hidden sm:block">
+  <table class="min-w-full text-sm" aria-label="Jobs table">
     <thead class="text-xs text-slate-400">
       <tr class="border-b border-slate-800">
         <th class="py-2 pr-3 text-left">
@@ -25,7 +64,7 @@
         onclick="window.location='/ui/jobs/{{ j.id }}';"
       >
         <td class="py-2 pr-3" onclick="event.stopPropagation();">
-          <input type="checkbox" class="h-4 w-4" data-job-select value="{{ j.id }}">
+          <input type="checkbox" class="h-5 w-5" data-job-select value="{{ j.id }}" aria-label="Select job {{ j.id }}">
         </td>
         <td class="py-2 pr-3 font-mono text-xs text-slate-200">
           {{ j.id[:8] }}…
@@ -39,14 +78,14 @@
         <td class="py-2 text-right" onclick="event.stopPropagation();">
           <div class="flex items-center justify-end gap-2">
             {% if j.state == "QUEUED" %}
-              <button class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1 text-xs"
+              <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
                       onclick="jobAction('pause','{{ j.id }}')">Pause</button>
             {% elif j.state == "PAUSED" %}
-              <button class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1 text-xs"
+              <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
                       onclick="jobAction('resume','{{ j.id }}')">Resume</button>
             {% endif %}
             {% if j.state in ["QUEUED","RUNNING","PAUSED"] %}
-              <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-2 py-1 text-xs text-red-100"
+              <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-sm text-red-100"
                       onclick="jobAction('cancel','{{ j.id }}')">Cancel</button>
             {% endif %}
           </div>

@@ -5,6 +5,21 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>{% block title %}anime_v2{% endblock %}</title>
 
+    <script>
+      // Theme + contrast before paint (persisted in localStorage)
+      (function () {
+        try {
+          const t = localStorage.getItem("theme") || "system"; // system|light|dark
+          const hc = (localStorage.getItem("contrast") || "0") === "1";
+          const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          const dark = (t === "dark") || (t === "system" && prefersDark);
+          const root = document.documentElement;
+          root.classList.toggle("dark", !!dark);
+          root.classList.toggle("hc", !!hc);
+        } catch (e) {}
+      })();
+    </script>
+
     <!-- Tailwind (CDN, no build step) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -18,25 +33,58 @@
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <style>
+      /* Visible focus rings (keyboard) */
+      :where(a, button, input, textarea, select):focus-visible {
+        outline: 2px solid rgb(99 102 241);
+        outline-offset: 2px;
+      }
+      /* High-contrast mode tweaks */
+      .hc body { color: #fff; background: #000; }
+      .hc .border-slate-800 { border-color: #fff !important; }
+      .hc .text-slate-500, .hc .text-slate-400 { color: #e5e7eb !important; }
+      .hc .bg-slate-950 { background: #000 !important; }
+      .hc .bg-slate-900\/40, .hc .bg-slate-900\/50, .hc .bg-slate-950\/20, .hc .bg-slate-950\/30, .hc .bg-slate-950\/40 { background: #000 !important; }
+    </style>
   </head>
 
   <body class="min-h-full bg-slate-950 text-slate-100">
+    <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 rounded bg-indigo-600 px-3 py-2 text-sm">
+      Skip to content
+    </a>
     <!-- CSRF token for JS/HTMX -->
     <input type="hidden" id="csrf" value="{{ csrf_token }}" />
 
     <div class="mx-auto max-w-6xl px-4">
-      <header class="flex items-center justify-between py-4">
+      <header class="flex flex-wrap items-center justify-between gap-3 py-4">
         <div class="flex items-center gap-3">
           <a href="/ui/dashboard" class="text-lg font-semibold tracking-tight">anime_v2</a>
           <span class="text-xs text-slate-400 hidden sm:inline">dub pipeline</span>
         </div>
 
-        <nav class="flex items-center gap-3 text-sm">
-          <a class="text-slate-200 hover:text-white" href="/ui/dashboard">Dashboard</a>
-          <a class="text-slate-200 hover:text-white" href="/ui/upload">Upload</a>
-          <a class="text-slate-200 hover:text-white" href="/ui/presets">Presets</a>
-          <a class="text-slate-200 hover:text-white" href="/ui/projects">Projects</a>
-          <a class="text-slate-500 cursor-not-allowed" href="#" aria-disabled="true">Settings</a>
+        <nav class="flex flex-wrap items-center gap-3 text-sm" aria-label="Primary">
+          <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/dashboard">Dashboard</a>
+          <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/upload">Upload</a>
+          <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/presets">Presets</a>
+          <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/projects">Projects</a>
+
+          <label class="sr-only" for="themeSel">Theme</label>
+          <select id="themeSel" class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-sm"
+                  onchange="try{localStorage.setItem('theme', this.value); location.reload();}catch(e){}">
+            <option value="system">system</option>
+            <option value="dark">dark</option>
+            <option value="light">light</option>
+          </select>
+
+          <button type="button"
+                  class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+                  onclick="try{const v=(localStorage.getItem('contrast')||'0')==='1'?'0':'1'; localStorage.setItem('contrast',v); location.reload();}catch(e){}"
+                  aria-pressed="false"
+                  id="hcBtn">
+            Contrast
+          </button>
+
           <a
             class="text-slate-200 hover:text-white"
             href="#"
@@ -49,7 +97,7 @@
         </nav>
       </header>
 
-      <main class="pb-10">
+      <main id="main" class="pb-10" tabindex="-1">
         {% block content %}{% endblock %}
       </main>
 
@@ -62,6 +110,17 @@
     </div>
 
     <script>
+      // init theme selector + aria state for contrast
+      (function () {
+        try {
+          const sel = document.getElementById("themeSel");
+          if (sel) sel.value = localStorage.getItem("theme") || "system";
+          const hc = (localStorage.getItem("contrast") || "0") === "1";
+          const btn = document.getElementById("hcBtn");
+          if (btn) btn.setAttribute("aria-pressed", hc ? "true" : "false");
+        } catch (e) {}
+      })();
+
       // Attach CSRF to HTMX requests (if used)
       document.body.addEventListener("htmx:configRequest", function (evt) {
         try {

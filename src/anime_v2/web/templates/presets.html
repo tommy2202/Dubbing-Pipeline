@@ -8,34 +8,41 @@
     <h1 class="text-2xl font-semibold">Presets</h1>
     <p class="mt-1 text-sm text-slate-400">Saved settings bundles for batch submissions.</p>
   </div>
-  <a href="/ui/upload" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium">Upload</a>
+  <a href="/ui/upload" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium">Upload</a>
 </div>
 
 <div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4" x-data="presetsPage()" x-init="init()">
-  <div class="text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
-  <div class="text-sm text-emerald-200" x-show="toast" x-cloak x-text="toast"></div>
+  <div class="text-sm text-red-200" role="alert" aria-live="polite" x-show="error" x-cloak x-text="error"></div>
+  <div class="text-sm text-emerald-200" aria-live="polite" x-show="toast" x-cloak x-text="toast"></div>
 
   <div class="mt-4 grid gap-3 lg:grid-cols-2">
     <div class="rounded-xl border border-slate-800 bg-slate-950/20 p-4">
       <div class="text-sm text-slate-300">Create preset</div>
       <div class="mt-3 grid gap-3 sm:grid-cols-2 text-sm">
-        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="Name" x-model="form.name" />
-        <select class="rounded bg-slate-950 border border-slate-800 px-3 py-2" x-model="form.mode">
+        <label class="sr-only" for="presetName">Name</label>
+        <input id="presetName" class="rounded bg-slate-950 border border-slate-800 px-3 py-3" placeholder="Name" x-model="form.name" />
+        <label class="sr-only" for="presetMode">Mode</label>
+        <select id="presetMode" class="rounded bg-slate-950 border border-slate-800 px-3 py-3" x-model="form.mode">
           <option value="high">high</option>
           <option value="medium">medium</option>
           <option value="low">low</option>
         </select>
-        <select class="rounded bg-slate-950 border border-slate-800 px-3 py-2" x-model="form.device">
+        <label class="sr-only" for="presetDevice">Device</label>
+        <select id="presetDevice" class="rounded bg-slate-950 border border-slate-800 px-3 py-3" x-model="form.device">
           <option value="auto">auto</option>
           <option value="cpu">cpu</option>
           <option value="cuda">cuda</option>
         </select>
-        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="src_lang (ja)" x-model="form.src_lang" />
-        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="tgt_lang (en)" x-model="form.tgt_lang" />
-        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="tts_lang (en)" x-model="form.tts_lang" />
-        <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2 sm:col-span-2" placeholder="tts_speaker (default)" x-model="form.tts_speaker" />
+        <label class="sr-only" for="presetSrc">Source language</label>
+        <input id="presetSrc" class="rounded bg-slate-950 border border-slate-800 px-3 py-3" placeholder="src_lang (ja)" x-model="form.src_lang" />
+        <label class="sr-only" for="presetTgt">Target language</label>
+        <input id="presetTgt" class="rounded bg-slate-950 border border-slate-800 px-3 py-3" placeholder="tgt_lang (en)" x-model="form.tgt_lang" />
+        <label class="sr-only" for="presetTtsLang">TTS language</label>
+        <input id="presetTtsLang" class="rounded bg-slate-950 border border-slate-800 px-3 py-3" placeholder="tts_lang (en)" x-model="form.tts_lang" />
+        <label class="sr-only" for="presetSpeaker">TTS speaker</label>
+        <input id="presetSpeaker" class="rounded bg-slate-950 border border-slate-800 px-3 py-3 sm:col-span-2" placeholder="tts_speaker (default)" x-model="form.tts_speaker" />
       </div>
-      <button class="mt-4 rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-2 text-sm font-medium" @click="create()">
+      <button class="mt-4 rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-3 text-sm font-medium" @click="create()">
         Save preset
       </button>
     </div>
@@ -49,7 +56,7 @@
               <div class="text-sm text-slate-200" x-text="p.name"></div>
               <div class="text-xs text-slate-500" x-text="`${p.mode} • ${p.device} • ${p.src_lang}→${p.tgt_lang} • tts:${p.tts_lang}/${p.tts_speaker}`"></div>
             </div>
-            <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-2 py-1 text-xs text-red-100"
+            <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-4 py-3 text-sm text-red-100"
                     @click="remove(p.id)">Delete</button>
           </div>
         </template>

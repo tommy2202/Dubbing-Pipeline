@@ -10,29 +10,29 @@
       </div>
     </div>
     <div class="flex items-center gap-2">
-      <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+      <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
               @click="saveNow()" :disabled="saving || Object.keys(dirty).length===0">
         <span x-show="!saving">Save</span>
         <span x-show="saving" x-cloak>Saving…</span>
       </button>
-      <button class="rounded bg-emerald-600 hover:bg-emerald-500 px-3 py-2 text-sm font-medium"
+      <button class="rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-3 text-sm font-medium"
               @click="synthesizeApproved()" :disabled="synthRunning">
         Synthesize from Approved
       </button>
     </div>
   </div>
 
-  <div class="mt-3 text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
-  <div class="mt-3 text-sm text-emerald-200" x-show="toast" x-cloak x-text="toast"></div>
+  <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="error" x-cloak x-text="error"></div>
+  <div class="mt-3 text-sm text-emerald-200" aria-live="polite" x-show="toast" x-cloak x-text="toast"></div>
 
   <div class="mt-4 flex items-center justify-between gap-2 text-sm">
-    <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+    <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
             @click="prevPage()" :disabled="page<=1">Prev</button>
     <div class="text-slate-400">
       Page <span x-text="page"></span> / <span x-text="totalPages"></span>
       (<span x-text="total"></span> segments)
     </div>
-    <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+    <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
             @click="nextPage()" :disabled="page>=totalPages">Next</button>
   </div>
 
@@ -46,13 +46,13 @@
           </div>
           <div class="flex items-center gap-4 text-xs text-slate-300">
             <label class="flex items-center gap-2">
-              <input type="checkbox" class="h-4 w-4"
+              <input type="checkbox" class="h-5 w-5"
                      :checked="!!seg.approved"
                      @change="seg.approved = $event.target.checked; markDirty(seg)">
               <span>Approved</span>
             </label>
             <label class="flex items-center gap-2">
-              <input type="checkbox" class="h-4 w-4"
+              <input type="checkbox" class="h-5 w-5"
                      :checked="hasFlag(seg,'needs_retranslate')"
                      @change="toggleFlag(seg,'needs_retranslate',$event.target.checked); markDirty(seg)">
               <span>Needs re-translate</span>
@@ -68,9 +68,10 @@
           </div>
           <div>
             <div class="text-xs text-slate-500">Target (editable)</div>
-            <textarea class="mt-1 w-full min-h-[84px] rounded bg-slate-950 border border-slate-800 p-2 text-sm text-slate-100"
+            <textarea class="mt-1 w-full min-h-[96px] rounded bg-slate-950 border border-slate-800 p-3 text-sm text-slate-100"
                       :value="seg.tgt_text || ''"
                       @input="seg.tgt_text = $event.target.value; markDirty(seg)"
+                      :aria-label="`Target text for segment ${seg.index}`"
                       placeholder="(target text)"></textarea>
           </div>
         </div>
