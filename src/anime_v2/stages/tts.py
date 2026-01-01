@@ -10,6 +10,10 @@ from anime_v2.utils.log import logger
 from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
 
 
+class TTSCanceled(Exception):
+    pass
+
+
 def _parse_srt(path: Path) -> list[dict]:
     text = path.read_text(encoding="utf-8")
     blocks = [b for b in text.split("\n\n") if b.strip()]
@@ -97,6 +101,8 @@ def run(
     translated_json: Path | None = None,
     diarization_json: Path | None = None,
     wav_out: Path | None = None,
+    progress_cb=None,
+    cancel_cb=None,
     **_,
 ) -> Path:
     """
@@ -159,7 +165,24 @@ def run(
 
     voice_db_embeddings_dir = (settings.voice_db_path.parent / "embeddings").resolve()
 
+    total = len(lines)
+    if progress_cb is not None:
+        try:
+            progress_cb(0, total)
+        except Exception:
+            pass
+
     for i, l in enumerate(lines):
+        if cancel_cb is not None:
+            try:
+                if bool(cancel_cb()):
+                    raise TTSCanceled()
+            except TTSCanceled:
+                raise
+            except Exception:
+                # ignore cancel callback errors
+                pass
+
         text = str(l.get("text", "") or "").strip()
         speaker_id = str(l.get("speaker_id") or settings.tts_speaker or "default")
         if not text:
@@ -168,6 +191,11 @@ def run(
             _write_silence_wav(clip, duration_s=max(0.0, float(l["end"]) - float(l["start"])))
             _ffmpeg_to_pcm16k(clip, clip)
             clip_paths.append(clip)
+            if progress_cb is not None:
+                try:
+                    progress_cb(i + 1, total)
+                except Exception:
+                    pass
             continue
 
         raw_clip = clips_dir / f"{i:04d}_{speaker_id}.raw.wav"
@@ -224,6 +252,11 @@ def run(
         except Exception:
             clip = raw_clip
         clip_paths.append(clip)
+        if progress_cb is not None:
+            try:
+                progress_cb(i + 1, total)
+            except Exception:
+                pass
 
     # Output paths
     if wav_out is None:

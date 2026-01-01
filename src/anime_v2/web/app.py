@@ -5,6 +5,7 @@ import mimetypes
 import os
 import re
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Iterator
 
@@ -13,10 +14,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from starlette.templating import Jinja2Templates
 
+from anime_v2.jobs.queue import JobQueue
+from anime_v2.jobs.store import JobStore
 from anime_v2.utils.log import logger
 from anime_v2.utils.security import verify_api_key
+from anime_v2.web.routes_jobs import router as jobs_router
 
-app = FastAPI(title="anime_v2 web")
+OUTPUT_ROOT = Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
+TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    store = JobStore(OUTPUT_ROOT / "jobs.db")
+    q = JobQueue(store, concurrency=int(os.environ.get("JOBS_CONCURRENCY", "1")))
+    app.state.job_store = store
+    app.state.job_queue = q
+    await q.start()
+    yield
+    await q.stop()
+
+
+app = FastAPI(title="anime_v2 web", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,10 +43,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-OUTPUT_ROOT = Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
-
 JOB_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+app.include_router(jobs_router)
 
 
 @app.middleware("http")
@@ -82,6 +100,17 @@ def _resolve_job(job: str) -> Path:
     Map a safe job ID to a file path under OUTPUT_ROOT.
     Rebuild mapping from current output directory.
     """
+    # Allow job UUIDs (resolve via job store) or hashed IDs (resolve via output listing).
+    if UUID_RE.match(job):
+        store = getattr(app.state, "job_store", None)
+        if store is not None:
+            j = store.get(job)
+            if j is not None and j.output_mkv:
+                p = Path(j.output_mkv)
+                if p.exists() and p.is_file():
+                    return p
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
     if not JOB_RE.match(job):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     for v in _iter_videos():

@@ -47,3 +47,144 @@
 2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] mux: ok (0.11s) → /workspace/Output/sample/dub.mkv
 2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] Done in 0.24s
 2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] Done. Output: /workspace/Output/sample/dub.mkv
+2026-01-01 01:01:16 INFO anime_v2 [7309] JobQueue started (concurrency=1)
+2026-01-01 01:01:16 INFO anime_v2 [7309] [v2] health check
+2026-01-01 01:01:16 INFO anime_v2 [7309] http ip=testclient GET /health 200 1.2ms
+2026-01-01 01:01:16 WARNING anime_v2 [7309] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:01:16 WARNING anime_v2 [7309] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:01:16 INFO anime_v2 [7309] auth_fail ip=testclient path=/api/jobs
+2026-01-01 01:01:16 INFO anime_v2 [7309] http ip=testclient GET /api/jobs 401 1.1ms
+2026-01-01 01:01:16 INFO anime_v2 [7309] http ip=testclient POST /api/jobs 200 6.1ms
+2026-01-01 01:01:16 INFO anime_v2 [7309] http ip=testclient GET /api/jobs/21970c7c-fd8c-4d79-8bac-cacc3c62afb8 0 1.4ms
+2026-01-01 01:01:51 INFO anime_v2 [7406] JobQueue started (concurrency=1)
+2026-01-01 01:01:51 WARNING anime_v2 [7406] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:01:51 WARNING anime_v2 [7406] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:01:51 INFO anime_v2 [7406] http ip=testclient POST /api/jobs 200 5.2ms
+2026-01-01 01:01:51 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 1.5ms
+2026-01-01 01:01:51 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.7ms
+2026-01-01 01:01:51 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.6ms
+2026-01-01 01:01:51 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.6ms
+2026-01-01 01:01:52 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.7ms
+2026-01-01 01:01:52 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.5ms
+2026-01-01 01:01:52 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.4ms
+2026-01-01 01:01:52 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.3ms
+2026-01-01 01:01:52 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.8ms
+2026-01-01 01:01:53 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.5ms
+2026-01-01 01:01:53 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.9ms
+2026-01-01 01:01:53 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.3ms
+2026-01-01 01:01:53 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 3.0ms
+2026-01-01 01:01:53 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.1ms
+2026-01-01 01:01:54 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.6ms
+2026-01-01 01:01:54 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.7ms
+2026-01-01 01:01:54 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.8ms
+2026-01-01 01:01:54 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.3ms
+2026-01-01 01:01:54 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.0ms
+2026-01-01 01:01:55 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.9ms
+2026-01-01 01:01:55 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 3.1ms
+2026-01-01 01:01:55 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.7ms
+2026-01-01 01:01:55 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.4ms
+2026-01-01 01:01:55 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.7ms
+2026-01-01 01:01:56 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.7ms
+2026-01-01 01:01:56 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.1ms
+2026-01-01 01:01:56 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.8ms
+2026-01-01 01:01:56 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.6ms
+2026-01-01 01:01:56 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 3.0ms
+2026-01-01 01:01:57 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 1.6ms
+2026-01-01 01:01:57 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.9ms
+2026-01-01 01:01:57 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 3.0ms
+2026-01-01 01:01:57 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.6ms
+2026-01-01 01:01:57 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.4ms
+2026-01-01 01:01:58 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 2.2ms
+2026-01-01 01:01:58 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 3.1ms
+2026-01-01 01:01:58 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 3.2ms
+2026-01-01 01:01:58 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 3.6ms
+2026-01-01 01:01:58 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 3.0ms
+2026-01-01 01:01:59 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 3.0ms
+2026-01-01 01:01:59 INFO anime_v2 [7406] http ip=testclient GET /api/jobs/4dc2921b-1761-4121-86ff-e43817b85db1 200 3.1ms
+2026-01-01 01:02:33 INFO anime_v2 [7545] JobQueue started (concurrency=1)
+2026-01-01 01:02:33 INFO anime_v2 [7545] [v2] Extracting audio → /workspace/Output/Test/audio.wav
+2026-01-01 01:02:33 INFO anime_v2 [7545] [v2] Audio already extracted
+2026-01-01 01:02:33 WARNING anime_v2 [7545] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:02:33 WARNING anime_v2 [7545] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:02:33 WARNING anime_v2 [7545] [v2] Diarization unavailable (No module named 'pyannote'). Falling back to single speaker.
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] Embeddings unavailable (No module named 'resemblyzer'). Stable IDs will still persist.
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] Diarization: diar_speakers=1 stable_speakers=1 segments=1
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=ja tgt_lang=en
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] TTS done → /workspace/Output/Test/Test.tts.wav
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] SRT missing/empty; muxing without subtitles (/workspace/Output/Test/Test.translated.srt)
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] mux complete → /workspace/Output/Test/dub.mkv
+2026-01-01 01:02:34 INFO anime_v2 [7545] job 4dc2921b-1761-4121-86ff-e43817b85db1 finished state=JobState.DONE in 0.25s
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] Extracting audio → /workspace/Output/Test/audio.wav
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] Audio already extracted
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] Diarization unavailable (No module named 'pyannote'). Falling back to single speaker.
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] Embeddings unavailable (No module named 'resemblyzer'). Stable IDs will still persist.
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] Diarization: diar_speakers=1 stable_speakers=1 segments=1
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=ja tgt_lang=en
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] TTS done → /workspace/Output/Test/Test.tts.wav
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] SRT missing/empty; muxing without subtitles (/workspace/Output/Test/Test.translated.srt)
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] mux complete → /workspace/Output/Test/dub.mkv
+2026-01-01 01:02:34 INFO anime_v2 [7545] job 21970c7c-fd8c-4d79-8bac-cacc3c62afb8 finished state=JobState.DONE in 0.17s
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] Extracting audio → /workspace/Output/Test/audio.wav
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] Audio already extracted
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] Diarization unavailable (No module named 'pyannote'). Falling back to single speaker.
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] Embeddings unavailable (No module named 'resemblyzer'). Stable IDs will still persist.
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] Diarization: diar_speakers=1 stable_speakers=1 segments=1
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=ja tgt_lang=en
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] TTS done → /workspace/Output/Test/Test.tts.wav
+2026-01-01 01:02:34 WARNING anime_v2 [7545] [v2] SRT missing/empty; muxing without subtitles (/workspace/Output/Test/Test.translated.srt)
+2026-01-01 01:02:34 INFO anime_v2 [7545] [v2] mux complete → /workspace/Output/Test/dub.mkv
+2026-01-01 01:02:34 INFO anime_v2 [7545] job e074ac98-5a05-4c9d-8511-a1963d50e761 finished state=JobState.DONE in 0.16s
+2026-01-01 01:02:34 INFO anime_v2 [7545] http ip=testclient POST /api/jobs 200 173.0ms
+2026-01-01 01:02:34 INFO anime_v2 [7545] http ip=testclient GET /api/jobs/e074ac98-5a05-4c9d-8511-a1963d50e761 200 1.5ms
+2026-01-01 01:02:34 INFO anime_v2 [7545] http ip=testclient GET /api/jobs/e074ac98-5a05-4c9d-8511-a1963d50e761 200 1.1ms
+2026-01-01 01:02:34 INFO anime_v2 [7545] http ip=testclient GET /api/jobs/e074ac98-5a05-4c9d-8511-a1963d50e761/logs/tail 200 1.4ms
+2026-01-01 01:02:56 WARNING anime_v2 [7726] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:02:56 WARNING anime_v2 [7726] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:02:56 INFO anime_v2 [7726] [v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en
+2026-01-01 01:02:56 INFO anime_v2 [7726] [v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] Starting dub: video=/workspace/samples/sample.mp4 mode=low model=small device=cpu
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] Languages: src_lang=auto tgt_lang=en translate=False
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] Extracting audio → /workspace/Output/sample/audio.wav
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] audio_extractor: ok path=/workspace/Output/sample/audio.wav (0.05s)
+2026-01-01 01:02:59 WARNING anime_v2 [7810] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:02:59 WARNING anime_v2 [7810] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:02:59 WARNING anime_v2 [7810] [v2] Diarization unavailable (No module named 'pyannote'). Falling back to single speaker.
+2026-01-01 01:02:59 WARNING anime_v2 [7810] [v2] Embeddings unavailable (No module named 'resemblyzer'). Stable IDs will still persist.
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] Diarization: diar_speakers=1 stable_speakers=1 segments=1
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] diarize: diar_segments=1 stable_speakers=1 (0.07s)
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en
+2026-01-01 01:02:59 WARNING anime_v2 [7810] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] transcription: cues=0 (0.00s) → /workspace/Output/sample/sample.srt
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] translate: disabled (--no-translate)
+2026-01-01 01:02:59 WARNING anime_v2 [7810] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] TTS done → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] tts: ok (0.00s) → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:02:59 WARNING anime_v2 [7810] [v2] SRT missing/empty; muxing without subtitles (/workspace/Output/sample/sample.srt)
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] mux complete → /workspace/Output/sample/dub.mkv
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] mux: ok (0.11s) → /workspace/Output/sample/dub.mkv
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] Done in 0.24s
+2026-01-01 01:02:59 INFO anime_v2 [7810] [v2] Done. Output: /workspace/Output/sample/dub.mkv
+2026-01-01 01:04:02 INFO anime_v2 [7945] JobQueue started (concurrency=1)
+2026-01-01 01:04:02 WARNING anime_v2 [7945] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:04:02 WARNING anime_v2 [7945] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:04:02 INFO anime_v2 [7945] [v2] Extracting audio → /workspace/Output/Test/audio.wav
+2026-01-01 01:04:02 INFO anime_v2 [7945] [v2] Audio already extracted
+2026-01-01 01:04:02 WARNING anime_v2 [7945] [v2] Diarization unavailable (No module named 'pyannote'). Falling back to single speaker.
+2026-01-01 01:04:02 WARNING anime_v2 [7945] [v2] Embeddings unavailable (No module named 'resemblyzer'). Stable IDs will still persist.
+2026-01-01 01:04:02 INFO anime_v2 [7945] [v2] Diarization: diar_speakers=1 stable_speakers=1 segments=1
+2026-01-01 01:04:02 INFO anime_v2 [7945] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=ja tgt_lang=en
+2026-01-01 01:04:02 WARNING anime_v2 [7945] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:04:02 WARNING anime_v2 [7945] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:04:02 INFO anime_v2 [7945] [v2] TTS done → /workspace/Output/Test/Test.tts.wav
+2026-01-01 01:04:02 WARNING anime_v2 [7945] [v2] SRT missing/empty; muxing without subtitles (/workspace/Output/Test/Test.translated.srt)
+2026-01-01 01:04:03 INFO anime_v2 [7945] [v2] mux complete → /workspace/Output/Test/dub.mkv
+2026-01-01 01:04:03 INFO anime_v2 [7945] job ccd1fa22-0f11-4053-9387-603f593dd37f finished state=JobState.DONE in 0.21s
+2026-01-01 01:04:03 INFO anime_v2 [7945] http ip=testclient POST /api/jobs 200 238.5ms
+2026-01-01 01:04:03 INFO anime_v2 [7945] http ip=testclient GET /api/jobs/ccd1fa22-0f11-4053-9387-603f593dd37f 200 1.8ms
+2026-01-01 01:04:03 INFO anime_v2 [7945] http ip=testclient GET /api/jobs/ccd1fa22-0f11-4053-9387-603f593dd37f 200 1.5ms
