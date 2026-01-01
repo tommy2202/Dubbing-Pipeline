@@ -138,10 +138,20 @@ class JobQueue:
         install_egress_policy()
 
         # Recover unfinished jobs (durable-ish single node)
+        # If Scheduler is installed, route recoveries through it so caps/backpressure apply.
+        sched = Scheduler.instance_optional()
         for j in self.store.list(limit=1000):
             if j.state in {JobState.QUEUED, JobState.RUNNING}:
                 self.store.update(j.id, state=JobState.QUEUED, message="Recovered after restart")
-                await self._q.put(j.id)
+                if sched is not None:
+                    try:
+                        from anime_v2.runtime.scheduler import JobRecord
+
+                        sched.submit(JobRecord(job_id=j.id, mode=j.mode, device_pref=j.device, created_at=time.time(), priority=100))
+                    except Exception:
+                        await self._q.put(j.id)
+                else:
+                    await self._q.put(j.id)
 
         for _ in range(self.concurrency):
             self._tasks.append(asyncio.create_task(self._worker()))
@@ -153,6 +163,19 @@ class JobQueue:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks = []
+
+    async def graceful_shutdown(self, *, timeout_s: int = 120) -> None:
+        """
+        Stop accepting new work (handled by lifecycle/scheduler) and let active tasks finish.
+        After timeout, cancel remaining workers.
+        """
+        try:
+            # Wait for queued items to be processed.
+            await asyncio.wait_for(self._q.join(), timeout=float(timeout_s))
+        except Exception:
+            pass
+        # Cancel workers (if any still running, they will be interrupted)
+        await self.stop()
 
     async def enqueue(self, job: Job) -> None:
         self.store.put(job)

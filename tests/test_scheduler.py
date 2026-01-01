@@ -7,6 +7,7 @@ import pytest
 from anime_v2.jobs.models import Job, JobState
 from anime_v2.jobs.store import JobStore
 from anime_v2.runtime.scheduler import JobRecord, Scheduler
+from anime_v2.runtime import lifecycle
 
 
 def _mk_job(jid: str, *, owner: str = "u1") -> Job:
@@ -35,6 +36,7 @@ def _mk_job(jid: str, *, owner: str = "u1") -> Job:
 
 
 def test_backpressure_degrades_mode(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lifecycle.end_draining()
     # Make backpressure threshold tiny
     monkeypatch.setenv("BACKPRESSURE_Q_MAX", "0")
     monkeypatch.setenv("MAX_CONCURRENCY_GLOBAL", "1")

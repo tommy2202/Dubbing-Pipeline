@@ -4,6 +4,7 @@ import hashlib
 import mimetypes
 import os
 import re
+import signal
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,6 +28,7 @@ from anime_v2.ops import audit
 from anime_v2.ops.metrics import REGISTRY
 from anime_v2.runtime.model_manager import ModelManager
 from anime_v2.runtime.scheduler import Scheduler
+from anime_v2.runtime import lifecycle
 from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.log import logger
 from anime_v2.utils.ratelimit import RateLimiter
@@ -101,14 +103,33 @@ async def lifespan(app: FastAPI):
     except Exception as ex:
         logger.warning("model_prewarm_exception", error=str(ex))
     yield
+    # Graceful drain on shutdown (or if signals have already initiated drain).
+    lifecycle.begin_draining(timeout_sec=int(os.environ.get("DRAIN_TIMEOUT_SEC", "120")))
     try:
         sched.stop()
     except Exception:
         pass
-    await q.stop()
+    try:
+        await q.graceful_shutdown(timeout_s=int(os.environ.get("DRAIN_TIMEOUT_SEC", "120")))
+    finally:
+        await q.stop()
 
 
 app = FastAPI(title="anime_v2 server", lifespan=lifespan)
+
+# Signal handlers (best-effort, uvicorn will also trigger lifespan shutdown)
+try:
+    _sig_registered = False
+
+    def _handle_term(signum, _frame=None):
+        if not lifecycle.is_draining():
+            lifecycle.begin_draining(timeout_sec=int(os.environ.get("DRAIN_TIMEOUT_SEC", "120")))
+
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(_sig, _handle_term)
+    _sig_registered = True
+except Exception:
+    _sig_registered = False
 
 # OpenTelemetry (opt-in via OTEL_EXPORTER_OTLP_ENDPOINT)
 _otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -254,6 +275,8 @@ async def metrics():
 async def readyz(request: Request):
     # Readiness: dependencies initialized and writable mounts present.
     try:
+        if lifecycle.is_draining():
+            raise RuntimeError("draining")
         store = getattr(request.app.state, "job_store", None)
         queue = getattr(request.app.state, "job_queue", None)
         auth_store = getattr(request.app.state, "auth_store", None)

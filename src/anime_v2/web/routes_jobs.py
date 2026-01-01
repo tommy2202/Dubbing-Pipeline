@@ -22,6 +22,7 @@ from anime_v2.utils.log import request_id_var
 from anime_v2.utils.crypto import verify_secret
 from anime_v2.utils.ratelimit import RateLimiter
 from anime_v2.runtime.scheduler import JobRecord, Scheduler
+from anime_v2.runtime import lifecycle
 
 
 router = APIRouter()
@@ -107,6 +108,11 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
             if (time.time() - ts) <= ttl:
                 if store.get(jid) is not None:
                     return {"id": jid}
+
+    # Draining: do not accept new jobs (but idempotency hits above still return).
+    if lifecycle.is_draining():
+        ra = str(lifecycle.retry_after_seconds(60))
+        raise HTTPException(status_code=503, detail="Server is draining; try again later", headers={"Retry-After": ra})
 
     # Rate limit: 10/min per identity (fallback to IP)
     rl: RateLimiter | None = getattr(request.app.state, "rate_limiter", None)
@@ -248,15 +254,21 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     store.put(job)
     if idem_key:
         store.put_idempotency(idem_key, jid)
-    scheduler.submit(
-        JobRecord(
-            job_id=jid,
-            mode=mode,
-            device_pref=device,
-            created_at=time.time(),
-            priority=100,
+    try:
+        scheduler.submit(
+            JobRecord(
+                job_id=jid,
+                mode=mode,
+                device_pref=device,
+                created_at=time.time(),
+                priority=100,
+            )
         )
-    )
+    except RuntimeError as ex:
+        if "draining" in str(ex).lower():
+            ra = str(lifecycle.retry_after_seconds(60))
+            raise HTTPException(status_code=503, detail="Server is draining; try again later", headers={"Retry-After": ra})
+        raise
     jobs_queued.inc()
     return {"id": jid}
 

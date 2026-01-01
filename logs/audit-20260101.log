@@ -10,3 +10,13 @@
 {"ts":"2026-01-01T03:18:49.462245+00:00","event":"auth.login_ok","request_id":"db42844176ef4ed987831a6343bff395","user_id":"u_PrrbhVLwpp40EAcSav4pog","meta":{"username":"admin","role":"admin","session":false}}
 {"ts":"2026-01-01T03:33:51.058420+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
 {"ts":"2026-01-01T03:33:51.188558+00:00","event":"auth.login_ok","request_id":"c32d2494ac9b44da9489db5e3d3fed66","user_id":"u_bJXmWQQo6YyKgHSCUxe2SQ","meta":{"username":"admin","role":"admin","session":false}}
+{"ts":"2026-01-01T03:36:59.558600+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:36:59.630349+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:36:59.718818+00:00","event":"auth.login_ok","request_id":"75278f0a85624ac29e60c79a5d531b9a","user_id":"u_bJXmWQQo6YyKgHSCUxe2SQ","meta":{"username":"admin","role":"admin","session":true}}
+{"ts":"2026-01-01T03:36:59.729491+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:36:59.806881+00:00","event":"auth.login_ok","request_id":"3d37d9026bbc40bcbdfe6b0fafb1d6d5","user_id":"u_bJXmWQQo6YyKgHSCUxe2SQ","meta":{"username":"admin","role":"admin","session":false}}
+{"ts":"2026-01-01T03:37:35.057991+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:37:35.122622+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:37:35.210526+00:00","event":"auth.login_ok","request_id":"cae7c1f7608049dba77bd34869c96bb4","user_id":"u_bJXmWQQo6YyKgHSCUxe2SQ","meta":{"username":"admin","role":"admin","session":true}}
+{"ts":"2026-01-01T03:37:35.221953+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:37:35.301273+00:00","event":"auth.login_ok","request_id":"51bc14d4918b4a59893a6129f5b4ecb1","user_id":"u_bJXmWQQo6YyKgHSCUxe2SQ","meta":{"username":"admin","role":"admin","session":false}}

@@ -12,6 +12,7 @@ from typing import Any, Iterator
 from anime_v2.config import get_settings
 from anime_v2.jobs.models import Job, JobState
 from anime_v2.jobs.store import JobStore
+from anime_v2.runtime import lifecycle
 from anime_v2.utils.log import logger
 
 
@@ -156,6 +157,8 @@ class Scheduler:
               - degrade mode high->medium->low
               - if already low, delay enqueue with jitter
         """
+        if lifecycle.is_draining():
+            raise RuntimeError("draining")
         with self._cv:
             qlen = len(self._heap)
             mode = (job.mode or "medium").lower().strip()
