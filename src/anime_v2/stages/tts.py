@@ -11,7 +11,6 @@ from anime_v2.config import get_settings
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
-from anime_v2.timing.pacing import atempo_chain
 from anime_v2.utils.circuit import Circuit
 from anime_v2.utils.ffmpeg_safe import run_ffmpeg
 from anime_v2.utils.io import atomic_copy, read_json, write_json
@@ -67,80 +66,23 @@ def _ffmpeg_to_pcm16k(src: Path, dst: Path) -> None:
     )
 
 
-def _apply_prosody_ffmpeg(
-    wav_in: Path, *, rate: float = 1.0, pitch: float = 1.0, energy: float = 1.0
-) -> Path:
-    """
-    Optional lightweight prosody controls via ffmpeg filters.
-
-    - rate: tempo multiplier (1.0 = unchanged)
-    - pitch: pitch multiplier (1.0 = unchanged), implemented via asetrate trick
-    - energy: volume multiplier (1.0 = unchanged)
-    """
-    wav_in = Path(wav_in)
-    s = get_settings()
-
-    r = max(0.5, min(2.0, float(rate)))
-    p = max(0.8, min(1.25, float(pitch)))
-    e = max(0.2, min(3.0, float(energy)))
-
-    if abs(r - 1.0) < 0.01 and abs(p - 1.0) < 0.01 and abs(e - 1.0) < 0.01:
-        return wav_in
-
-    out = wav_in.with_suffix(".prosody.wav")
-
-    filters: list[str] = []
-    # Pitch shift without changing duration: asetrate then compensate with atempo.
-    if abs(p - 1.0) >= 0.01:
-        filters.append(f"asetrate=16000*{p:.4f}")
-        filters.append(atempo_chain(1.0 / p))
-    if abs(r - 1.0) >= 0.01:
-        filters.append(atempo_chain(r))
-    if abs(e - 1.0) >= 0.01:
-        filters.append(f"volume={e:.3f}")
-    filt = ",".join(filters)
-
-    try:
-        run_ffmpeg(
-            [
-                str(s.ffmpeg_bin),
-                "-y",
-                "-i",
-                str(wav_in),
-                "-af",
-                filt,
-                "-ac",
-                "1",
-                "-ar",
-                "16000",
-                str(out),
-            ],
-            timeout_s=120,
-            retries=0,
-            capture=True,
-        )
-        return out
-    except Exception:
-        return wav_in
-
-
 def _emotion_controls(text: str, *, mode: str) -> tuple[str, float, float, float]:
     """
-    Returns (clean_text, rate_mul, pitch_mul, energy_mul).
+    Backwards-compatible wrapper around Tier-3B expressive policy.
     """
+    from anime_v2.expressive.prosody import categorize
+
     t = str(text or "")
     m = (mode or "off").strip().lower()
     if m not in {"off", "auto", "tags"}:
         m = "off"
-
     if m == "tags":
-        # Accept a simple prefix tag: "[happy] hello"
         import re
 
         mm = re.match(r"^\s*\[([a-zA-Z0-9_\-]+)\]\s*(.*)$", t)
         if mm:
             tag = mm.group(1).lower()
-            t = mm.group(2)
+            t2 = mm.group(2)
             presets = {
                 "happy": (1.02, 1.06, 1.10),
                 "sad": (0.95, 0.94, 0.85),
@@ -149,24 +91,19 @@ def _emotion_controls(text: str, *, mode: str) -> tuple[str, float, float, float
             }
             if tag in presets:
                 r0, p0, e0 = presets[tag]
-                return t, r0, p0, e0
+                return t2, r0, p0, e0
+            return t2, 1.0, 1.0, 1.0
         return t, 1.0, 1.0, 1.0
-
     if m == "auto":
-        # Tiny offline heuristic based on punctuation.
-        r0 = 1.0
-        p0 = 1.0
-        e0 = 1.0
-        if "!" in t:
-            p0 *= 1.05
-            e0 *= 1.10
-        if "?" in t:
-            p0 *= 1.05
-        if "..." in t or "…" in t:
-            r0 *= 0.96
-            e0 *= 0.92
-        return t, r0, p0, e0
-
+        cat, _sig = categorize(rms=None, pitch_hz=None, text=t)
+        if cat == "excited":
+            return t, 1.02, 1.05, 1.10
+        if cat == "angry":
+            return t, 1.04, 1.02, 1.20
+        if cat == "sad":
+            return t, 0.96, 0.97, 0.90
+        if cat == "calm":
+            return t, 0.99, 0.99, 0.93
     return t, 1.0, 1.0, 1.0
 
 
@@ -258,6 +195,10 @@ def run(
     speech_rate: float | None = None,
     pitch: float | None = None,
     energy: float | None = None,
+    expressive: str | None = None,
+    expressive_strength: float | None = None,
+    expressive_debug: bool | None = None,
+    source_audio_wav: Path | None = None,
     pacing: bool | None = None,
     pacing_min_ratio: float | None = None,
     pacing_max_ratio: float | None = None,
@@ -309,6 +250,15 @@ def run(
     eff_rate = float(speech_rate if speech_rate is not None else settings.speech_rate)
     eff_pitch = float(pitch if pitch is not None else settings.pitch)
     eff_energy = float(energy if energy is not None else settings.energy)
+    eff_expressive = (expressive or settings.expressive or "off").strip().lower()
+    if eff_expressive not in {"off", "auto", "source-audio", "text-only"}:
+        eff_expressive = "off"
+    eff_expressive_strength = float(
+        expressive_strength if expressive_strength is not None else settings.expressive_strength
+    )
+    eff_expressive_debug = bool(
+        expressive_debug if expressive_debug is not None else bool(settings.expressive_debug)
+    )
     eff_pacing = bool(pacing) if pacing is not None else bool(settings.pacing)
     eff_pacing_min = (
         float(pacing_min_ratio)
@@ -523,6 +473,58 @@ def run(
         rate_mul = float(eff_rate) * float(emo_rate)
         pitch_mul = float(eff_pitch) * float(emo_pitch)
         energy_mul = float(eff_energy) * float(emo_energy)
+
+        # Tier-3B expressive mode (optional; OFF by default)
+        if eff_expressive != "off":
+            try:
+                from anime_v2.expressive.policy import plan_for_segment, write_plan_json
+                from anime_v2.expressive.prosody import ProsodyFeatures, analyze_segment
+
+                feats: ProsodyFeatures | None = None
+                seg_id = int(i + 1)
+                start_s = float(line.get("start", 0.0))
+                end_s = float(line.get("end", 0.0))
+                if eff_expressive == "source-audio" and source_audio_wav is not None:
+                    exp_tmp = out_dir / "expressive" / "tmp"
+                    exp_tmp.mkdir(parents=True, exist_ok=True)
+                    seg_wav = exp_tmp / f"{seg_id:04d}.wav"
+                    if not seg_wav.exists():
+                        feats = analyze_segment(
+                            source_audio_wav=Path(source_audio_wav),
+                            start_s=start_s,
+                            end_s=end_s,
+                            text=text,
+                            out_wav=seg_wav,
+                            pitch=True,
+                        )
+                    else:
+                        # If it exists, compute only cheap stats
+                        feats = analyze_segment(
+                            source_audio_wav=Path(source_audio_wav),
+                            start_s=start_s,
+                            end_s=end_s,
+                            text=text,
+                            out_wav=seg_wav,
+                            pitch=False,
+                        )
+                elif eff_expressive in {"auto", "text-only"}:
+                    feats = None
+
+                plan = plan_for_segment(
+                    segment_id=seg_id,
+                    mode=eff_expressive,
+                    strength=float(eff_expressive_strength),
+                    text=text,
+                    features=feats,
+                )
+                rate_mul *= float(plan.rate_mul)
+                pitch_mul *= float(plan.pitch_mul)
+                energy_mul *= float(plan.energy_mul)
+                if eff_expressive_debug:
+                    out_plan = out_dir / "expressive" / "plans" / f"{seg_id:04d}.json"
+                    write_plan_json(plan, out_plan, features=feats)
+            except Exception:
+                pass
         speaker_id = str(line.get("speaker_id") or eff_tts_speaker or "default")
         if eff_voice_mode == "single":
             speaker_id = str(eff_tts_speaker or "default")
@@ -755,7 +757,15 @@ def run(
 
         # Optional expressive controls (best-effort; never required)
         with suppress(Exception):
-            clip = _apply_prosody_ffmpeg(clip, rate=rate_mul, pitch=pitch_mul, energy=energy_mul)
+            from anime_v2.expressive.policy import apply_prosody_ffmpeg
+
+            clip = apply_prosody_ffmpeg(
+                clip,
+                ffmpeg_bin=Path(settings.ffmpeg_bin),
+                rate=rate_mul,
+                pitch=pitch_mul,
+                energy=energy_mul,
+            )
 
         # Optional Tier-1 C pacing controls (opt-in).
         if eff_pacing:

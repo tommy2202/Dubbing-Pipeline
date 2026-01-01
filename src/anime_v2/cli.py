@@ -319,6 +319,28 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     help="Expressive speech controls (best-effort, offline-friendly)",
 )
 @click.option(
+    "--expressive",
+    "expressive_mode",
+    type=click.Choice(["off", "auto", "source-audio", "text-only"], case_sensitive=False),
+    default=str(get_settings().expressive),
+    show_default=True,
+    help="Tier-3B expressive prosody guidance (opt-in)",
+)
+@click.option(
+    "--expressive-strength",
+    type=float,
+    default=float(get_settings().expressive_strength),
+    show_default=True,
+    help="Expressive strength 0..1 (conservative range)",
+)
+@click.option(
+    "--expressive-debug",
+    is_flag=True,
+    default=bool(get_settings().expressive_debug),
+    show_default=True,
+    help="Write Output/<job>/expressive/plans/<segment>.json",
+)
+@click.option(
     "--speech-rate", type=float, default=float(get_settings().speech_rate), show_default=True
 )
 @click.option("--pitch", type=float, default=float(get_settings().pitch), show_default=True)
@@ -470,6 +492,9 @@ def run(
     timing_debug: bool,
     emit: str,
     emotion_mode: str,
+    expressive_mode: str,
+    expressive_strength: float,
+    expressive_debug: bool,
     speech_rate: float,
     pitch: float,
     energy: float,
@@ -734,6 +759,9 @@ def run(
                     strict_plugins=bool(strict_plugins),
                     emit=emit,
                     emotion_mode=emotion_mode,
+                    expressive_mode=expressive_mode,
+                    expressive_strength=expressive_strength,
+                    expressive_debug=bool(expressive_debug),
                     speech_rate=speech_rate,
                     pitch=pitch,
                     energy=energy,
@@ -902,6 +930,9 @@ def run(
             subs_format=(subs_format or "srt").lower(),
             align_mode=(align_mode or "stretch").lower(),
             emotion_mode=emotion_mode,
+            expressive=expressive_mode,
+            expressive_strength=float(expressive_strength),
+            expressive_debug=bool(expressive_debug),
             speech_rate=float(speech_rate),
             pitch=float(pitch),
             energy=float(energy),
@@ -1458,6 +1489,10 @@ def run(
             ),
             tts_provider=tts_provider,
             emotion_mode=emotion_mode,
+            expressive=expressive_mode,
+            expressive_strength=float(expressive_strength),
+            expressive_debug=bool(expressive_debug),
+            source_audio_wav=Path(str(extracted)) if extracted is not None else None,
             speech_rate=float(speech_rate),
             pitch=float(pitch),
             energy=float(energy),

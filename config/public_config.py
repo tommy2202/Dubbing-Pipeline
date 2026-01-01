@@ -85,6 +85,11 @@ class PublicConfig(BaseSettings):
     pitch: float = Field(default=1.0, alias="PITCH")  # global multiplier
     energy: float = Field(default=1.0, alias="ENERGY")  # volume multiplier
 
+    # Tier-3 B: expressive/prosody controls (opt-in; default off)
+    expressive: str = Field(default="off", alias="EXPRESSIVE")  # off|auto|source-audio|text-only
+    expressive_strength: float = Field(default=0.5, alias="EXPRESSIVE_STRENGTH")  # 0..1
+    expressive_debug: bool = Field(default=False, alias="EXPRESSIVE_DEBUG")
+
     # --- web server ---
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")

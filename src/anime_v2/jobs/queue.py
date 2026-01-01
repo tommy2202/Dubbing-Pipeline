@@ -1005,6 +1005,10 @@ class JobQueue:
                             tts_provider=str(settings.tts_provider),
                             # expressiveness (best-effort)
                             emotion_mode=str(settings.emotion_mode),
+                            expressive=str(getattr(settings, "expressive", "off")),
+                            expressive_strength=float(getattr(settings, "expressive_strength", 0.5)),
+                            expressive_debug=bool(getattr(settings, "expressive_debug", False)),
+                            source_audio_wav=Path(str(wav)),
                             speech_rate=float(settings.speech_rate),
                             pitch=float(settings.pitch),
                             energy=float(settings.energy),

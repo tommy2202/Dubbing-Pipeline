@@ -282,6 +282,28 @@ Output:
 Notes:
 - If Wav2Lip is missing, the job continues without lipsync unless `--strict-plugins` is set.
 
+### Expressive / Emotion Transfer (Tier‑3 B, optional)
+
+Opt-in per-segment expressive prosody guidance. **Off by default**.
+
+Modes:
+- `--expressive off`: disabled (default)
+- `--expressive text-only`: punctuation-driven heuristics
+- `--expressive source-audio`: best-effort analysis of the **source audio segment** (RMS + optional pitch if `librosa` is installed)
+- `--expressive auto`: currently treated as a safe default (uses text-only unless source audio is provided)
+
+Artifacts (when `--expressive-debug`):
+- `Output/<job>/expressive/plans/<segment_id>.json`
+
+Timing interaction:
+- Expressive controls are conservative and then Tier‑1 pacing still enforces segment duration when `--pacing` is enabled.
+
+Example:
+
+```bash
+anime-v2 Input/Test.mp4 --timing-fit --pacing --expressive source-audio --expressive-strength 0.5 --expressive-debug
+```
+
 ### Pseudo-streaming (chunk mode)
 
 ```bash
