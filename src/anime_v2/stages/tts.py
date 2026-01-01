@@ -38,6 +38,17 @@ def _parse_srt(path: Path) -> list[dict]:
 
 def _ffmpeg_to_pcm16k(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
+    # ffmpeg cannot safely overwrite input in-place
+    if src.resolve() == dst.resolve():
+        tmp = dst.with_suffix(".tmp.wav")
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(tmp)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        tmp.replace(dst)
+        return
     subprocess.run(
         ["ffmpeg", "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(dst)],
         check=True,
@@ -103,6 +114,7 @@ def run(
     wav_out: Path | None = None,
     progress_cb=None,
     cancel_cb=None,
+    max_stretch: float = 0.15,
     **_,
 ) -> Path:
     """
@@ -273,6 +285,15 @@ def run(
             _ffmpeg_to_pcm16k(raw_clip, clip)
         except Exception:
             clip = raw_clip
+
+        # Optional: retime clip to fit subtitle window (avoid early/late speech).
+        try:
+            from anime_v2.stages.align import retime_tts  # lazy import
+
+            target_dur = max(0.05, float(l["end"]) - float(l["start"]))
+            clip = retime_tts(clip, target_duration_s=target_dur, max_stretch=float(max_stretch))
+        except Exception:
+            pass
         clip_paths.append(clip)
         if progress_cb is not None:
             try:

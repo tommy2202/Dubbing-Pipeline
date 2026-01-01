@@ -7,6 +7,11 @@ sqlitedict>=2.1.0
 websockets>=12.0
 sse-starlette>=2.1.2
 
+[align]
+aeneas>=1.7.3
+librosa>=0.11.0
+pyloudnorm>=0.1.1
+
 [dev]
 pytest>=8.0.0
 
@@ -20,6 +25,7 @@ torch>=2.0.0
 langdetect>=1.0.9
 transformers>=4.45.0
 sentencepiece>=0.2.0
+sacremoses>=0.1.1
 
 [tts]
 numpy>=1.24

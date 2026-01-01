@@ -38,6 +38,12 @@ tts = [
   "resemblyzer>=0.1.4",
   "TTS>=0.22.0",
 ]
+
+align = [
+  "aeneas>=1.7.3",
+  "librosa>=0.11.0",
+  "pyloudnorm>=0.1.1",
+]
 dev = [
   "pytest>=8.0.0",
 ]

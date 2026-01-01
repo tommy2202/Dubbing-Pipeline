@@ -262,3 +262,59 @@
 2026-01-01 01:19:25 INFO anime_v2 [8966] [v2] mux: ok (0.10s) → /workspace/Output/sample/dub.mkv
 2026-01-01 01:19:25 INFO anime_v2 [8966] [v2] Done in 0.32s
 2026-01-01 01:19:25 INFO anime_v2 [8966] [v2] Done. Output: /workspace/Output/sample/dub.mkv
+2026-01-01 01:33:22 INFO anime_v2 [9525] [v2] Starting dub: video=/workspace/samples/sample.mp4 mode=low model=small device=cpu
+2026-01-01 01:33:22 INFO anime_v2 [9525] [v2] Languages: src_lang=auto tgt_lang=en translate=False
+2026-01-01 01:33:22 INFO anime_v2 [9525] [v2] Extracting audio → /workspace/Output/sample/audio.wav
+2026-01-01 01:33:22 INFO anime_v2 [9525] [v2] audio_extractor: ok path=/workspace/Output/sample/audio.wav (0.06s)
+2026-01-01 01:33:22 WARNING anime_v2 [9525] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:33:22 WARNING anime_v2 [9525] diarize engine=speechbrain failed (no segments)
+2026-01-01 01:33:22 INFO anime_v2 [9525] diarize engine=heuristic segments=1
+2026-01-01 01:33:22 WARNING anime_v2 [9525] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:33:22 INFO anime_v2 [9525] [v2] diarize: diar_segments=1 stable_speakers=1 (0.17s)
+2026-01-01 01:33:22 INFO anime_v2 [9525] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en
+2026-01-01 01:33:22 WARNING anime_v2 [9525] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:33:22 INFO anime_v2 [9525] [v2] transcription: segments=0 (0.00s) → /workspace/Output/sample/sample.srt
+2026-01-01 01:33:22 INFO anime_v2 [9525] [v2] translate: disabled (--no-translate)
+2026-01-01 01:33:22 WARNING anime_v2 [9525] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:33:22 WARNING anime_v2 [9525] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:33:22 WARNING anime_v2 [9525] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:33:22 ERROR anime_v2 [9525] [v2] tts failed (continuing with silence track): Command '['ffmpeg', '-y', '-i', '/workspace/Output/sample/tts_clips/0000_SPEAKER_01.wav', '-ac', '1', '-ar', '16000', '/workspace/Output/sample/tts_clips/0000_SPEAKER_01.wav']' returned non-zero exit status 234.
+Traceback (most recent call last):
+  File "/workspace/src/anime_v2/cli.py", line 427, in cli
+    tts.run(out_dir=out_dir, translated_json=translated_json, diarization_json=diar_json, wav_out=tts_wav, max_stretch=float(max_stretch))
+  File "/workspace/src/anime_v2/stages/tts.py", line 215, in run
+    _ffmpeg_to_pcm16k(clip, clip)
+  File "/workspace/src/anime_v2/stages/tts.py", line 41, in _ffmpeg_to_pcm16k
+    subprocess.run(
+  File "/usr/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['ffmpeg', '-y', '-i', '/workspace/Output/sample/tts_clips/0000_SPEAKER_01.wav', '-ac', '1', '-ar', '16000', '/workspace/Output/sample/tts_clips/0000_SPEAKER_01.wav']' returned non-zero exit status 234.
+2026-01-01 01:33:22 WARNING anime_v2 [9525] [v2] SRT missing/empty; muxing without subtitles (/workspace/Output/sample/sample.srt)
+2026-01-01 01:33:23 INFO anime_v2 [9525] [v2] mux complete → /workspace/Output/sample/dub.mkv
+2026-01-01 01:33:23 INFO anime_v2 [9525] [v2] mux: ok (0.20s) → /workspace/Output/sample/dub.mkv
+2026-01-01 01:33:23 INFO anime_v2 [9525] [v2] Done in 0.47s
+2026-01-01 01:33:23 INFO anime_v2 [9525] [v2] Done. Output: /workspace/Output/sample/dub.mkv
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] Starting dub: video=/workspace/samples/sample.mp4 mode=low model=small device=cpu
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] Languages: src_lang=auto tgt_lang=en translate=False
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] Extracting audio → /workspace/Output/sample/audio.wav
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] audio_extractor: ok path=/workspace/Output/sample/audio.wav (0.05s)
+2026-01-01 01:34:15 WARNING anime_v2 [9701] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:34:15 WARNING anime_v2 [9701] diarize engine=speechbrain failed (no segments)
+2026-01-01 01:34:15 INFO anime_v2 [9701] diarize engine=heuristic segments=1
+2026-01-01 01:34:15 WARNING anime_v2 [9701] ECAPA embedding unavailable (No module named 'torch')
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] diarize: diar_segments=1 stable_speakers=1 (0.17s)
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en
+2026-01-01 01:34:15 WARNING anime_v2 [9701] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] transcription: segments=0 (0.00s) → /workspace/Output/sample/sample.srt
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] translate: disabled (--no-translate)
+2026-01-01 01:34:15 WARNING anime_v2 [9701] [v2] align: aeneas failed (aeneas not installed: No module named 'aeneas'); falling back to heuristic
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] align: ok (no-translate) segments=1 aligner=auto
+2026-01-01 01:34:15 WARNING anime_v2 [9701] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 01:34:15 WARNING anime_v2 [9701] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 01:34:15 WARNING anime_v2 [9701] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] TTS done → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] tts: ok (0.04s) → /workspace/Output/sample/sample.tts.wav
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] mux complete → /workspace/Output/sample/dub.mkv
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] mux: ok (0.22s) → /workspace/Output/sample/dub.mkv
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] Done in 0.50s
+2026-01-01 01:34:15 INFO anime_v2 [9701] [v2] Done. Output: /workspace/Output/sample/dub.mkv

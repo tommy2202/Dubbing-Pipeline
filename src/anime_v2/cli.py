@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 
 from anime_v2.stages import audio_extractor, mkv_export, tts
+from anime_v2.stages.align import AlignConfig, realign_srt
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
 from anime_v2.stages.translation import TranslationConfig, translate_segments
@@ -122,6 +123,8 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
 @click.option("--mt-lowconf-thresh", type=float, default=-0.45, show_default=True, help="Avg logprob threshold for Whisper translate fallback")
 @click.option("--glossary", default=None, help="Glossary TSV path or directory")
 @click.option("--style", default=None, help="Style YAML path or directory")
+@click.option("--aligner", type=click.Choice(["auto", "aeneas", "heuristic"], case_sensitive=False), default="auto", show_default=True)
+@click.option("--max-stretch", type=float, default=0.15, show_default=True, help="Max +/- time-stretch applied to TTS clips")
 def cli(
     video: Path,
     device: str,
@@ -137,6 +140,8 @@ def cli(
     mt_lowconf_thresh: float,
     glossary: str | None,
     style: str | None,
+    aligner: str,
+    max_stretch: float,
 ) -> None:
     """
     Run pipeline-v2 on VIDEO.
@@ -359,7 +364,30 @@ def cli(
     if no_translate:
         logger.info("[v2] translate: disabled (--no-translate)")
         try:
-            # Keep raw segments for downstream (Japanese)
+            # Optional alignment even in no-translate mode (use source text).
+            try:
+                a_cfg = AlignConfig(aligner=aligner.lower(), max_stretch=float(max_stretch))
+                segs_for_align = []
+                for s in segments_for_mt:
+                    s2 = dict(s)
+                    s2["align_text"] = str(s2.get("text") or "").strip()
+                    segs_for_align.append(s2)
+                aligned = realign_srt(extracted, segs_for_align, a_cfg)
+                segments_for_mt = [
+                    {**orig, "start": float(al.get("start", orig.get("start", 0.0))), "end": float(al.get("end", orig.get("end", 0.0))), "aligned_by": al.get("aligned_by")}
+                    for orig, al in zip(segments_for_mt, aligned)
+                ]
+                aligned_srt = out_dir / f"{stem}.aligned.srt"
+                _write_srt_from_lines(
+                    [{"start": s["start"], "end": s["end"], "speaker_id": s.get("speaker", "SPEAKER_01"), "text": s.get("text", "")} for s in segments_for_mt],
+                    aligned_srt,
+                )
+                subs_srt_path = aligned_srt
+                logger.info("[v2] align: ok (no-translate) segments=%s aligner=%s", len(segments_for_mt), aligner)
+            except Exception as ex:
+                logger.warning("[v2] align: skipped/failed (no-translate) (%s)", ex)
+
+            # Keep segments for downstream (TTS windowing)
             write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": segments_for_mt})
         except Exception:
             pass
@@ -377,6 +405,31 @@ def cli(
                 device=chosen_device,
             )
             translated_segments = translate_segments(segments_for_mt, src_lang=src_lang, tgt_lang=tgt_lang, cfg=cfg)
+
+            # Optional forced alignment to original audio (improves subtitle and TTS windowing).
+            try:
+                a_cfg = AlignConfig(aligner=aligner.lower(), max_stretch=float(max_stretch))
+                # Provide "align_text" hint: prefer JP source text when present.
+                segs_for_align = []
+                for s in translated_segments:
+                    s2 = dict(s)
+                    align_text = str(s2.get("src_text") or "").strip()
+                    if not align_text:
+                        align_text = str(s2.get("text") or "").strip()
+                    s2["align_text"] = align_text
+                    segs_for_align.append(s2)
+                aligned = realign_srt(extracted, segs_for_align, a_cfg)
+                # Update timings on translated segments
+                by_key = {(float(s.get("start", 0.0)), float(s.get("end", 0.0)), str(s.get("speaker", ""))): s for s in translated_segments}
+                # Since aeneas may re-time drastically, just take aligned list ordering
+                translated_segments = [
+                    {**orig, "start": float(al.get("start", orig.get("start", 0.0))), "end": float(al.get("end", orig.get("end", 0.0))), "aligned_by": al.get("aligned_by")}
+                    for orig, al in zip(translated_segments, aligned)
+                ]
+                logger.info("[v2] align: ok segments=%s aligner=%s", len(translated_segments), aligner)
+            except Exception as ex:
+                logger.warning("[v2] align: skipped/failed (%s)", ex)
+
             write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": translated_segments})
 
             # Convert to SRT lines (speaker preserved; text from translated)
@@ -394,7 +447,7 @@ def cli(
     # 5) tts.synthesize (line-aligned)
     t_stage = time.perf_counter()
     try:
-        tts.run(out_dir=out_dir, translated_json=translated_json, diarization_json=diar_json, wav_out=tts_wav)
+        tts.run(out_dir=out_dir, translated_json=translated_json, diarization_json=diar_json, wav_out=tts_wav, max_stretch=float(max_stretch))
         logger.info("[v2] tts: ok (%.2fs) → %s", time.perf_counter() - t_stage, tts_wav)
     except Exception as ex:
         logger.exception("[v2] tts failed (continuing with silence track): %s", ex)
@@ -402,7 +455,7 @@ def cli(
         try:
             from anime_v2.stages.tts import _write_silence_wav  # type: ignore
 
-            dur = max((float(l["end"]) for l in lines), default=0.0)
+            dur = max((float(s["end"]) for s in segments_for_mt), default=0.0)
             _write_silence_wav(tts_wav, duration_s=dur)
         except Exception:
             pass

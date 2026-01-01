@@ -36,3 +36,7 @@ av==12.3.0
 speechbrain==1.0.0
 scikit-learn==1.5.2
 webrtcvad==2.0.10
+
+# alignment / retiming
+aeneas==1.7.3
+pyloudnorm==0.1.1

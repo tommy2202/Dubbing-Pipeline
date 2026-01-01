@@ -16,7 +16,7 @@ from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
 from anime_v2.utils.embeds import ecapa_embedding
 from anime_v2.stages.transcription import transcribe
-from anime_v2.stages.translate import translate_lines
+from anime_v2.stages.translation import TranslationConfig, translate_segments
 from anime_v2.utils.log import logger
 from anime_v2.utils.paths import output_dir_for
 from anime_v2.utils.time import format_srt_timestamp
@@ -281,12 +281,72 @@ class JobQueue:
                 src_lang=job.src_lang,
                 tgt_lang=job.tgt_lang,
             )
-            cues = _parse_srt_to_cues(srt_out)
-            self.store.update(job_id, progress=0.60, message=f"Transcribed ({len(cues)} cues)")
+            # Prefer rich segment metadata (avg_logprob) when available.
+            cues: list[dict] = []
+            try:
+                from anime_v2.utils.io import read_json
+
+                meta = read_json(srt_out.with_suffix(".json"), default={})
+                segs_detail = meta.get("segments_detail", []) if isinstance(meta, dict) else []
+                cues = segs_detail if isinstance(segs_detail, list) else []
+            except Exception:
+                cues = _parse_srt_to_cues(srt_out)
+            self.store.update(job_id, progress=0.60, message=f"Transcribed ({len(cues)} segments)")
             await self._check_canceled(job_id)
 
-            # d) translate.translate_lines (~0.75) when needed
-            lines = _assign_speakers(cues, diar_segments)
+            # d) translation manager (~0.75) when needed
+            # Prefer diarization utterances for timing; assign text/logprob from transcription overlaps.
+            diar_utts = sorted(
+                [{"start": float(s["start"]), "end": float(s["end"]), "speaker": str(s.get("speaker_id") or "SPEAKER_01")} for s in diar_segments],
+                key=lambda x: (x["start"], x["end"]),
+            )
+
+            def _ov(a0, a1, b0, b1) -> float:
+                return max(0.0, min(a1, b1) - max(a0, b0))
+
+            segments_for_mt: list[dict] = []
+            if diar_utts:
+                for u in diar_utts:
+                    txt_parts = []
+                    lp_parts = []
+                    w_parts = []
+                    for seg in cues:
+                        try:
+                            s0 = float(seg["start"])
+                            s1 = float(seg["end"])
+                            ov = _ov(u["start"], u["end"], s0, s1)
+                            if ov <= 0:
+                                continue
+                            t = str(seg.get("text") or "").strip()
+                            if t:
+                                txt_parts.append(t)
+                            lp = seg.get("avg_logprob")
+                            if lp is not None:
+                                lp_parts.append(float(lp))
+                                w_parts.append(ov)
+                        except Exception:
+                            continue
+                    text_src = " ".join(txt_parts).strip()
+                    logprob = None
+                    if lp_parts and w_parts and len(lp_parts) == len(w_parts):
+                        tot = sum(w_parts)
+                        if tot > 0:
+                            logprob = sum(lp * w for lp, w in zip(lp_parts, w_parts)) / tot
+                    segments_for_mt.append({"start": u["start"], "end": u["end"], "speaker": u["speaker"], "text": text_src, "logprob": logprob})
+            else:
+                for seg in cues:
+                    try:
+                        segments_for_mt.append(
+                            {
+                                "start": float(seg["start"]),
+                                "end": float(seg["end"]),
+                                "speaker": "SPEAKER_01",
+                                "text": str(seg.get("text") or ""),
+                                "logprob": seg.get("avg_logprob"),
+                            }
+                        )
+                    except Exception:
+                        continue
             translated_json = out_dir / "translated.json"
             translated_srt = out_dir / f"{video_path.stem}.translated.srt"
 
@@ -296,20 +356,22 @@ class JobQueue:
                 self.store.update(job_id, progress=0.62, message="Translating subtitles")
                 self.store.append_log(job_id, f"[{now_utc()}] translate src={job.src_lang} tgt={job.tgt_lang}")
                 try:
-                    translated = translate_lines(lines, src_lang=job.src_lang, tgt_lang=job.tgt_lang)
-                    # per-line fallback
-                    safe = []
-                    for orig, tr in zip(lines, translated):
-                        ttxt = str(tr.get("text", "") or "").strip()
-                        if str(orig.get("text", "") or "").strip() and not ttxt:
-                            tr = dict(tr)
-                            tr["text"] = orig["text"]
-                        safe.append(tr)
                     from anime_v2.utils.io import write_json
 
-                    write_json(translated_json, {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "lines": safe})
-                    _write_srt(safe, translated_srt)
-                    lines = safe
+                    cfg = TranslationConfig(
+                        mt_engine=(os.environ.get("MT_ENGINE") or "auto"),
+                        mt_lowconf_thresh=float(os.environ.get("MT_LOWCONF_THRESH", "-0.45")),
+                        glossary_path=os.environ.get("GLOSSARY"),
+                        style_path=os.environ.get("STYLE"),
+                        show_id=os.environ.get("SHOW_ID") or video_path.stem,
+                        whisper_model=model_name,
+                        audio_path=str(wav),
+                        device=device,
+                    )
+                    translated_segments = translate_segments(segments_for_mt, src_lang=job.src_lang, tgt_lang=job.tgt_lang, cfg=cfg)
+                    write_json(translated_json, {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "segments": translated_segments})
+                    srt_lines = [{"start": s["start"], "end": s["end"], "speaker_id": s["speaker"], "text": s["text"]} for s in translated_segments]
+                    _write_srt(srt_lines, translated_srt)
                     subs_srt_path = translated_srt
                     self.store.update(job_id, progress=0.75, message="Translation done")
                 except Exception as ex:
@@ -340,6 +402,7 @@ class JobQueue:
                     wav_out=tts_wav,
                     progress_cb=on_tts_progress,
                     cancel_cb=cancel_cb,
+                    max_stretch=float(os.environ.get("MAX_STRETCH", "0.15")),
                 )
             except tts.TTSCanceled:
                 raise JobCanceled()
@@ -351,7 +414,8 @@ class JobQueue:
                 if not tts_wav.exists():
                     from anime_v2.stages.tts import _write_silence_wav  # type: ignore
 
-                    dur = max((float(l["end"]) for l in lines), default=0.0)
+                    # best-effort duration from diarization-timed segments
+                    dur = max((float(s["end"]) for s in segments_for_mt), default=0.0)
                     _write_silence_wav(tts_wav, duration_s=dur)
 
             self.store.update(job_id, progress=0.95, message="TTS done")

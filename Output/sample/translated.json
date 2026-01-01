@@ -1,5 +1,14 @@
 {
-  "lines": [],
+  "segments": [
+    {
+      "aligned_by": "heuristic",
+      "end": 7.7100000000000195,
+      "logprob": null,
+      "speaker": "SPEAKER_01",
+      "start": 0.0,
+      "text": ""
+    }
+  ],
   "src_lang": "auto",
   "tgt_lang": "en"
 }

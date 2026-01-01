@@ -22,10 +22,15 @@ Provides-Extra: translation
 Requires-Dist: langdetect>=1.0.9; extra == "translation"
 Requires-Dist: transformers>=4.45.0; extra == "translation"
 Requires-Dist: sentencepiece>=0.2.0; extra == "translation"
+Requires-Dist: sacremoses>=0.1.1; extra == "translation"
 Provides-Extra: tts
 Requires-Dist: numpy>=1.24; extra == "tts"
 Requires-Dist: resemblyzer>=0.1.4; extra == "tts"
 Requires-Dist: TTS>=0.22.0; extra == "tts"
+Provides-Extra: align
+Requires-Dist: aeneas>=1.7.3; extra == "align"
+Requires-Dist: librosa>=0.11.0; extra == "align"
+Requires-Dist: pyloudnorm>=0.1.1; extra == "align"
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0.0; extra == "dev"
 Provides-Extra: webrtc
