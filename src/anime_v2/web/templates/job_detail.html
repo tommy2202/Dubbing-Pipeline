@@ -9,21 +9,276 @@
 </div>
 {% endif %}
 
-<div>
-  <h1 class="text-2xl font-semibold">Job</h1>
-  <p class="mt-1 text-sm text-slate-400 break-all">{{ job_id }}</p>
-</div>
-
-<div class="mt-6 grid gap-4">
-  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-    <div class="text-sm text-slate-300">Status</div>
-    <div class="mt-2 text-sm text-slate-500">Skeleton (UX-3).</div>
+<div
+  x-data="jobDetail('{{ job_id }}')"
+  x-init="init()"
+>
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold">Job</h1>
+      <p class="mt-1 text-sm text-slate-400 break-all">{{ job_id }}</p>
+      <p class="mt-2 text-sm text-slate-300" x-text="job ? (job.state + ': ' + (job.message || '')) : 'Loading…'"></p>
+      <p class="mt-1 text-xs text-slate-500" x-text="job ? ('Progress: ' + Math.round((job.progress||0)*100) + '%') : ''"></p>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-sm text-red-100"
+              @click="doAction('cancel')" :disabled="!job || !['QUEUED','RUNNING','PAUSED'].includes(job.state)">
+        Cancel
+      </button>
+    </div>
   </div>
 
-  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-    <div class="text-sm text-slate-300">Output</div>
-    <div class="mt-2 text-sm text-slate-500">Skeleton.</div>
+  <!-- Tabs -->
+  <div class="mt-6 border-b border-slate-800">
+    <nav class="flex flex-wrap gap-2 text-sm">
+      <template x-for="t in tabs" :key="t.key">
+        <button
+          type="button"
+          class="rounded-t-lg px-3 py-2"
+          :class="activeTab===t.key ? 'bg-slate-900/60 text-white' : 'text-slate-400 hover:text-slate-200'"
+          @click="activeTab=t.key"
+        >
+          <span x-text="t.label"></span>
+        </button>
+      </template>
+    </nav>
+  </div>
+
+  <!-- Overview -->
+  <div class="mt-4" x-show="activeTab==='overview'">
+    <div class="grid gap-4 lg:grid-cols-2">
+      <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div class="text-sm text-slate-300">Summary</div>
+        <div class="mt-3 text-sm text-slate-200 space-y-1">
+          <div><span class="text-slate-500">State:</span> <span x-text="job?.state || ''"></span></div>
+          <div><span class="text-slate-500">Mode:</span> <span x-text="job?.mode || ''"></span></div>
+          <div><span class="text-slate-500">Device:</span> <span x-text="job?.device || ''"></span></div>
+          <div><span class="text-slate-500">Lang:</span> <span x-text="(job?.src_lang||'') + ' → ' + (job?.tgt_lang||'')"></span></div>
+          <div><span class="text-slate-500">Created:</span> <span x-text="job?.created_at || ''"></span></div>
+          <div><span class="text-slate-500">Updated:</span> <span x-text="job?.updated_at || ''"></span></div>
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div class="text-sm text-slate-300">Stage breakdown</div>
+        <template x-if="!job || !job.checkpoint || !job.checkpoint.stages">
+          <div class="mt-3 text-sm text-slate-500">No checkpoint yet.</div>
+        </template>
+        <template x-if="job && job.checkpoint && job.checkpoint.stages">
+          <div class="mt-3 overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="text-xs text-slate-500">
+                <tr>
+                  <th class="text-left py-1 pr-3">Stage</th>
+                  <th class="text-left py-1 pr-3">Done</th>
+                  <th class="text-left py-1 pr-3">Done at</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="(v, k) in job.checkpoint.stages" :key="k">
+                  <tr class="border-t border-slate-900">
+                    <td class="py-1 pr-3 text-slate-200" x-text="k"></td>
+                    <td class="py-1 pr-3 text-slate-200" x-text="v && v.done ? 'yes' : 'no'"></td>
+                    <td class="py-1 pr-3 text-slate-500" x-text="v && v.done_at ? new Date(v.done_at * 1000).toISOString() : ''"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transcript -->
+  <div class="mt-4" x-show="activeTab==='transcript'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-300">Transcript</div>
+      <div class="mt-3 text-sm text-slate-500">Read-only placeholder (UX-4).</div>
+    </div>
+  </div>
+
+  <!-- Voice Map -->
+  <div class="mt-4" x-show="activeTab==='voice'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="flex items-center justify-between gap-3">
+        <div class="text-sm text-slate-300">Voice Map</div>
+        <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium" @click="saveVoiceMap()">
+          Save Mapping
+        </button>
+      </div>
+      <div class="mt-3 text-xs text-slate-500">Persists to the job record; used for future synth (best-effort).</div>
+
+      <div class="mt-4 overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="text-xs text-slate-500">
+            <tr>
+              <th class="text-left py-2 pr-3">character_id</th>
+              <th class="text-left py-2 pr-3">label</th>
+              <th class="text-left py-2 pr-3">strategy</th>
+              <th class="text-left py-2 pr-3">tts_speaker</th>
+              <th class="text-left py-2 pr-3">tts_speaker_wav</th>
+              <th class="text-left py-2 pr-3">language</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="(row, idx) in voiceItems" :key="idx">
+              <tr class="border-t border-slate-900">
+                <td class="py-2 pr-3">
+                  <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                         x-model="row.character_id" placeholder="SPEAKER_01" />
+                </td>
+                <td class="py-2 pr-3">
+                  <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                         x-model="row.label" placeholder="Alice" />
+                </td>
+                <td class="py-2 pr-3">
+                  <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                          x-model="row.speaker_strategy">
+                    <option value="zero-shot">zero-shot</option>
+                    <option value="preset">preset</option>
+                  </select>
+                </td>
+                <td class="py-2 pr-3">
+                  <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                         x-model="row.tts_speaker" :disabled="row.speaker_strategy!=='preset'" placeholder="default" />
+                </td>
+                <td class="py-2 pr-3">
+                  <div class="text-xs text-slate-400" x-text="row.tts_speaker_wav || ''"></div>
+                </td>
+                <td class="py-2 pr-3">
+                  <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                          x-model="row.language">
+                    <option value="en">en</option>
+                    <option value="ja">ja</option>
+                    <option value="auto">auto</option>
+                  </select>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <button class="mt-4 rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+              @click="voiceItems.push({character_id:'', label:'', speaker_strategy:'preset', tts_speaker:'default', tts_speaker_wav:'', language:'en'})">
+        Add row
+      </button>
+
+      <div class="mt-3 text-sm text-emerald-200" x-show="voiceSaved" x-cloak>Saved.</div>
+      <div class="mt-3 text-sm text-red-200" x-show="voiceError" x-cloak x-text="voiceError"></div>
+    </div>
+  </div>
+
+  <!-- Logs -->
+  <div class="mt-4" x-show="activeTab==='logs'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-300">Logs (live)</div>
+      <div class="mt-3 h-80 overflow-auto rounded-lg bg-black/40 border border-slate-800 p-3 text-xs font-mono text-slate-200"
+           hx-ext="sse"
+           sse-connect="/api/jobs/{{ job_id }}/logs/stream"
+           sse-swap="message"
+           hx-swap="beforeend">
+      </div>
+    </div>
+  </div>
+
+  <!-- Artifacts -->
+  <div class="mt-4" x-show="activeTab==='artifacts'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-300">Artifacts</div>
+      <div class="mt-3 text-sm text-slate-200 space-y-2">
+        <div><span class="text-slate-500">SRT:</span> <span class="break-all" x-text="job?.output_srt || ''"></span></div>
+        <div><span class="text-slate-500">MKV:</span> <span class="break-all" x-text="job?.output_mkv || ''"></span></div>
+      </div>
+      <template x-if="job && job.player_job">
+        <div class="mt-4">
+          <div class="text-sm text-slate-300 mb-2">Preview</div>
+          <video class="w-full rounded-lg border border-slate-800" controls playsinline>
+            <source :src="('/video/' + encodeURIComponent(job.player_job))" />
+          </video>
+        </div>
+      </template>
+    </div>
   </div>
 </div>
+
+<script>
+  function jobDetail(jobId) {
+    return {
+      jobId,
+      job: null,
+      activeTab: "overview",
+      tabs: [
+        { key: "overview", label: "Overview" },
+        { key: "transcript", label: "Transcript" },
+        { key: "voice", label: "Voice Map" },
+        { key: "logs", label: "Logs" },
+        { key: "artifacts", label: "Artifacts" },
+      ],
+      voiceItems: [],
+      voiceSaved: false,
+      voiceError: "",
+      async init() {
+        await this.refresh();
+        await this.loadVoiceMap();
+        // poll job state lightly (UI only)
+        setInterval(() => { this.refresh(); }, 1500);
+      },
+      async refresh() {
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId), { credentials: "include" });
+          if (!r.ok) return;
+          this.job = await r.json();
+        } catch (e) {}
+      },
+      async loadVoiceMap() {
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/characters", { credentials: "include" });
+          if (!r.ok) return;
+          const data = await r.json();
+          this.voiceItems = Array.isArray(data.items) ? data.items : [];
+          if (!this.voiceItems.length) {
+            this.voiceItems = [{character_id:"", label:"", speaker_strategy:"preset", tts_speaker:"default", tts_speaker_wav:"", language:"en"}];
+          }
+        } catch (e) {}
+      },
+      async saveVoiceMap() {
+        this.voiceSaved = false;
+        this.voiceError = "";
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/characters", {
+            method: "PUT",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ items: this.voiceItems }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.voiceError = data.detail || ("Save failed (" + r.status + ")");
+            return;
+          }
+          this.voiceItems = Array.isArray(data.items) ? data.items : this.voiceItems;
+          this.voiceSaved = true;
+          setTimeout(() => { this.voiceSaved = false; }, 1500);
+        } catch (e) {
+          this.voiceError = "Save failed";
+        }
+      },
+      async doAction(action) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/" + action, {
+            method: "POST",
+            credentials: "include",
+            headers: { "X-CSRF-Token": csrf },
+          });
+          await this.refresh();
+        } catch (e) {}
+      },
+    };
+  }
+</script>
 {% endblock %}
 

@@ -619,8 +619,24 @@ class JobQueue:
                 with time_hist(pipeline_tts_seconds) as elapsed:
                     t_tts0 = time.perf_counter()
 
+                    # Per-job voice mapping for TTS (persisted via /api/jobs/{id}/characters).
+                    voice_map_json = None
+                    try:
+                        curj = self.store.get(job_id)
+                        rt = dict((curj.runtime or {}) if curj else runtime)
+                        items = rt.get("voice_map", [])
+                        if isinstance(items, list) and items:
+                            voice_map_json = work_dir / "voice_map.json"
+                            from anime_v2.utils.io import write_json
+
+                            write_json(voice_map_json, {"items": items})
+                    except Exception:
+                        voice_map_json = None
+
                     # Run TTS in a separate process so watchdog can SIGKILL if it hangs.
                     def _tts_phase():
+                        if voice_map_json is not None:
+                            os.environ["VOICE_MAP_JSON"] = str(voice_map_json)
                         return tts.run(
                             out_dir=work_dir,
                             translated_json=translated_json if translated_json.exists() else None,

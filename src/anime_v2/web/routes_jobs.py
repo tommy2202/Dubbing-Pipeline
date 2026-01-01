@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import time
@@ -92,6 +93,20 @@ def _get_scheduler(request: Request):
     if s is None:
         raise HTTPException(status_code=500, detail="Scheduler not initialized")
     return s
+
+
+def _output_root() -> Path:
+    return Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
+
+
+def _player_job_for_path(p: Path) -> str | None:
+    out_root = _output_root()
+    try:
+        rp = p.resolve()
+        rel = str(rp.relative_to(out_root)).replace("\\", "/")
+    except Exception:
+        return None
+    return hashlib.sha256(rel.encode("utf-8")).hexdigest()[:32]
 
 
 @router.post("/api/jobs")
@@ -342,7 +357,29 @@ async def get_job(request: Request, id: str, _: Identity = Depends(require_scope
     job = store.get(id)
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
-    return job.to_dict()
+    d = job.to_dict()
+    # Attach checkpoint (best-effort) for stage breakdown.
+    try:
+        from anime_v2.jobs.checkpoint import read_ckpt
+
+        base_dir = Path(job.work_dir) if job.work_dir else None
+        if base_dir:
+            ckpt_path = (base_dir / ".checkpoint.json").resolve()
+            ck = read_ckpt(id, ckpt_path=ckpt_path)
+            if ck:
+                d["checkpoint"] = ck
+    except Exception:
+        pass
+    # Provide player id for existing output files (if under OUTPUT_ROOT).
+    try:
+        omkv = Path(str(job.output_mkv)) if job.output_mkv else None
+        if omkv and omkv.exists():
+            pj = _player_job_for_path(omkv)
+            if pj:
+                d["player_job"] = pj
+    except Exception:
+        pass
+    return d
 
 
 @router.post("/api/jobs/{id}/cancel")
@@ -431,6 +468,131 @@ async def jobs_events(request: Request, _: Identity = Depends(require_scope("rea
 async def tail_logs(request: Request, id: str, n: int = 200, _: Identity = Depends(require_scope("read:job"))) -> PlainTextResponse:
     store = _get_store(request)
     return PlainTextResponse(store.tail_log(id, n=n))
+
+
+@router.get("/api/jobs/{id}/logs/stream")
+async def stream_logs(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    log_path = Path(job.log_path) if job.log_path else None
+    if log_path is None:
+        raise HTTPException(status_code=404, detail="No logs for job")
+
+    once = (request.query_params.get("once") or "").strip() == "1"
+
+    async def gen():
+        pos = 0
+        # initial tail
+        try:
+            txt = store.tail_log(id, n=200)
+            for ln in txt.splitlines():
+                yield {"event": "message", "data": f"<div>{ln}</div>"}
+        except Exception:
+            pass
+        if once:
+            return
+        while True:
+            if await request.is_disconnected():
+                return
+            try:
+                if log_path.exists() and log_path.is_file():
+                    with log_path.open("r", encoding="utf-8", errors="replace") as f:
+                        f.seek(pos)
+                        chunk = f.read()
+                        pos = f.tell()
+                    if chunk:
+                        for ln in chunk.splitlines():
+                            yield {"event": "message", "data": f"<div>{ln}</div>"}
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+
+    return EventSourceResponse(gen())
+
+
+@router.get("/api/jobs/{id}/characters")
+async def get_job_characters(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    rt = dict(job.runtime or {})
+    items = rt.get("voice_map", [])
+    if not isinstance(items, list):
+        items = []
+    return {"items": items}
+
+
+@router.put("/api/jobs/{id}/characters")
+async def put_job_characters(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    ctype = (request.headers.get("content-type") or "").lower()
+    items: list[dict[str, Any]] = []
+    wav_upload: tuple[str, Any] | None = None  # (character_id, UploadFile)
+
+    if "application/json" in ctype:
+        body = await request.json()
+        if isinstance(body, dict) and isinstance(body.get("items"), list):
+            items = [dict(x) for x in body.get("items", []) if isinstance(x, dict)]
+        else:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+    else:
+        # multipart: allow `data` JSON + optional wav upload for one character
+        form = await request.form()
+        raw = form.get("data")
+        if raw:
+            import json as _json
+
+            try:
+                data = _json.loads(str(raw))
+            except Exception:
+                data = {}
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                items = [dict(x) for x in data.get("items", []) if isinstance(x, dict)]
+        cid = str(form.get("character_id") or "").strip()
+        up = form.get("tts_speaker_wav")
+        if cid and up is not None:
+            wav_upload = (cid, up)
+
+    # Persist uploaded wav (best-effort)
+    if wav_upload:
+        cid, upload = wav_upload
+        try:
+            base_dir = Path(job.work_dir).resolve() if job.work_dir else (_output_root() / id).resolve()
+            voices_dir = (base_dir / "voices").resolve()
+            voices_dir.mkdir(parents=True, exist_ok=True)
+            dest = voices_dir / f"{cid}.wav"
+            # UploadFile-like: async read
+            written = 0
+            with dest.open("wb") as f:
+                while True:
+                    chunk = await upload.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > 50 * 1024 * 1024:
+                        raise HTTPException(status_code=400, detail="Speaker WAV too large")
+                    f.write(chunk)
+            # Update matching item in mapping
+            for it in items:
+                if str(it.get("character_id") or "") == cid:
+                    it["tts_speaker_wav"] = str(dest)
+                    it["speaker_strategy"] = "zero-shot"
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    rt = dict(job.runtime or {})
+    rt["voice_map"] = items
+    store.update(id, runtime=rt)
+    return {"ok": True, "items": items}
 
 
 @router.websocket("/ws/jobs/{id}")

@@ -157,6 +157,36 @@ def run(
     except Exception:
         voice_map = {}
 
+    # Optional rich voice map (per-job mapping) for per-speaker overrides.
+    # Format: {"items":[{"character_id": "...", "speaker_strategy": "preset|zero-shot", "tts_speaker": "...", "tts_speaker_wav": "..."}]}
+    per_speaker_wav_override: dict[str, Path] = {}
+    per_speaker_preset_override: dict[str, str] = {}
+    try:
+        vmj = os.environ.get("VOICE_MAP_JSON") or ""
+        if vmj:
+            data = read_json(Path(vmj), default={})
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                for it in data.get("items", []):
+                    if not isinstance(it, dict):
+                        continue
+                    cid = str(it.get("character_id") or "").strip()
+                    strat = str(it.get("speaker_strategy") or "").strip().lower()
+                    if not cid:
+                        continue
+                    if strat in {"zero-shot", "zeroshot", "clone"}:
+                        wp = str(it.get("tts_speaker_wav") or "").strip()
+                        if wp:
+                            p = Path(wp)
+                            if p.exists():
+                                per_speaker_wav_override[cid] = p
+                    if strat in {"preset"}:
+                        spk = str(it.get("tts_speaker") or "").strip()
+                        if spk:
+                            per_speaker_preset_override[cid] = spk
+    except Exception:
+        per_speaker_wav_override = {}
+        per_speaker_preset_override = {}
+
     # Determine lines to synthesize
     lines: list[dict]
     if translated_json and translated_json.exists():
@@ -274,7 +304,7 @@ def run(
         clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
 
         # Choose clone speaker wav:
-        speaker_wav = settings.tts_speaker_wav or speaker_rep_wav.get(speaker_id)
+        speaker_wav = per_speaker_wav_override.get(speaker_id) or settings.tts_speaker_wav or speaker_rep_wav.get(speaker_id)
         if speaker_wav is None:
             try:
                 c = store.characters.get(speaker_id)
@@ -315,7 +345,7 @@ def run(
             # 2) XTTS preset
             if not synthesized:
                 # Choose best preset if we have speaker embedding; else default preset
-                preset = voice_map.get(speaker_id) or (settings.tts_speaker or "default")
+                preset = per_speaker_preset_override.get(speaker_id) or voice_map.get(speaker_id) or (settings.tts_speaker or "default")
                 emb_path = speaker_embeddings.get(speaker_id)
                 if emb_path and emb_path.exists():
                     best = choose_similar_voice(
