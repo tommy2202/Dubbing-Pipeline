@@ -510,6 +510,7 @@ class JobQueue:
                                 tgt_lang=job.tgt_lang,
                                 job_id=job_id,
                                 audio_hash=audio_hash,
+                                word_timestamps=bool(get_settings().whisper_word_timestamps),
                             )
                         else:
                             with sched.phase("transcribe"):
@@ -523,6 +524,7 @@ class JobQueue:
                                     tgt_lang=job.tgt_lang,
                                     job_id=job_id,
                                     audio_hash=audio_hash,
+                                    word_timestamps=bool(get_settings().whisper_word_timestamps),
                                 )
                         # reflect circuit state into job (only when we actually ran transcribe)
                         try:
@@ -849,7 +851,8 @@ class JobQueue:
                     # Run TTS in a separate process so watchdog can SIGKILL if it hangs.
                     def _tts_phase():
                         # Preset overrides for this job (lang/speaker/wav).
-                        tts_lang = None
+                        # Default TTS language should match the requested target language.
+                        tts_lang = str(job.tgt_lang) if getattr(job, "tgt_lang", None) else None
                         tts_speaker = None
                         tts_speaker_wav = None
                         try:
@@ -877,6 +880,15 @@ class JobQueue:
                             tts_lang=tts_lang,
                             tts_speaker=tts_speaker,
                             tts_speaker_wav=tts_speaker_wav,
+                            voice_mode=str(settings.voice_mode),
+                            voice_ref_dir=settings.voice_ref_dir,
+                            voice_store_dir=settings.voice_store_dir,
+                            tts_provider=str(settings.tts_provider),
+                            # expressiveness (best-effort)
+                            emotion_mode=str(settings.emotion_mode),
+                            speech_rate=float(settings.speech_rate),
+                            pitch=float(settings.pitch),
+                            energy=float(settings.energy),
                             # callbacks omitted (not picklable); progress updates remain coarse for this phase
                             progress_cb=None,
                             cancel_cb=None,

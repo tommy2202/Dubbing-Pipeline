@@ -26,6 +26,9 @@ def _assert_no_env_reads_outside_config_and_tests() -> None:
     allow_files = {
         REPO_ROOT / "config" / "public_config.py",
         REPO_ROOT / "config" / "settings.py",
+        # Verification / smoke scripts may set process-level env defaults.
+        REPO_ROOT / "scripts" / "smoke_run.py",
+        REPO_ROOT / "scripts" / "verify_features.py",
     }
 
     offenders: list[Path] = []

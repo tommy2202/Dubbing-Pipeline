@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import click
+from click.exceptions import UsageError
 
 from anime_v2.config import get_settings
 from anime_v2.stages import audio_extractor, mkv_export, tts
@@ -20,6 +21,7 @@ from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import install_egress_policy
 from anime_v2.utils.paths import output_dir_for
+from anime_v2.utils.subtitles import write_vtt
 from anime_v2.utils.time import format_srt_timestamp
 
 MODE_TO_MODEL: dict[str, str] = {
@@ -107,8 +109,38 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
             f.write(f"{idx}\n{st} --> {en}\n{txt}\n\n")
 
 
+def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
+    # Reuse SRT parsing format (start/end/text)
+    write_vtt(
+        [
+            {
+                "start": float(line["start"]),
+                "end": float(line["end"]),
+                "text": str(line.get("text") or ""),
+            }
+            for line in lines
+        ],
+        vtt_path,
+    )
+
+
 @click.command()
-@click.argument("video", type=click.Path(dir_okay=False, path_type=Path))
+@click.argument("video", required=False, type=click.Path(dir_okay=False, path_type=Path))
+@click.option(
+    "--batch",
+    "batch_spec",
+    default=None,
+    help="Batch input: directory path or glob pattern (e.g. 'Input/*.mp4')",
+)
+@click.option(
+    "--jobs",
+    type=int,
+    default=1,
+    show_default=True,
+    help="Batch worker count (currently best-effort; batch runs sequentially by default)",
+)
+@click.option("--resume/--no-resume", default=True, show_default=True)
+@click.option("--fail-fast/--no-fail-fast", default=False, show_default=True)
 @click.option(
     "--device",
     type=click.Choice(["auto", "cuda", "cpu"], case_sensitive=False),
@@ -120,6 +152,12 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
     type=click.Choice(["high", "medium", "low"], case_sensitive=False),
     default="medium",
     show_default=True,
+)
+@click.option(
+    "--asr-model",
+    "asr_model_name",
+    default=None,
+    help="Override Whisper model name (e.g. large-v3, medium, small)",
 )
 @click.option(
     "--src-lang", default="auto", show_default=True, help="Source language code, or 'auto'"
@@ -134,7 +172,28 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
     "--no-translate", is_flag=True, default=False, help="Disable translate; do plain transcription"
 )
 @click.option(
+    "--mt-provider",
+    type=click.Choice(["auto", "whisper", "marian", "nllb", "none"], case_sensitive=False),
+    default="auto",
+    show_default=True,
+    help="Translation provider selection (alias for --mt-engine/--no-translate)",
+)
+@click.option(
     "--no-subs", is_flag=True, default=False, help="Do not mux subtitles into output container"
+)
+@click.option(
+    "--subs",
+    type=click.Choice(["off", "src", "tgt", "both"], case_sensitive=False),
+    default="both",
+    show_default=True,
+    help="Which subtitles to write to disk (muxing controlled by --no-subs)",
+)
+@click.option(
+    "--subs-format",
+    type=click.Choice(["srt", "vtt", "both"], case_sensitive=False),
+    default="srt",
+    show_default=True,
+    help="Subtitle file formats to write",
 )
 @click.option(
     "--diarizer",
@@ -175,6 +234,13 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
     show_default=True,
 )
 @click.option(
+    "--align-mode",
+    type=click.Choice(["basic", "stretch", "word"], case_sensitive=False),
+    default="stretch",
+    show_default=True,
+    help="Alignment detail: 'word' requests word timestamps when supported",
+)
+@click.option(
     "--max-stretch",
     type=float,
     default=float(get_settings().max_stretch),
@@ -198,14 +264,58 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
     show_default=True,
     help="Comma list (always includes mkv,mp4): mkv,mp4,fmp4,hls",
 )
+@click.option(
+    "--emotion-mode",
+    type=click.Choice(["off", "auto", "tags"], case_sensitive=False),
+    default=str(get_settings().emotion_mode),
+    show_default=True,
+    help="Expressive speech controls (best-effort, offline-friendly)",
+)
+@click.option(
+    "--speech-rate", type=float, default=float(get_settings().speech_rate), show_default=True
+)
+@click.option("--pitch", type=float, default=float(get_settings().pitch), show_default=True)
+@click.option("--energy", type=float, default=float(get_settings().energy), show_default=True)
+@click.option("--realtime/--no-realtime", default=False, show_default=True)
+@click.option("--chunk-seconds", type=float, default=20.0, show_default=True)
+@click.option("--chunk-overlap", type=float, default=2.0, show_default=True)
+@click.option("--stitch/--no-stitch", default=True, show_default=True)
+@click.option(
+    "--voice-mode",
+    type=click.Choice(["clone", "preset", "single"], case_sensitive=False),
+    default=str(get_settings().voice_mode),
+    show_default=True,
+)
+@click.option("--voice-ref-dir", type=click.Path(path_type=Path), default=None)
+@click.option("--voice-store", "voice_store_dir", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "--tts-provider",
+    type=click.Choice(["auto", "xtts", "basic", "espeak"], case_sensitive=False),
+    default=str(get_settings().tts_provider),
+    show_default=True,
+)
+@click.option(
+    "--print-config",
+    is_flag=True,
+    default=False,
+    help="Print a safe config report (no secrets) and exit",
+)
 def cli(
-    video: Path,
+    video: Path | None,
+    batch_spec: str | None,
+    jobs: int,
+    resume: bool,
+    fail_fast: bool,
     device: str,
     mode: str,
+    asr_model_name: str | None,
     src_lang: str,
     tgt_lang: str,
     no_translate: bool,
+    mt_provider: str,
     no_subs: bool,
+    subs: str,
+    subs_format: str,
     diarizer: str,
     show_id: str | None,
     char_sim_thresh: float,
@@ -214,10 +324,24 @@ def cli(
     glossary: str | None,
     style: str | None,
     aligner: str,
+    align_mode: str,
     max_stretch: float,
     mix_profile: str,
     separate_vocals: bool,
     emit: str,
+    emotion_mode: str,
+    speech_rate: float,
+    pitch: float,
+    energy: float,
+    realtime: bool,
+    chunk_seconds: float,
+    chunk_overlap: float,
+    stitch: bool,
+    voice_mode: str,
+    voice_ref_dir: Path | None,
+    voice_store_dir: Path | None,
+    tts_provider: str,
+    print_config: bool,
 ) -> None:
     """
     Run pipeline-v2 on VIDEO.
@@ -225,6 +349,185 @@ def cli(
     Example:
       anime-v2 Input/Test.mp4 --mode high --device auto
     """
+    if print_config:
+        import json as _json
+
+        from config.settings import get_safe_config_report
+
+        click.echo(_json.dumps(get_safe_config_report(), indent=2, sort_keys=True))
+        return
+
+    if batch_spec and video is not None:
+        raise UsageError("Provide either VIDEO or --batch, not both.")
+    if not batch_spec and video is None:
+        raise UsageError("Missing VIDEO (or pass --batch).")
+
+    if batch_spec:
+        import glob
+        import json
+        import sys
+        import tempfile
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        spec = str(batch_spec)
+        p = Path(spec)
+        if p.exists() and p.is_dir():
+            exts = {".mp4", ".mkv", ".webm", ".mov", ".m4v"}
+            paths = sorted([x for x in p.rglob("*") if x.is_file() and x.suffix.lower() in exts])
+        else:
+            paths = sorted([Path(x) for x in glob.glob(spec)])
+
+        if not paths:
+            raise click.ClickException(f"No input files matched batch spec: {batch_spec!r}")
+
+        jobs_n = max(1, int(jobs or 1))
+
+        # Build per-job CLI args to run in isolated worker processes.
+        base_args: list[str] = []
+        base_args += ["--device", str(device)]
+        base_args += ["--mode", str(mode)]
+        if asr_model_name:
+            base_args += ["--asr-model", str(asr_model_name)]
+        base_args += ["--src-lang", str(src_lang)]
+        base_args += ["--tgt-lang", str(tgt_lang)]
+        if no_translate:
+            base_args += ["--no-translate"]
+        if str(mt_provider).lower() != "auto":
+            base_args += ["--mt-provider", str(mt_provider)]
+        if no_subs:
+            base_args += ["--no-subs"]
+        base_args += ["--subs", str(subs)]
+        base_args += ["--subs-format", str(subs_format)]
+        base_args += ["--diarizer", str(diarizer)]
+        if show_id:
+            base_args += ["--show-id", str(show_id)]
+        base_args += ["--char-sim-thresh", str(char_sim_thresh)]
+        base_args += ["--mt-engine", str(mt_engine)]
+        base_args += ["--mt-lowconf-thresh", str(mt_lowconf_thresh)]
+        if glossary:
+            base_args += ["--glossary", str(glossary)]
+        if style:
+            base_args += ["--style", str(style)]
+        base_args += ["--aligner", str(aligner)]
+        base_args += ["--max-stretch", str(max_stretch)]
+        base_args += ["--mix-profile", str(mix_profile)]
+        base_args += ["--emit", str(emit)]
+        if separate_vocals:
+            base_args += ["--separate-vocals"]
+        else:
+            base_args += ["--no-separate-vocals"]
+
+        # Run sequentially in-process when jobs=1 (keeps logs/stacktraces nicer).
+        if jobs_n == 1:
+            for idx, vp in enumerate(paths, 1):
+                if not vp.exists():
+                    msg = f"[batch {idx}/{len(paths)}] missing file: {vp}"
+                    if fail_fast:
+                        raise click.ClickException(msg)
+                    logger.warning(msg)
+                    continue
+                out_dir_b = output_dir_for(vp)
+                dub_mkv_b = out_dir_b / "dub.mkv"
+                if resume and dub_mkv_b.exists():
+                    logger.info("[batch %s/%s] skip (resume hit): %s", idx, len(paths), vp)
+                    continue
+                logger.info("[batch %s/%s] start: %s", idx, len(paths), vp)
+                ctx = click.get_current_context()
+                ctx.invoke(
+                    cli,
+                    video=vp,
+                    batch_spec=None,
+                    jobs=1,
+                    resume=resume,
+                    fail_fast=fail_fast,
+                    device=device,
+                    mode=mode,
+                    src_lang=src_lang,
+                    tgt_lang=tgt_lang,
+                    no_translate=no_translate,
+                    no_subs=no_subs,
+                    subs=subs,
+                    subs_format=subs_format,
+                    diarizer=diarizer,
+                    show_id=show_id,
+                    char_sim_thresh=char_sim_thresh,
+                    mt_engine=mt_engine,
+                    mt_lowconf_thresh=mt_lowconf_thresh,
+                    glossary=glossary,
+                    style=style,
+                    aligner=aligner,
+                    max_stretch=max_stretch,
+                    mix_profile=mix_profile,
+                    separate_vocals=separate_vocals,
+                    emit=emit,
+                    print_config=False,
+                )
+            return
+
+        # jobs>1: execute isolated workers via subprocess for robustness.
+        with tempfile.TemporaryDirectory(prefix="anime_v2_batch_") as td:
+            td_p = Path(td)
+
+            specs: list[tuple[int, Path, Path]] = []
+            for idx, vp in enumerate(paths, 1):
+                if not vp.exists():
+                    msg = f"[batch {idx}/{len(paths)}] missing file: {vp}"
+                    if fail_fast:
+                        raise click.ClickException(msg)
+                    logger.warning(msg)
+                    continue
+                out_dir_b = output_dir_for(vp)
+                dub_mkv_b = out_dir_b / "dub.mkv"
+                if resume and dub_mkv_b.exists():
+                    logger.info("[batch %s/%s] skip (resume hit): %s", idx, len(paths), vp)
+                    continue
+
+                spec_path = td_p / f"{idx:05d}.json"
+                spec_path.write_text(
+                    json.dumps({"args": [str(vp), *base_args]}, indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+                specs.append((idx, vp, spec_path))
+
+            if not specs:
+                logger.info("[v2] batch: nothing to do")
+                return
+
+            def _run_one(spec_path: Path) -> int:
+                cmd = [sys.executable, "-m", "anime_v2.batch_worker", str(spec_path)]
+                p = subprocess.run(cmd)
+                return int(p.returncode)
+
+            failures: list[str] = []
+            with ThreadPoolExecutor(max_workers=jobs_n) as ex:
+                futs = {ex.submit(_run_one, spec_path): (idx, vp) for idx, vp, spec_path in specs}
+                for fut in as_completed(futs):
+                    idx, vp = futs[fut]
+                    rc = 1
+                    try:
+                        rc = int(fut.result())
+                    except Exception as ex2:
+                        rc = 1
+                        logger.warning(
+                            "[batch %s/%s] worker exception: %s (%s)", idx, len(paths), vp, ex2
+                        )
+                    if rc != 0:
+                        failures.append(f"{vp} (exit={rc})")
+                        logger.warning(
+                            "[batch %s/%s] failed: %s (exit=%s)", idx, len(paths), vp, rc
+                        )
+                        if fail_fast:
+                            break
+                    else:
+                        logger.info("[batch %s/%s] ok: %s", idx, len(paths), vp)
+
+            if failures and fail_fast:
+                raise click.ClickException("Batch failed (fail-fast):\n" + "\n".join(failures))
+            if failures:
+                logger.warning("Batch completed with failures:\n%s", "\n".join(failures))
+            return
+
+    assert video is not None
     if not video.exists():
         raise click.ClickException(f"Video not found: {video}")
 
@@ -232,8 +535,17 @@ def cli(
     install_egress_policy()
 
     mode = mode.lower()
-    chosen_model = MODE_TO_MODEL[mode]
+    chosen_model = str(asr_model_name).strip() if asr_model_name else MODE_TO_MODEL[mode]
     chosen_device = _select_device(device)
+
+    # Provider selection aliases (keep backwards compatibility with existing flags).
+    mt_provider_eff = str(mt_provider or "auto").lower()
+    if mt_provider_eff != "auto":
+        if mt_provider_eff == "none":
+            no_translate = True
+        else:
+            no_translate = False
+            mt_engine = mt_provider_eff
 
     # Output layout requirement:
     # Output/<video_stem>/{wav,srt,tts.wav,dub.mkv}
@@ -243,7 +555,9 @@ def cli(
 
     wav_path = out_dir / "audio.wav"
     srt_out = out_dir / f"{stem}.srt"
+    vtt_out = out_dir / f"{stem}.vtt"
     translated_srt = out_dir / f"{stem}.translated.srt"
+    translated_vtt = out_dir / f"{stem}.translated.vtt"
     diar_json = out_dir / "diarization.json"
     translated_json = out_dir / "translated.json"
     tts_wav = out_dir / f"{stem}.tts.wav"
@@ -262,6 +576,34 @@ def cli(
         tgt_lang,
         (not no_translate),
     )
+
+    # Realtime (pseudo-streaming) mode: chunked pipeline with per-chunk artifacts.
+    if realtime:
+        from anime_v2.realtime import realtime_dub
+
+        realtime_dub(
+            video=video,
+            out_dir=out_dir,
+            device=chosen_device,
+            asr_model=chosen_model,
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+            mt_engine=mt_engine,
+            mt_lowconf_thresh=float(mt_lowconf_thresh),
+            glossary=glossary,
+            style=style,
+            chunk_seconds=float(chunk_seconds),
+            chunk_overlap=float(chunk_overlap),
+            stitch=bool(stitch),
+            subs_choice=(subs or "both").lower(),
+            subs_format=(subs_format or "srt").lower(),
+            align_mode=(align_mode or "stretch").lower(),
+            emotion_mode=emotion_mode,
+            speech_rate=float(speech_rate),
+            pitch=float(pitch),
+            energy=float(energy),
+        )
+        return
 
     t0 = time.perf_counter()
 
@@ -389,6 +731,7 @@ def cli(
     t_stage = time.perf_counter()
     trans_meta_path = srt_out.with_suffix(".json")
     try:
+        want_words = str(align_mode or "").lower() == "word"
         transcribe(
             audio_path=extracted,
             srt_out=srt_out,
@@ -397,6 +740,7 @@ def cli(
             task="transcribe",
             src_lang=src_lang,
             tgt_lang=tgt_lang,
+            word_timestamps=want_words,
         )
         meta = {}
         try:
@@ -414,6 +758,15 @@ def cli(
     except Exception as ex:
         logger.exception("[v2] transcription failed (continuing): %s", ex)
         cues = []
+
+    # Optional subtitle format conversions for source transcript
+    subs_choice = (subs or "both").lower()
+    subs_fmt = (subs_format or "srt").lower()
+    if subs_choice in {"src", "both"} and subs_fmt in {"vtt", "both"}:
+        try:
+            write_vtt(_parse_srt_to_cues(srt_out), vtt_out)
+        except Exception as ex:
+            logger.warning("[v2] vtt export failed (src): %s", ex)
 
     # Build speaker-timed segments.
     # Prefer diarization utterances (preserve diarization timing) and assign text/logprob from transcription overlaps.
@@ -526,6 +879,21 @@ def cli(
                     aligned_srt,
                 )
                 subs_srt_path = aligned_srt
+                if subs_choice in {"src", "both"} and subs_fmt in {"vtt", "both"}:
+                    try:
+                        _write_vtt_from_lines(
+                            [
+                                {
+                                    "start": s["start"],
+                                    "end": s["end"],
+                                    "text": s.get("text", ""),
+                                }
+                                for s in segments_for_mt
+                            ],
+                            out_dir / f"{stem}.aligned.vtt",
+                        )
+                    except Exception as ex:
+                        logger.warning("[v2] vtt export failed (aligned src): %s", ex)
                 logger.info(
                     "[v2] align: ok (no-translate) segments=%s aligner=%s",
                     len(segments_for_mt),
@@ -605,6 +973,17 @@ def cli(
             ]
             _write_srt_from_lines(srt_lines, translated_srt)
             subs_srt_path = translated_srt
+            if subs_choice in {"tgt", "both"} and subs_fmt in {"vtt", "both"}:
+                try:
+                    _write_vtt_from_lines(
+                        [
+                            {"start": s["start"], "end": s["end"], "text": s["text"]}
+                            for s in translated_segments
+                        ],
+                        translated_vtt,
+                    )
+                except Exception as ex:
+                    logger.warning("[v2] vtt export failed (tgt): %s", ex)
             logger.info(
                 "[v2] translate: segments=%s (%.2fs) → %s",
                 len(translated_segments),
@@ -629,11 +1008,27 @@ def cli(
     # 5) tts.synthesize (line-aligned)
     t_stage = time.perf_counter()
     try:
+        # TTS language: default to target language when translating; otherwise prefer source language.
+        tts_lang = None
+        if no_translate:
+            if str(src_lang).lower() != "auto":
+                tts_lang = str(src_lang)
+        else:
+            tts_lang = str(tgt_lang) if tgt_lang else None
         tts.run(
             out_dir=out_dir,
             translated_json=translated_json,
             diarization_json=diar_json,
             wav_out=tts_wav,
+            tts_lang=tts_lang,
+            voice_mode=voice_mode,
+            voice_ref_dir=voice_ref_dir,
+            voice_store_dir=voice_store_dir,
+            tts_provider=tts_provider,
+            emotion_mode=emotion_mode,
+            speech_rate=float(speech_rate),
+            pitch=float(pitch),
+            energy=float(energy),
             max_stretch=float(max_stretch),
         )
         logger.info("[v2] tts: ok (%.2fs) → %s", time.perf_counter() - t_stage, tts_wav)

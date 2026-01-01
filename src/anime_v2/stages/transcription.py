@@ -37,6 +37,7 @@ def transcribe(
     tgt_lang: str = "en",
     job_id: str | None = None,
     audio_hash: str | None = None,
+    word_timestamps: bool | None = None,
 ) -> Path:
     """
     Whisper transcription/translation producing SRT and JSON metadata next to it.
@@ -181,12 +182,24 @@ def transcribe(
             with egress_guard():
                 mm = ModelManager.instance()
                 with mm.acquire_whisper(cand_model, cand_device) as model:
-                    return model.transcribe(
-                        str(audio_path),
-                        task=task,
-                        language=lang_opt,
-                        verbose=False,
+                    kw = {
+                        "task": task,
+                        "language": lang_opt,
+                        "verbose": False,
+                    }
+                    # Word-level timestamps are optional and model-dependent; try only when requested.
+                    want_words = (
+                        bool(word_timestamps)
+                        if word_timestamps is not None
+                        else bool(get_settings().whisper_word_timestamps)
                     )
+                    if want_words:
+                        try:
+                            return model.transcribe(str(audio_path), **kw, word_timestamps=True)
+                        except TypeError:
+                            # Older whisper implementations may not support this flag.
+                            pass
+                    return model.transcribe(str(audio_path), **kw)
 
         tries = {"n": 0}
 
@@ -249,15 +262,34 @@ def transcribe(
     seg_details = []
     for s in segments:
         try:
-            seg_details.append(
-                {
-                    "start": float(s.get("start", 0.0)),
-                    "end": float(s.get("end", 0.0)),
-                    "text": (s.get("text") or "").strip(),
-                    "avg_logprob": s.get("avg_logprob"),
-                    "no_speech_prob": s.get("no_speech_prob"),
-                }
-            )
+            rec = {
+                "start": float(s.get("start", 0.0)),
+                "end": float(s.get("end", 0.0)),
+                "text": (s.get("text") or "").strip(),
+                "avg_logprob": s.get("avg_logprob"),
+                "no_speech_prob": s.get("no_speech_prob"),
+            }
+            # If available, include word-level timing (never required).
+            words = s.get("words")
+            if isinstance(words, list):
+                rec_words = []
+                for w in words:
+                    if not isinstance(w, dict):
+                        continue
+                    with suppress(Exception):
+                        rec_words.append(
+                            {
+                                "start": float(w.get("start", 0.0)),
+                                "end": float(w.get("end", 0.0)),
+                                "word": str(w.get("word") or "").strip(),
+                                "prob": (
+                                    w.get("probability") if "probability" in w else w.get("prob")
+                                ),
+                            }
+                        )
+                if rec_words:
+                    rec["words"] = rec_words
+            seg_details.append(rec)
         except Exception:
             continue
 

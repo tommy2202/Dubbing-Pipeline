@@ -1,10 +1,66 @@
-## Anime dubbing pipeline (v2)
+## Dubbing-Pipeline (Anime dubbing pipeline, v2-first)
 
-This repo contains an **offline dubbing pipeline** (CLI) and a **lightweight web player** for watching completed episodes from a phone on your LAN.
+This repository is an **offline-first dubbing pipeline**:
 
-- **CLI**: `anime-v2`
-- **Web player**: `anime-v2-web` (FastAPI + Range streaming)
-- **Outputs**: `Output/<video_stem>/...` (intermediate artifacts + final `dub.mkv`)
+- **CLI** for running dubbing jobs locally: `anime-v2`
+- **FastAPI server + web UI** for job submission, monitoring, transcript editing, and playback: `anime-v2-web`
+- **Outputs** go to `Output/<video_stem>/...` (intermediate artifacts + final `dub.mkv` / `dub.mp4`)
+
+### Architecture (high level)
+
+```text
+            +--------------------+
+Input video |   CLI / API job    |
+   (.mp4)   |  submission layer  |
+            +---------+----------+
+                      |
+                      v
+            +--------------------+
+            |  Extract audio     |  -> Output/<stem>/audio.wav
+            +--------------------+
+                      |
+                      v
+            +--------------------+
+            |   (Optional)       |
+            |  diarization       |  -> diarization.json + speaker refs
+            +--------------------+
+                      |
+                      v
+            +--------------------+
+            |   ASR (Whisper)    |  -> <stem>.srt + <stem>.json (segments_detail)
+            +--------------------+
+                      |
+                      v
+            +--------------------+
+            | (Optional) MT      |  -> translated.json + <stem>.translated.srt
+            +--------------------+
+                      |
+                      v
+            +--------------------+
+            |   TTS (XTTS/etc)   |  -> <stem>.tts.wav + clips + manifest
+            +--------------------+
+                      |
+                      v
+            +--------------------+
+            |   Mix / mux        |  -> dub.mkv / dub.mp4 (+ optional subs)
+            +--------------------+
+```
+
+---
+
+## Feature list (F1–F9)
+
+- **F1 Voice cloning / speaker preservation (optional)**: XTTS cloning when reference audio is available; fallbacks to presets/basic/espeak.
+- **F2 Emotion transfer / expressive controls (optional)**: best-effort `emotion_mode` + (rate/pitch/energy) post-processing.
+- **F3 Realtime / streaming dubbing (optional)**: **pseudo-streaming** chunk mode (`--realtime`) producing chunk artifacts + optional stitched outputs.
+- **F4 Web UI / API support**: FastAPI server with job APIs, auth/RBAC/CSRF, UI pages, transcript editing, resynthesis.
+- **F5 Multi-language**: `--src-lang` + `--tgt-lang`, with multiple MT engines + fallbacks.
+- **F6 Timing & alignment precision (optional)**: segment timing + retime/pad/trim; optional aeneas alignment; optional Whisper word timestamps when supported.
+- **F7 Subtitle generation**: SRT default; VTT optional (`--subs-format vtt|both`).
+- **F8 Batch processing**: API batch endpoint + CLI `--batch` (folder/glob) with `--jobs` concurrency.
+- **F9 Model selection & fine-tuning hooks (optional)**: model cache/allocator; `--asr-model`, `--mt-provider`, `--tts-provider`; placeholder training hook (`scripts/train_voice.py`).
+
+Canonical audit: `docs/feature_audit.md`.
 
 ---
 
@@ -13,7 +69,7 @@ This repo contains an **offline dubbing pipeline** (CLI) and a **lightweight web
 ### Prereqs
 
 - Python **3.10+**
-- `ffmpeg` available on PATH
+- `ffmpeg` + `ffprobe`
 
 ### Install
 
@@ -27,202 +83,174 @@ Optional extras (recommended on a real machine with enough disk/RAM):
 python3 -m pip install -e ".[translation,diarization,tts,dev]"
 ```
 
-### Run a dub job
+### Verify wiring (recommended)
+
+```bash
+python3 scripts/verify_config_wiring.py
+python3 scripts/verify_features.py
+python3 scripts/smoke_import_all.py
+python3 scripts/smoke_run.py
+```
+
+### Run a single dub job (CLI)
 
 ```bash
 anime-v2 Input/Test.mp4 --mode medium --device auto
 ```
 
-Artifacts will land in:
+Override ASR model directly:
 
-- `Output/Test/audio.wav`
-- `Output/Test/diarization.json`
-- `Output/Test/Test.srt` (ASR)
-- `Output/Test/translated.json` + `Output/Test/Test.translated.srt` (when translation enabled)
-- `Output/Test/Test.tts.wav`
-- `Output/Test/dub.mkv`
+```bash
+anime-v2 Input/Test.mp4 --asr-model large-v3 --device auto
+```
+
+### Batch folder/glob (CLI)
+
+```bash
+anime-v2 --batch "Input/*.mp4" --jobs 2 --resume
+```
+
+### Multi-language examples (CLI)
+
+```bash
+anime-v2 Input/Test.mp4 --src-lang auto --tgt-lang es
+anime-v2 Input/Test.mp4 --no-translate --src-lang ja
+```
+
+Force MT provider:
+
+```bash
+anime-v2 Input/Test.mp4 --mt-provider nllb --src-lang ja --tgt-lang en
+anime-v2 Input/Test.mp4 --mt-provider none
+```
+
+### Subtitles (SRT/VTT)
+
+```bash
+anime-v2 Input/Test.mp4 --subs both --subs-format both
+```
+
+### Voice controls
+
+```bash
+# force single narrator voice
+anime-v2 Input/Test.mp4 --voice-mode single
+
+# prefer preset selection (skip cloning)
+anime-v2 Input/Test.mp4 --voice-mode preset
+
+# hint cloning references from a folder: <dir>/<speaker_id>.wav
+anime-v2 Input/Test.mp4 --voice-mode clone --voice-ref-dir data/voices
+```
+
+### Expressive controls
+
+```bash
+anime-v2 Input/Test.mp4 --emotion-mode auto
+anime-v2 Input/Test.mp4 --emotion-mode tags
+```
+
+### Pseudo-streaming (chunk mode)
+
+```bash
+anime-v2 Input/Test.mp4 --realtime --chunk-seconds 20 --chunk-overlap 2 --stitch
+```
+
+Artifacts land in:
+
+- `Output/<stem>/audio.wav`
+- `Output/<stem>/diarization.json` (optional)
+- `Output/<stem>/<stem>.srt` (+ optional `<stem>.vtt`)
+- `Output/<stem>/translated.json` + `<stem>.translated.srt` (+ optional `.vtt`)
+- `Output/<stem>/<stem>.tts.wav`
+- `Output/<stem>/dub.mkv`
+- `Output/<stem>/realtime/` (when `--realtime`)
 
 ---
 
-## Quickstart (Docker, GPU)
+## Quickstart (Docker)
 
 ### Build
 
 ```bash
-docker build -f docker/Dockerfile -t anime-v2-gpu .
+docker build -f docker/Dockerfile -t dubbing-pipeline .
 ```
 
 ### Run (CLI)
 
 ```bash
-docker run --rm --gpus all \
+docker run --rm \
   -v "$(pwd)":/app \
   -v "$(pwd)/Input":/app/Input \
   -v "$(pwd)/Output":/app/Output \
-  anime-v2-gpu /app/Input/Test.mp4 --mode high --device cuda
+  dubbing-pipeline anime-v2 /app/Input/Test.mp4 --mode low --device cpu
 ```
 
-### Run (web player)
+### Run (web server)
 
 ```bash
-docker run --rm --gpus all -p 8000:8000 \
-  -e API_TOKEN=change-me \
-  -v "$(pwd)/Output":/app/Output \
-  anime-v2-gpu anime-v2-web
+cp .env.example .env
+cp .env.secrets.example .env.secrets
+docker compose -f docker/docker-compose.yml up --build
 ```
 
 ---
 
-## Windows examples
+## Configuration (public vs secrets)
 
-### CMD
+This project uses a split settings model:
 
-**Build**
+- **Public config** (committed): `config/public_config.py` (overridable via `.env`)
+- **Secret config** (template committed; secrets live in env / `.env.secrets`): `config/secret_config.py`
+- **Unified access**: `config/settings.py` (`SETTINGS` / `get_settings()`)
 
-```bat
-docker build -f docker\Dockerfile -t anime-v2-gpu .
-```
-
-**Run (CLI, GPU)**
-
-```bat
-docker run --rm --gpus all ^
-  -v "%cd%":/app ^
-  -v "%cd%\Input":/app/Input ^
-  -v "%cd%\Output":/app/Output ^
-  anime-v2-gpu /app/Input/Test.mp4 --mode high --device cuda
-```
-
-**Run (web player, GPU)**
-
-```bat
-docker run --rm --gpus all -p 8000:8000 ^
-  -e API_TOKEN=change-me ^
-  -v "%cd%\Output":/app/Output ^
-  anime-v2-gpu anime-v2-web
-```
-
-### PowerShell
-
-```powershell
-docker run --rm --gpus all `
-  -v "${PWD}:/app" `
-  -v "${PWD}/Input:/app/Input" `
-  -v "${PWD}/Output:/app/Output" `
-  anime-v2-gpu /app/Input/Test.mp4 --mode high --device cuda
-```
-
----
-
-## Modes
-
-The `--mode` flag selects a Whisper ASR model:
-
-| Mode | Whisper model | Expected quality | Expected runtime |
-|------|---------------|------------------|------------------|
-| high | `large-v3`    | best             | slowest          |
-| medium | `medium`    | good default     | medium           |
-| low  | `small`       | acceptable       | fastest          |
-
-Device selection:
-
-- `--device auto`: uses CUDA if available, else CPU
-- `--device cuda` / `--device cpu`: force
-
----
-
-## `.env` + `.env.secrets` setup (web UI)
-
-Copy and edit:
+Setup:
 
 ```bash
 cp .env.example .env
 cp .env.secrets.example .env.secrets
 ```
 
-Set at least (in `.env.secrets` or environment):
+Minimum secrets for web usage:
 
-- `API_TOKEN` (use a long random value)
+- `API_TOKEN` (set in `.env.secrets`)
 
-Start the web player:
+Safety:
 
-```bash
-anime-v2-web
-```
-
-Login from your phone browser:
-
-- `http://<your-laptop-ip>:8000/login?token=<API_TOKEN>`
-
-After login, the token is stored in an **HTTP-only cookie** and the player page lists available files and streams them with **Range requests** (seeking works).
+- `.env` and `.env.secrets` are gitignored.
+- Use `STRICT_SECRETS=1` in production to enforce required secrets.
 
 ---
 
-## Voice cloning + presets (fallback behavior)
+## API usage (FastAPI)
 
-### Cloning (best quality when available)
+- Start server: `anime-v2-web`
+- Login: `http://<host>:8000/login?token=<API_TOKEN>`
+- Primary endpoints:
+  - `POST /api/jobs` (submit)
+  - `POST /api/jobs/batch` (batch submit)
+  - `GET /api/jobs/{id}` (status)
+  - `GET /api/jobs/{id}/result` (download)
+  - `GET/PUT /api/jobs/{id}/transcript` (edit transcript)
+  - `POST /api/jobs/{id}/transcript/synthesize` (resynthesize from edited transcript)
 
-If `TTS_SPEAKER_WAV` is set (or if diarization produced a representative wav for a speaker), the TTS stage will attempt **zero-shot cloning**.
+---
 
-If cloning fails, it logs:
+## Performance notes
 
-- `clone failed; using preset <name>`
-
-### Presets (when cloning isn’t available)
-
-Place sample WAVs here:
-
-- `voices/presets/alice/*.wav`
-- `voices/presets/bob/*.wav`
-
-Build embeddings:
-
-```bash
-python tools/build_voice_db.py
-```
-
-This creates:
-
-- `voices/presets.json`
-- `voices/embeddings/<preset>.npy`
-
-When speaker embeddings exist, the pipeline chooses the closest preset via cosine similarity. If no match info is available, it falls back to `TTS_SPEAKER` (default `"default"`).
+- **CPU**: works, but slow for Whisper + XTTS.
+- **CUDA**: recommended for high throughput; `--device auto` will use it when available.
+- Model sizes:
+  - `--mode low` → fastest, lower quality
+  - `--mode high` → slowest, best quality
 
 ---
 
 ## Security notes
 
-- **Don’t expose this service publicly without HTTPS.**
-- If you need internet access, use a tunnel that provides HTTPS (e.g. ngrok / Cloudflare Tunnel) and set a strong `API_TOKEN`.
-- The server **does not log tokens** (request logs omit query strings), and auth failures are rate-limited per IP.
-- Logs are written to `logs/app.log` with rotation.
-
----
-
-## WebRTC Preview
-
-If a mobile browser struggles with MKV seeking/compatibility over HTTP range streaming, you can use an optional **server-push WebRTC preview** that streams the **finished output file**.
-
-- **Endpoint**: `POST /webrtc/offer` (used by the demo page)
-- **Demo page**: `/webrtc/demo?token=<API_TOKEN>`
-
-### STUN vs TURN (important)
-
-- **LAN use**: STUN alone is typically fine.
-- **Public internet / NAT traversal**: you usually need a **TURN server**.
-
-Env configuration:
-
-- `WEBRTC_STUN` (default `stun:stun.l.google.com:19302`)
-- `TURN_URL` (optional, e.g. `turn:turn.example.com:3478`)
-- `TURN_USERNAME` (optional)
-- `TURN_PASSWORD` (optional)
-
-Notes:
-
-- This is a **preview of the completed MKV/MP4** (not a live encode of a running job).
-- No mic/camera permissions are requested (server-push only).
-- If your browser plays the MKV fine with the normal player, prefer the simpler HTTP range streaming path.
+- **Do not expose the server publicly without HTTPS.**
+- Secrets never live in git; use `.env.secrets` and keep it local.
+- Use strong `API_TOKEN`; request logs intentionally omit query strings.
 
 ---
 
@@ -257,7 +285,14 @@ The Docker constraints pin `numpy==1.22.0` to satisfy **wheel compatibility for 
 
 ---
 
-## Backups & retention (ops)
+## Contribution / dev
+
+```bash
+python3 -m ruff check --fix
+python3 -m black .
+python3 -m pytest -q
+```
+
 
 - **Retention**: `RETENTION_DAYS_INPUT` (default `7`) best-effort purges old raw uploads from `Input/uploads/`. `RETENTION_DAYS_LOGS` (default `14`) purges old files from `logs/` and old per-job `Output/**/job.log`.
   - Run manually: `python -m anime_v2.ops.retention`

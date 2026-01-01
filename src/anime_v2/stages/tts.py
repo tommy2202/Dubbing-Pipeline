@@ -65,6 +65,123 @@ def _ffmpeg_to_pcm16k(src: Path, dst: Path) -> None:
     )
 
 
+def _atempo_chain(rate: float) -> str:
+    # ffmpeg atempo supports 0.5..2.0; chain if needed.
+    r = max(0.25, min(4.0, float(rate)))
+    parts: list[str] = []
+    while r > 2.0:
+        parts.append("atempo=2.0")
+        r /= 2.0
+    while r < 0.5:
+        parts.append("atempo=0.5")
+        r /= 0.5
+    parts.append(f"atempo={r:.4f}")
+    return ",".join(parts)
+
+
+def _apply_prosody_ffmpeg(
+    wav_in: Path, *, rate: float = 1.0, pitch: float = 1.0, energy: float = 1.0
+) -> Path:
+    """
+    Optional lightweight prosody controls via ffmpeg filters.
+
+    - rate: tempo multiplier (1.0 = unchanged)
+    - pitch: pitch multiplier (1.0 = unchanged), implemented via asetrate trick
+    - energy: volume multiplier (1.0 = unchanged)
+    """
+    wav_in = Path(wav_in)
+    s = get_settings()
+
+    r = max(0.5, min(2.0, float(rate)))
+    p = max(0.8, min(1.25, float(pitch)))
+    e = max(0.2, min(3.0, float(energy)))
+
+    if abs(r - 1.0) < 0.01 and abs(p - 1.0) < 0.01 and abs(e - 1.0) < 0.01:
+        return wav_in
+
+    out = wav_in.with_suffix(".prosody.wav")
+
+    filters: list[str] = []
+    # Pitch shift without changing duration: asetrate then compensate with atempo.
+    if abs(p - 1.0) >= 0.01:
+        filters.append(f"asetrate=16000*{p:.4f}")
+        filters.append(_atempo_chain(1.0 / p))
+    if abs(r - 1.0) >= 0.01:
+        filters.append(_atempo_chain(r))
+    if abs(e - 1.0) >= 0.01:
+        filters.append(f"volume={e:.3f}")
+    filt = ",".join(filters)
+
+    try:
+        subprocess.run(
+            [
+                str(s.ffmpeg_bin),
+                "-y",
+                "-i",
+                str(wav_in),
+                "-af",
+                filt,
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                str(out),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return out
+    except Exception:
+        return wav_in
+
+
+def _emotion_controls(text: str, *, mode: str) -> tuple[str, float, float, float]:
+    """
+    Returns (clean_text, rate_mul, pitch_mul, energy_mul).
+    """
+    t = str(text or "")
+    m = (mode or "off").strip().lower()
+    if m not in {"off", "auto", "tags"}:
+        m = "off"
+
+    if m == "tags":
+        # Accept a simple prefix tag: "[happy] hello"
+        import re
+
+        mm = re.match(r"^\s*\[([a-zA-Z0-9_\-]+)\]\s*(.*)$", t)
+        if mm:
+            tag = mm.group(1).lower()
+            t = mm.group(2)
+            presets = {
+                "happy": (1.02, 1.06, 1.10),
+                "sad": (0.95, 0.94, 0.85),
+                "angry": (1.05, 1.02, 1.25),
+                "calm": (0.98, 0.98, 0.90),
+            }
+            if tag in presets:
+                r0, p0, e0 = presets[tag]
+                return t, r0, p0, e0
+        return t, 1.0, 1.0, 1.0
+
+    if m == "auto":
+        # Tiny offline heuristic based on punctuation.
+        r0 = 1.0
+        p0 = 1.0
+        e0 = 1.0
+        if "!" in t:
+            p0 *= 1.05
+            e0 *= 1.10
+        if "?" in t:
+            p0 *= 1.05
+        if "..." in t or "…" in t:
+            r0 *= 0.96
+            e0 *= 0.92
+        return t, r0, p0, e0
+
+    return t, 1.0, 1.0, 1.0
+
+
 def _write_silence_wav(path: Path, *, duration_s: float, sr: int = 16000) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frames = max(0, int(duration_s * sr))
@@ -139,6 +256,14 @@ def run(
     tts_lang: str | None = None,
     tts_speaker: str | None = None,
     tts_speaker_wav: Path | None = None,
+    voice_mode: str | None = None,
+    voice_ref_dir: Path | None = None,
+    voice_store_dir: Path | None = None,
+    tts_provider: str | None = None,
+    emotion_mode: str | None = None,
+    speech_rate: float | None = None,
+    pitch: float | None = None,
+    energy: float | None = None,
     progress_cb=None,
     cancel_cb=None,
     max_stretch: float = 0.15,
@@ -160,6 +285,18 @@ def run(
     eff_voice_map_json_path: Path | None = voice_map_json_path or (
         Path(settings.voice_map_json) if settings.voice_map_json else None
     )
+    eff_voice_mode = (voice_mode or settings.voice_mode or "clone").strip().lower()
+    if eff_voice_mode not in {"clone", "preset", "single"}:
+        eff_voice_mode = "clone"
+    eff_voice_ref_dir = voice_ref_dir or settings.voice_ref_dir
+    eff_voice_store_dir = Path(voice_store_dir or settings.voice_store_dir).resolve()
+    eff_tts_provider = (tts_provider or settings.tts_provider or "auto").strip().lower()
+    if eff_tts_provider not in {"auto", "xtts", "basic", "espeak"}:
+        eff_tts_provider = "auto"
+    eff_emotion_mode = (emotion_mode or settings.emotion_mode or "off").strip().lower()
+    eff_rate = float(speech_rate if speech_rate is not None else settings.speech_rate)
+    eff_pitch = float(pitch if pitch is not None else settings.pitch)
+    eff_energy = float(energy if energy is not None else settings.energy)
     out_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = out_dir / ".checkpoint.json"
 
@@ -302,7 +439,13 @@ def run(
             raise TTSCanceled()
 
         text = str(line.get("text", "") or "").strip()
+        text, emo_rate, emo_pitch, emo_energy = _emotion_controls(text, mode=eff_emotion_mode)
+        rate_mul = float(eff_rate) * float(emo_rate)
+        pitch_mul = float(eff_pitch) * float(emo_pitch)
+        energy_mul = float(eff_energy) * float(emo_energy)
         speaker_id = str(line.get("speaker_id") or eff_tts_speaker or "default")
+        if eff_voice_mode == "single":
+            speaker_id = str(eff_tts_speaker or "default")
         if not text:
             # keep timing, but skip synthesis (silence clip)
             clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
@@ -323,6 +466,16 @@ def run(
             or eff_tts_speaker_wav
             or speaker_rep_wav.get(speaker_id)
         )
+        # Optional voice reference directory: prefer stable refs (e.g. <ref_dir>/<speaker_id>.wav)
+        if speaker_wav is None and eff_voice_ref_dir:
+            with suppress(Exception):
+                base = Path(eff_voice_ref_dir).expanduser()
+                cand1 = base / f"{speaker_id}.wav"
+                cand2 = base / speaker_id / "ref.wav"
+                for c in (cand1, cand2):
+                    if c.exists() and c.is_file():
+                        speaker_wav = c
+                        break
         if speaker_wav is None:
             with suppress(Exception):
                 c = store.characters.get(speaker_id)
@@ -332,6 +485,15 @@ def run(
                         if pp.exists():
                             speaker_wav = pp
                             break
+
+        # Persist reference wavs to a stable store (best-effort, no-op on failure).
+        if speaker_wav is not None and speaker_wav.exists():
+            with suppress(Exception):
+                dest_dir = (eff_voice_store_dir / speaker_id).resolve()
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest = dest_dir / "ref.wav"
+                if not dest.exists():
+                    dest.write_bytes(Path(speaker_wav).read_bytes())
 
         synthesized = False
 
@@ -349,7 +511,12 @@ def run(
             )
 
         # If breaker is open, skip XTTS and go straight to fallbacks.
-        if engine is not None and cb.allow():
+        if (
+            engine is not None
+            and cb.allow()
+            and eff_voice_mode == "clone"
+            and eff_tts_provider in {"auto", "xtts"}
+        ):
             # 1) XTTS clone (if speaker_wav)
             if speaker_wav is not None and speaker_wav.exists():
                 try:
@@ -372,7 +539,11 @@ def run(
                     synthesized = False
 
             # 2) XTTS preset
-            if not synthesized:
+            if (
+                not synthesized
+                and eff_voice_mode in {"clone", "preset"}
+                and eff_tts_provider in {"auto", "xtts"}
+            ):
                 # Choose best preset if we have speaker embedding; else default preset
                 preset = (
                     per_speaker_preset_override.get(speaker_id)
@@ -416,7 +587,7 @@ def run(
 
         # 3) Basic English single-speaker (Coqui) (still requires COQUI_TOS_AGREED)
         # Use a common Coqui model as fallback.
-        if not synthesized:
+        if not synthesized and eff_tts_provider in {"auto", "xtts", "basic"}:
             try:
                 from anime_v2.gates.license import require_coqui_tos
                 from anime_v2.runtime.device_allocator import pick_device
@@ -439,7 +610,7 @@ def run(
                 logger.warning("tts_basic_failed", error=str(ex))
 
         # 4) espeak-ng last resort
-        if not synthesized:
+        if not synthesized and eff_tts_provider in {"auto", "xtts", "basic", "espeak"}:
             try:
                 _retry_wrap(
                     "espeak", lambda text=text, raw_clip=raw_clip: _espeak_fallback(text, raw_clip)
@@ -459,6 +630,10 @@ def run(
             _ffmpeg_to_pcm16k(raw_clip, clip)
         except Exception:
             clip = raw_clip
+
+        # Optional expressive controls (best-effort; never required)
+        with suppress(Exception):
+            clip = _apply_prosody_ffmpeg(clip, rate=rate_mul, pitch=pitch_mul, energy=energy_mul)
 
         # Optional: retime clip to fit subtitle window (avoid early/late speech).
         with suppress(Exception):

@@ -66,6 +66,15 @@ class PublicConfig(BaseSettings):
     # --- per-user settings storage ---
     user_settings_path: Path | None = Field(default=None, alias="ANIME_V2_SETTINGS_PATH")
 
+    # --- alignment / metadata ---
+    whisper_word_timestamps: bool = Field(default=False, alias="WHISPER_WORD_TIMESTAMPS")
+
+    # --- expressive speech controls (optional) ---
+    emotion_mode: str = Field(default="off", alias="EMOTION_MODE")  # off|auto|tags
+    speech_rate: float = Field(default=1.0, alias="SPEECH_RATE")  # global multiplier
+    pitch: float = Field(default=1.0, alias="PITCH")  # global multiplier
+    energy: float = Field(default=1.0, alias="ENERGY")  # volume multiplier
+
     # --- web server ---
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
@@ -144,6 +153,17 @@ class PublicConfig(BaseSettings):
     voice_bank_map_path: str | None = Field(default=None, alias="VOICE_BANK_MAP")
     voice_map_json: str | None = Field(default=None, alias="VOICE_MAP_JSON")
     speaker_signature: str | None = Field(default=None, alias="SPEAKER_SIGNATURE")
+
+    # Voice routing controls (optional)
+    voice_mode: str = Field(default="clone", alias="VOICE_MODE")  # clone|preset|single
+    voice_ref_dir: Path | None = Field(default=None, alias="VOICE_REF_DIR")
+    voice_store_dir: Path = Field(
+        default_factory=lambda: (Path.cwd() / "data" / "voices").resolve(),
+        alias="VOICE_STORE",
+    )
+
+    # Provider selection (F9)
+    tts_provider: str = Field(default="auto", alias="TTS_PROVIDER")  # auto|xtts|basic|espeak
 
     # --- ops: retention/cleanup ---
     # latency budgets (seconds): mark jobs "degraded" when exceeded
