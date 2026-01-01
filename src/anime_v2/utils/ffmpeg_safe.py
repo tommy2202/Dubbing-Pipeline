@@ -67,7 +67,11 @@ def run_ffmpeg(
             if attempt >= int(retries):
                 stderr = ""
                 with suppress(Exception):
-                    stderr = ex.stderr.decode("utf-8", errors="replace") if ex.stderr else ""
+                    if ex.stderr:
+                        if isinstance(ex.stderr, bytes):
+                            stderr = ex.stderr.decode("utf-8", errors="replace")
+                        else:
+                            stderr = str(ex.stderr)
                 raise FFmpegError(
                     "ffmpeg failed "
                     f"(exit={ex.returncode})\n"

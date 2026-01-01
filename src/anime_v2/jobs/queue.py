@@ -388,6 +388,48 @@ class JobQueue:
             self.store.update(job_id, progress=0.10, message="Audio extracted")
             await self._check_canceled(job_id)
 
+            # Tier-1 A: dialogue isolation + enhanced mixing (opt-in).
+            # Defaults preserve behavior (SEPARATION=off, MIX=legacy).
+            stems_dir = work_dir / "stems"
+            stems_dir.mkdir(parents=True, exist_ok=True)
+            audio_dir = work_dir / "audio"
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            base_stems_dir = base_dir / "stems"
+            base_stems_dir.mkdir(parents=True, exist_ok=True)
+            base_audio_dir = base_dir / "audio"
+            base_audio_dir.mkdir(parents=True, exist_ok=True)
+
+            sep_mode = str(getattr(settings, "separation", "off") or "off").lower()
+            mix_mode = str(getattr(settings, "mix_mode", "legacy") or "legacy").lower()
+            background_wav: Path | None = None
+            if mix_mode == "enhanced":
+                if sep_mode == "demucs":
+                    try:
+                        from anime_v2.audio.separation import separate_dialogue
+                        from anime_v2.utils.io import atomic_copy
+
+                        res = separate_dialogue(
+                            Path(str(wav)),
+                            stems_dir,
+                            model=str(getattr(settings, "separation_model", "htdemucs")),
+                            device=str(getattr(settings, "separation_device", "auto")),
+                        )
+                        background_wav = res.background_wav
+                        # Persist stable copies (best-effort)
+                        with suppress(Exception):
+                            atomic_copy(res.dialogue_wav, base_stems_dir / "dialogue.wav")
+                            atomic_copy(res.background_wav, base_stems_dir / "background.wav")
+                            if res.meta_path.exists():
+                                atomic_copy(res.meta_path, base_stems_dir / "meta.json")
+                    except Exception as ex:
+                        self.store.append_log(
+                            job_id,
+                            f"[{now_utc()}] separation requested but unavailable; falling back to no separation ({ex})",
+                        )
+                        background_wav = Path(str(wav))
+                else:
+                    background_wav = Path(str(wav))
+
             # b) diarize.identify (~0.25) (optional)
             diar_json_work = work_dir / "diarization.work.json"
             diar_json_public = base_dir / "diarization.json"
@@ -1013,16 +1055,72 @@ class JobQueue:
                                 )
                             ),
                         )
-                        if sched is None:
-                            outs = mix(
-                                video_in=video_path,
-                                tts_wav=tts_wav,
-                                srt=subs_srt_path,
-                                out_dir=work_dir,
-                                cfg=cfg_mix,
-                            )
+                        if mix_mode == "enhanced":
+                            # Tier-1 A enhanced mix: background + TTS → final_mix.wav, then export container(s).
+                            from anime_v2.audio.mix import MixParams, mix_dubbed_audio
+                            from anime_v2.stages.export import export_hls, export_mkv, export_mp4
+                            from anime_v2.utils.io import atomic_copy
+
+                            bg = background_wav or Path(str(wav))
+                            final_mix_wav = audio_dir / "final_mix.wav"
+
+                            def _enhanced_phase():
+                                mix_dubbed_audio(
+                                    background_wav=bg,
+                                    tts_dialogue_wav=tts_wav,
+                                    out_wav=final_mix_wav,
+                                    params=MixParams(
+                                        lufs_target=float(getattr(settings, "lufs_target", -16.0)),
+                                        ducking=bool(getattr(settings, "ducking", True)),
+                                        ducking_strength=float(
+                                            getattr(settings, "ducking_strength", 1.0)
+                                        ),
+                                        limiter=bool(getattr(settings, "limiter", True)),
+                                    ),
+                                )
+                                with suppress(Exception):
+                                    atomic_copy(final_mix_wav, base_audio_dir / "final_mix.wav")
+
+                                outs2: dict[str, Path] = {}
+                                emit = set(cfg_mix.emit or ())
+                                if "mkv" in emit:
+                                    outs2["mkv"] = export_mkv(
+                                        video_path,
+                                        final_mix_wav,
+                                        subs_srt_path,
+                                        work_dir / f"{video_path.stem}.dub.mkv",
+                                    )
+                                if "mp4" in emit:
+                                    outs2["mp4"] = export_mp4(
+                                        video_path,
+                                        final_mix_wav,
+                                        subs_srt_path,
+                                        work_dir / f"{video_path.stem}.dub.mp4",
+                                    )
+                                if "fmp4" in emit:
+                                    outs2["fmp4"] = export_mp4(
+                                        video_path,
+                                        final_mix_wav,
+                                        subs_srt_path,
+                                        work_dir / f"{video_path.stem}.dub.frag.mp4",
+                                        fragmented=True,
+                                    )
+                                if "hls" in emit:
+                                    outs2["hls"] = export_hls(
+                                        video_path,
+                                        final_mix_wav,
+                                        subs_srt_path,
+                                        work_dir / f"{video_path.stem}_hls",
+                                    )
+                                return outs2
+
+                            if sched is None:
+                                outs = _enhanced_phase()
+                            else:
+                                with sched.phase("mux"):
+                                    outs = _enhanced_phase()
                         else:
-                            with sched.phase("mux"):
+                            if sched is None:
                                 outs = mix(
                                     video_in=video_path,
                                     tts_wav=tts_wav,
@@ -1030,6 +1128,15 @@ class JobQueue:
                                     out_dir=work_dir,
                                     cfg=cfg_mix,
                                 )
+                            else:
+                                with sched.phase("mux"):
+                                    outs = mix(
+                                        video_in=video_path,
+                                        tts_wav=tts_wav,
+                                        srt=subs_srt_path,
+                                        out_dir=work_dir,
+                                        cfg=cfg_mix,
+                                    )
                         out_mkv = outs.get("mkv", out_mkv)
                         out_mp4 = outs.get("mp4", out_mp4)
                         try:

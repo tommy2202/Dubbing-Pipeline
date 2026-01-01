@@ -125,6 +125,16 @@ class PublicConfig(BaseSettings):
     separate_vocals: bool = Field(default=False, alias="SEPARATE_VOCALS")
     enable_demucs: bool = Field(default=False, alias="ENABLE_DEMUCS")
 
+    # Tier-1 A: dialogue isolation + enhanced mixing (opt-in; defaults preserve current behavior)
+    separation: str = Field(default="off", alias="SEPARATION")  # off|demucs
+    separation_model: str = Field(default="htdemucs", alias="SEPARATION_MODEL")
+    separation_device: str = Field(default="auto", alias="SEPARATION_DEVICE")  # auto|cpu|cuda
+    mix_mode: str = Field(default="legacy", alias="MIX")  # legacy|enhanced
+    lufs_target: float = Field(default=-16.0, alias="LUFS_TARGET")
+    ducking: bool = Field(default=True, alias="DUCKING")  # used when MIX=enhanced
+    ducking_strength: float = Field(default=1.0, alias="DUCKING_STRENGTH")
+    limiter: bool = Field(default=True, alias="LIMITER")
+
     tts_model: str = Field(
         default="tts_models/multilingual/multi-dataset/xtts_v2", alias="TTS_MODEL"
     )

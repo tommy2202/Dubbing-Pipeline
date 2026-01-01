@@ -259,6 +259,37 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     show_default=True,
 )
 @click.option(
+    "--separation",
+    type=click.Choice(["off", "demucs"], case_sensitive=False),
+    default=str(get_settings().separation),
+    show_default=True,
+)
+@click.option("--separation-model", default=str(get_settings().separation_model), show_default=True)
+@click.option(
+    "--separation-device",
+    type=click.Choice(["auto", "cpu", "cuda"], case_sensitive=False),
+    default=str(get_settings().separation_device),
+    show_default=True,
+)
+@click.option(
+    "--mix",
+    "mix_mode",
+    type=click.Choice(["legacy", "enhanced"], case_sensitive=False),
+    default=str(get_settings().mix_mode),
+    show_default=True,
+)
+@click.option(
+    "--lufs-target", type=float, default=float(get_settings().lufs_target), show_default=True
+)
+@click.option("--ducking/--no-ducking", default=bool(get_settings().ducking), show_default=True)
+@click.option(
+    "--ducking-strength",
+    type=float,
+    default=float(get_settings().ducking_strength),
+    show_default=True,
+)
+@click.option("--limiter/--no-limiter", default=bool(get_settings().limiter), show_default=True)
+@click.option(
     "--emit",
     default=str(get_settings().emit_formats),
     show_default=True,
@@ -331,6 +362,14 @@ def cli(
     max_stretch: float,
     mix_profile: str,
     separate_vocals: bool,
+    separation: str,
+    separation_model: str,
+    separation_device: str,
+    mix_mode: str,
+    lufs_target: float,
+    ducking: bool,
+    ducking_strength: float,
+    limiter: bool,
     emit: str,
     emotion_mode: str,
     speech_rate: float,
@@ -654,6 +693,34 @@ def cli(
         logger.exception("[v2] audio_extractor failed: %s", ex)
         logger.error("[v2] Done. Output: (failed early)")
         return
+
+    # Optional Tier-1 A separation (opt-in; default off)
+    stems_dir = out_dir / "stems"
+    audio_dir = out_dir / "audio"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    background_wav: Path | None = None
+    if str(mix_mode).lower() == "enhanced":
+        sep_mode = str(separation or "off").lower()
+        if sep_mode == "demucs":
+            try:
+                from anime_v2.audio.separation import separate_dialogue
+
+                res = separate_dialogue(
+                    Path(str(extracted)),
+                    stems_dir,
+                    model=str(separation_model),
+                    device=str(separation_device),
+                )
+                background_wav = res.background_wav
+            except Exception as ex:
+                logger.warning(
+                    "[v2] separation requested but unavailable; falling back to no separation (%s)",
+                    ex,
+                )
+                background_wav = Path(str(extracted))
+        else:
+            background_wav = Path(str(extracted))
 
     # 2) diarization + persistent character IDs
     diar_segments: list[dict] = []
@@ -1074,16 +1141,56 @@ def cli(
         requested = {p.strip().lower() for p in (emit or "").split(",") if p.strip()}
         requested |= {"mkv", "mp4"}
         emit_set = tuple(sorted(requested))
-        cfg_mix = MixConfig(
-            profile=mix_profile.lower(), separate_vocals=bool(separate_vocals), emit=emit_set
-        )
-        outs = mix(
-            video_in=video,
-            tts_wav=tts_wav,
-            srt=None if no_subs else subs_srt_path,
-            out_dir=out_dir,
-            cfg=cfg_mix,
-        )
+        if str(mix_mode).lower() == "enhanced":
+            # Tier-1 A enhanced mixing uses extracted/separated background + TTS dialogue
+            from anime_v2.audio.mix import MixParams, mix_dubbed_audio
+            from anime_v2.stages.export import export_hls, export_mkv, export_mp4
+
+            bg = background_wav or Path(str(extracted))
+            final_mix = audio_dir / "final_mix.wav"
+            mix_dubbed_audio(
+                background_wav=bg,
+                tts_dialogue_wav=tts_wav,
+                out_wav=final_mix,
+                params=MixParams(
+                    lufs_target=float(lufs_target),
+                    ducking=bool(ducking),
+                    ducking_strength=float(ducking_strength),
+                    limiter=bool(limiter),
+                ),
+            )
+            outs: dict[str, Path] = {}
+            if "mkv" in emit_set:
+                outs["mkv"] = export_mkv(
+                    video, final_mix, None if no_subs else subs_srt_path, out_dir / "dub.mkv"
+                )
+            if "mp4" in emit_set:
+                outs["mp4"] = export_mp4(
+                    video, final_mix, None if no_subs else subs_srt_path, out_dir / "dub.mp4"
+                )
+            if "fmp4" in emit_set:
+                outs["fmp4"] = export_mp4(
+                    video,
+                    final_mix,
+                    None if no_subs else subs_srt_path,
+                    out_dir / "dub.frag.mp4",
+                    fragmented=True,
+                )
+            if "hls" in emit_set:
+                outs["hls"] = export_hls(
+                    video, final_mix, None if no_subs else subs_srt_path, out_dir / "hls"
+                )
+        else:
+            cfg_mix = MixConfig(
+                profile=mix_profile.lower(), separate_vocals=bool(separate_vocals), emit=emit_set
+            )
+            outs = mix(
+                video_in=video,
+                tts_wav=tts_wav,
+                srt=None if no_subs else subs_srt_path,
+                out_dir=out_dir,
+                cfg=cfg_mix,
+            )
         if "mkv" in outs:
             dub_mkv = outs["mkv"]
         if "mp4" in outs:

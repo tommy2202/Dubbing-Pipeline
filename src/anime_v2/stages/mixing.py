@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -135,43 +134,24 @@ def _run_demucs_if_enabled(*, audio_wav: Path, out_dir: Path, timeout_s: int) ->
     Returns path to "no_vocals.wav" if available, else None.
     """
     try:
-        import demucs  # type: ignore  # noqa: F401
+        from anime_v2.audio.separation import separate_dialogue
     except Exception:
         return None
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    demucs_out = out_dir / "demucs"
-    demucs_out.mkdir(parents=True, exist_ok=True)
-    # demucs CLI writes outputs under <out>/<model>/<track>/
-    cmd = [
-        sys.executable,
-        "-m",
-        "demucs",
-        "-n",
-        "htdemucs",
-        "--two-stems",
-        "vocals",
-        "-o",
-        str(demucs_out),
-        str(audio_wav),
-    ]
     try:
-        subprocess.run(cmd, check=True, timeout=timeout_s, capture_output=True, text=True)
+        stems_dir = out_dir / "stems"
+        stems_dir.mkdir(parents=True, exist_ok=True)
+        res = separate_dialogue(
+            audio_wav,
+            stems_dir,
+            model=str(get_settings().separation_model or "htdemucs"),
+            device=str(get_settings().separation_device or "auto"),
+            timeout_s=timeout_s,
+        )
+        return res.background_wav if res.background_wav.exists() else None
     except Exception as ex:
         logger.warning("[v2] demucs failed/timeout (%s); skipping separation", ex)
         return None
-
-    # Find no_vocals.wav
-    # Common layout: demucs/htdemucs/<stem>/no_vocals.wav
-    stem = audio_wav.stem
-    candidate = demucs_out / "htdemucs" / stem / "no_vocals.wav"
-    if candidate.exists():
-        return candidate
-    # Fallback: any no_vocals.wav under demucs_out
-    for p in demucs_out.rglob("no_vocals.wav"):
-        if p.exists():
-            return p
-    return None
 
 
 def mix(

@@ -151,6 +151,27 @@ anime-v2 Input/Test.mp4 --emotion-mode auto
 anime-v2 Input/Test.mp4 --emotion-mode tags
 ```
 
+### Optional Dialogue Isolation (Demucs)
+
+Defaults preserve current behavior (**no separation**). To isolate dialogue and keep BGM/SFX:
+
+```bash
+# enable enhanced mixing + demucs stems (requires: pip install -e ".[mixing]")
+anime-v2 Input/Test.mp4 --mix enhanced --separation demucs
+```
+
+Artifacts:
+
+- `Output/<stem>/stems/dialogue.wav`
+- `Output/<stem>/stems/background.wav`
+- `Output/<stem>/audio/final_mix.wav`
+
+### Enhanced Mixing (LUFS + Ducking)
+
+```bash
+anime-v2 Input/Test.mp4 --mix enhanced --lufs-target -16 --ducking --ducking-strength 1.0 --limiter
+```
+
 ### Pseudo-streaming (chunk mode)
 
 ```bash
