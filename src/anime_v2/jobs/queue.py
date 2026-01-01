@@ -26,6 +26,7 @@ from anime_v2.utils.log import logger
 from anime_v2.utils.paths import output_dir_for
 from anime_v2.utils.time import format_srt_timestamp
 from anime_v2.utils.net import install_egress_policy
+from anime_v2.runtime.scheduler import Scheduler
 
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-")
@@ -181,6 +182,7 @@ class JobQueue:
         if job is None:
             return
         limits = get_limits()
+        sched = Scheduler.instance_optional()
 
         if await self._is_canceled(job_id):
             self.store.update(job_id, state=JobState.CANCELED, progress=0.0, message="Canceled before start")
@@ -210,13 +212,23 @@ class JobQueue:
             self.store.update(job_id, progress=0.05, message="Extracting audio")
             self.store.append_log(job_id, f"[{now_utc()}] audio_extractor")
             try:
-                wav = run_with_timeout(
-                    "audio_extract",
-                    timeout_s=limits.timeout_audio_s,
-                    fn=audio_extractor.extract,
-                    args=(),
-                    kwargs={"video": video_path, "out_dir": out_dir, "wav_out": out_dir / "audio.wav"},
-                )
+                if sched is None:
+                    wav = run_with_timeout(
+                        "audio_extract",
+                        timeout_s=limits.timeout_audio_s,
+                        fn=audio_extractor.extract,
+                        args=(),
+                        kwargs={"video": video_path, "out_dir": out_dir, "wav_out": out_dir / "audio.wav"},
+                    )
+                else:
+                    with sched.phase("audio"):
+                        wav = run_with_timeout(
+                            "audio_extract",
+                            timeout_s=limits.timeout_audio_s,
+                            fn=audio_extractor.extract,
+                            args=(),
+                            kwargs={"video": video_path, "out_dir": out_dir, "wav_out": out_dir / "audio.wav"},
+                        )
             except PhaseTimeout as ex:
                 job_errors.labels(stage="audio_timeout").inc()
                 raise RuntimeError(str(ex))
@@ -289,15 +301,27 @@ class JobQueue:
             self.store.append_log(job_id, f"[{now_utc()}] transcribe model={model_name} device={device}")
             t_wh0 = time.perf_counter()
             try:
-                transcribe(
-                    audio_path=wav,
-                    srt_out=srt_out,
-                    device=device,
-                    model_name=model_name,
-                    task="transcribe",
-                    src_lang=job.src_lang,
-                    tgt_lang=job.tgt_lang,
-                )
+                if sched is None:
+                    transcribe(
+                        audio_path=wav,
+                        srt_out=srt_out,
+                        device=device,
+                        model_name=model_name,
+                        task="transcribe",
+                        src_lang=job.src_lang,
+                        tgt_lang=job.tgt_lang,
+                    )
+                else:
+                    with sched.phase("transcribe"):
+                        transcribe(
+                            audio_path=wav,
+                            srt_out=srt_out,
+                            device=device,
+                            model_name=model_name,
+                            task="transcribe",
+                            src_lang=job.src_lang,
+                            tgt_lang=job.tgt_lang,
+                        )
             except Exception:
                 job_errors.labels(stage="whisper").inc()
                 raise
@@ -431,7 +455,11 @@ class JobQueue:
                         max_stretch=float(os.environ.get("MAX_STRETCH", "0.15")),
                     )
 
-                run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
+                if sched is None:
+                    run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
+                else:
+                    with sched.phase("tts"):
+                        run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
                 tts_seconds.observe(max(0.0, time.perf_counter() - t_tts0))
             except tts.TTSCanceled:
                 job_errors.labels(stage="tts").inc()
@@ -480,12 +508,20 @@ class JobQueue:
                         )
                     ),
                 )
-                outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=out_dir, cfg=cfg_mix)
+                if sched is None:
+                    outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=out_dir, cfg=cfg_mix)
+                else:
+                    with sched.phase("mux"):
+                        outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=out_dir, cfg=cfg_mix)
                 out_mkv = outs.get("mkv", out_mkv)
                 out_mp4 = outs.get("mp4", out_mp4)
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] mix failed: {ex} (falling back to mux)")
-                mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv)
+                if sched is None:
+                    mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv)
+                else:
+                    with sched.phase("mux"):
+                        mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv)
 
             self.store.update(
                 job_id,
@@ -509,4 +545,9 @@ class JobQueue:
         finally:
             dt = time.perf_counter() - t0
             logger.info("job %s finished state=%s in %.2fs", job_id, (self.store.get(job_id).state if self.store.get(job_id) else "unknown"), dt)
+            try:
+                if sched is not None:
+                    sched.on_job_done(job_id)
+            except Exception:
+                pass
 

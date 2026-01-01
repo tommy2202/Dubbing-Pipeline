@@ -19,12 +19,14 @@ from anime_v2.api.middleware import request_context_middleware
 from anime_v2.api.models import AuthStore, Role, User, now_ts
 from anime_v2.api.routes_auth import router as auth_router
 from anime_v2.api.routes_keys import router as keys_router
+from anime_v2.api.routes_runtime import router as runtime_router
 from anime_v2.config import get_settings
 from anime_v2.jobs.queue import JobQueue
 from anime_v2.jobs.store import JobStore
 from anime_v2.ops import audit
 from anime_v2.ops.metrics import REGISTRY
 from anime_v2.runtime.model_manager import ModelManager
+from anime_v2.runtime.scheduler import Scheduler
 from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.log import logger
 from anime_v2.utils.ratelimit import RateLimiter
@@ -43,6 +45,20 @@ async def lifespan(app: FastAPI):
     q = JobQueue(store, concurrency=int(os.environ.get("JOBS_CONCURRENCY", "1")))
     app.state.job_store = store
     app.state.job_queue = q
+    # runtime scheduler (in-proc)
+    import asyncio as _asyncio
+
+    loop = _asyncio.get_running_loop()
+
+    def _enqueue_threadsafe(job: Job) -> None:
+        # Runs in scheduler thread; forward to asyncio loop
+        fut = _asyncio.run_coroutine_threadsafe(q.enqueue(job), loop)
+        fut.result(timeout=5.0)
+
+    sched = Scheduler(store=store, enqueue_cb=_enqueue_threadsafe)
+    Scheduler.install(sched)
+    sched.start()
+    app.state.scheduler = sched
 
     # auth store
     auth_store = AuthStore(OUTPUT_ROOT / "auth.db")
@@ -85,6 +101,10 @@ async def lifespan(app: FastAPI):
     except Exception as ex:
         logger.warning("model_prewarm_exception", error=str(ex))
     yield
+    try:
+        sched.stop()
+    except Exception:
+        pass
     await q.stop()
 
 
@@ -123,6 +143,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(keys_router)
+app.include_router(runtime_router)
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
 

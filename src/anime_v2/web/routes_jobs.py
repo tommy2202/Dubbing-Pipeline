@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from anime_v2.ops.metrics import jobs_queued
 from anime_v2.utils.log import request_id_var
 from anime_v2.utils.crypto import verify_secret
 from anime_v2.utils.ratelimit import RateLimiter
+from anime_v2.runtime.scheduler import JobRecord, Scheduler
 
 
 router = APIRouter()
@@ -79,6 +81,16 @@ def _get_queue(request: Request):
     return q
 
 
+def _get_scheduler(request: Request):
+    s = getattr(request.app.state, "scheduler", None)
+    if s is None:
+        # scheduler should be installed in server lifespan; fall back to singleton
+        s = Scheduler.instance_optional()
+    if s is None:
+        raise HTTPException(status_code=500, detail="Scheduler not initialized")
+    return s
+
+
 @router.post("/api/jobs")
 async def create_job(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, str]:
     # Rate limit: 10/min per identity (fallback to IP)
@@ -90,7 +102,7 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     if not rl.allow(f"jobs:submit:{who}", limit=10, per_seconds=60):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     store = _get_store(request)
-    queue = _get_queue(request)
+    scheduler = _get_scheduler(request)
     limits = get_limits()
 
     ctype = (request.headers.get("content-type") or "").lower()
@@ -220,7 +232,15 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
         error=None,
     )
     store.put(job)
-    await queue.enqueue(job)
+    scheduler.submit(
+        JobRecord(
+            job_id=jid,
+            mode=mode,
+            device_pref=device,
+            created_at=time.time(),
+            priority=100,
+        )
+    )
     jobs_queued.inc()
     return {"id": jid}
 

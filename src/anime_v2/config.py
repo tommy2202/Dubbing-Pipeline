@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     gpu_util_max: float = Field(default=0.85, alias="GPU_UTIL_MAX")
     gpu_mem_max_ratio: float = Field(default=0.90, alias="GPU_MEM_MAX_RATIO")
 
+    # runtime scheduler (in-proc) limits
+    max_concurrency_global: int = Field(default=2, alias="MAX_CONCURRENCY_GLOBAL")
+    max_concurrency_transcribe: int = Field(default=1, alias="MAX_CONCURRENCY_TRANSCRIBE")
+    max_concurrency_tts: int = Field(default=1, alias="MAX_CONCURRENCY_TTS")
+    backpressure_q_max: int = Field(default=6, alias="BACKPRESSURE_Q_MAX")
+
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in (self.cors_origins or "").split(",") if o.strip()]
 

@@ -6,3 +6,5 @@
 {"ts":"2026-01-01T03:09:17.353639+00:00","event":"api_key.create","request_id":"8bf5abe4f4884b7a94ee326c2e8a78b8","user_id":"u_xyzI2waWHnZOuKw2Kbsb_g","meta":{"key_id":"k_lEKBJnw-8LWZYokHQ4A19Q","user_id":"u_operator","scopes":["read:job","submit:job"],"prefix":"dp_1lm6nmckxe_..."}}
 {"ts":"2026-01-01T03:09:48.619214+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
 {"ts":"2026-01-01T03:09:48.758330+00:00","event":"auth.login_ok","request_id":"328b3d6f902b453397d76dcc56dd25de","user_id":"u_UDQUnHLM2s2AO5mKXbDxRg","meta":{"username":"admin","role":"admin","session":true}}
+{"ts":"2026-01-01T03:18:49.345935+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:18:49.462245+00:00","event":"auth.login_ok","request_id":"db42844176ef4ed987831a6343bff395","user_id":"u_PrrbhVLwpp40EAcSav4pog","meta":{"username":"admin","role":"admin","session":false}}
