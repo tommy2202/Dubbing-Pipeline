@@ -1,3 +1,8 @@
 {"ts":"2026-01-01T02:15:46.092225+00:00","event":"test.event","request_id":"r1","user_id":"u1","meta":{"x":"Bearer ***REDACTED***","k":"***REDACTED***"}}
 {"ts":"2026-01-01T02:16:24.227927+00:00","event":"auth.login_ok","request_id":"rid123","user_id":"u_1","meta":{"token":"Bearer ***REDACTED***","api_key":"***REDACTED***"}}
 {"ts":"2026-01-01T02:16:38.294161+00:00","event":"api_key.create","request_id":"rid123","user_id":"u_1","meta":{"token":"Bearer ***REDACTED***","api_key":"***REDACTED***"}}
+{"ts":"2026-01-01T03:09:17.199086+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:09:17.307575+00:00","event":"auth.login_ok","request_id":"732f8a2997f5416fbffc53f69b1ba0eb","user_id":"u_xyzI2waWHnZOuKw2Kbsb_g","meta":{"username":"admin","role":"admin","session":false}}
+{"ts":"2026-01-01T03:09:17.353639+00:00","event":"api_key.create","request_id":"8bf5abe4f4884b7a94ee326c2e8a78b8","user_id":"u_xyzI2waWHnZOuKw2Kbsb_g","meta":{"key_id":"k_lEKBJnw-8LWZYokHQ4A19Q","user_id":"u_operator","scopes":["read:job","submit:job"],"prefix":"dp_1lm6nmckxe_..."}}
+{"ts":"2026-01-01T03:09:48.619214+00:00","event":"policy.egress","meta":{"offline_mode":false,"allow_egress":true,"allow_hf_egress":false}}
+{"ts":"2026-01-01T03:09:48.758330+00:00","event":"auth.login_ok","request_id":"328b3d6f902b453397d76dcc56dd25de","user_id":"u_UDQUnHLM2s2AO5mKXbDxRg","meta":{"username":"admin","role":"admin","session":true}}

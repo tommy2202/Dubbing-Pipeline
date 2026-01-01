@@ -25,3 +25,71 @@
 {"logger": "anime_v2", "ts": "2026-01-01T03:00:59.799903Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
 {"logger": "anime_v2", "ts": "2026-01-01T03:01:15.503048Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
 {"logger": "anime_v2", "ts": "2026-01-01T03:01:15.503712Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
+{"ip": "testclient", "method": "POST", "path": "/auth/login", "status": 500, "duration_ms": 1.4633398968726397, "logger": "anime_v2", "ts": "2026-01-01T03:08:58.961911Z", "level": "info", "request_id": "9d77b5f68d2040c7bf19980a065f42f6", "msg": "http_done"}
+{"ts": "2026-01-01T03:08:58.963380Z", "level": "info", "msg": "HTTP Request: POST http://testserver/auth/login \"HTTP/1.1 500 Internal Server Error\""}
+{"inputs_removed": 1, "logs_removed": 0, "logger": "anime_v2", "ts": "2026-01-01T03:09:00.406714Z", "level": "info", "msg": "retention_done"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:17.252844Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/auth/login", "status": 200, "duration_ms": 53.34562202915549, "logger": "anime_v2", "ts": "2026-01-01T03:09:17.307850Z", "level": "info", "request_id": "732f8a2997f5416fbffc53f69b1ba0eb", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:17.309026Z", "level": "info", "msg": "HTTP Request: POST http://testserver/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/keys", "status": 200, "duration_ms": 43.74765302054584, "logger": "anime_v2", "ts": "2026-01-01T03:09:17.353968Z", "level": "info", "request_id": "8bf5abe4f4884b7a94ee326c2e8a78b8", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:17.354472Z", "level": "info", "msg": "HTTP Request: POST http://testserver/keys \"HTTP/1.1 200 OK\""}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:17.551327Z", "level": "info", "msg": "[v2] Extracting audio \u2192 /workspace/Output/Test/audio.wav"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:17.551895Z", "level": "info", "msg": "[v2] Audio already extracted"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:17.821978Z", "level": "warning", "msg": "ECAPA embedding unavailable (No module named 'torch')"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:17.822241Z", "level": "warning", "msg": "diarize engine=speechbrain failed (no segments)"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:17.841017Z", "level": "info", "msg": "diarize engine=heuristic segments=1"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:17.924311Z", "level": "info", "msg": "[v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:17.924541Z", "level": "warning", "msg": "[v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata."}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:17.935820Z", "level": "warning", "msg": "[v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS."}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:17.937005Z", "level": "info", "msg": "[v2] TTS done \u2192 /workspace/Output/Test/Test.tts.wav"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:18.098530Z", "level": "info", "msg": "[v2] mixing: loudnorm pass1 ok (0.12s)"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:18.161745Z", "level": "warning", "msg": "[v2] SRT missing/empty; muxing without subtitles (/workspace/Output/Test/Test.translated.srt)"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:18.235997Z", "level": "info", "msg": "[v2] mux complete \u2192 /workspace/Output/Test/dub.mkv"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:18.242049Z", "level": "info", "msg": "job 086e8d1a-8d63-4dcc-b6c2-5ce671b65d47 finished state=JobState.DONE in 0.70s"}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 200, "duration_ms": 887.0932389982045, "logger": "anime_v2", "ts": "2026-01-01T03:09:18.242440Z", "level": "info", "request_id": "8a4f390e39c44bb7abff16bb3d0f8321", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:18.243552Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "GET", "path": "/api/jobs/086e8d1a-8d63-4dcc-b6c2-5ce671b65d47", "status": 200, "duration_ms": 51.686441991478205, "logger": "anime_v2", "ts": "2026-01-01T03:09:18.296374Z", "level": "info", "request_id": "3dd598188d5b4f33825be140c58d8154", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:18.297073Z", "level": "info", "msg": "HTTP Request: GET http://testserver/api/jobs/086e8d1a-8d63-4dcc-b6c2-5ce671b65d47 \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "GET", "path": "/metrics", "status": 200, "duration_ms": 0.6136621814221144, "logger": "anime_v2", "ts": "2026-01-01T03:09:18.298863Z", "level": "info", "request_id": "f58213d9eef3413d882fc91e1345f908", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:18.299547Z", "level": "info", "msg": "HTTP Request: GET http://testserver/metrics \"HTTP/1.1 200 OK\""}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:48.693824Z", "level": "info", "msg": "JobQueue started (concurrency=1)"}
+{"ip": "testclient", "method": "POST", "path": "/auth/login", "status": 200, "duration_ms": 63.82717797532678, "logger": "anime_v2", "ts": "2026-01-01T03:09:48.758744Z", "level": "info", "request_id": "328b3d6f902b453397d76dcc56dd25de", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:48.760095Z", "level": "info", "msg": "HTTP Request: POST http://testserver/auth/login \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 403, "duration_ms": 3.228188958019018, "logger": "anime_v2", "ts": "2026-01-01T03:09:48.764293Z", "level": "info", "request_id": "2e2b97024f59452a8ee1b7543a158912", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:48.765130Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 403 Forbidden\""}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:48.823280Z", "level": "info", "msg": "[v2] Extracting audio \u2192 /workspace/Output/Test/audio.wav"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:48.823838Z", "level": "info", "msg": "[v2] Audio already extracted"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:48.942781Z", "level": "warning", "msg": "ECAPA embedding unavailable (No module named 'torch')"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:48.943046Z", "level": "warning", "msg": "diarize engine=speechbrain failed (no segments)"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:48.962532Z", "level": "info", "msg": "diarize engine=heuristic segments=1"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.044501Z", "level": "info", "msg": "[v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.044748Z", "level": "warning", "msg": "[v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata."}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.057916Z", "level": "warning", "msg": "[v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS."}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.059151Z", "level": "info", "msg": "[v2] TTS done \u2192 /workspace/Output/Test/Test.tts.wav"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.233358Z", "level": "info", "msg": "[v2] mixing: loudnorm pass1 ok (0.13s)"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.305074Z", "level": "warning", "msg": "[v2] SRT missing/empty; muxing without subtitles (/workspace/Output/Test/Test.translated.srt)"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.382413Z", "level": "info", "msg": "[v2] mux complete \u2192 /workspace/Output/Test/dub.mkv"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.387986Z", "level": "info", "msg": "job 81ab1d26-e62e-4762-976e-6d2300b388d2 finished state=JobState.DONE in 0.57s"}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 200, "duration_ms": 622.1644720062613, "logger": "anime_v2", "ts": "2026-01-01T03:09:49.388410Z", "level": "info", "request_id": "71027cf9f6154af6bc9deae45ad648e9", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:49.389586Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 200 OK\""}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.443652Z", "level": "info", "msg": "[v2] Extracting audio \u2192 /workspace/Output/Test/audio.wav"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.444319Z", "level": "info", "msg": "[v2] Audio already extracted"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.530985Z", "level": "warning", "msg": "ECAPA embedding unavailable (No module named 'torch')"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.531274Z", "level": "warning", "msg": "diarize engine=speechbrain failed (no segments)"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.550532Z", "level": "info", "msg": "diarize engine=heuristic segments=1"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.621458Z", "level": "info", "msg": "[v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.621756Z", "level": "warning", "msg": "[v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata."}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.633168Z", "level": "warning", "msg": "[v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS."}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.634441Z", "level": "info", "msg": "[v2] TTS done \u2192 /workspace/Output/Test/Test.tts.wav"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.809515Z", "level": "info", "msg": "[v2] mixing: loudnorm pass1 ok (0.13s)"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.881951Z", "level": "warning", "msg": "[v2] SRT missing/empty; muxing without subtitles (/workspace/Output/Test/Test.translated.srt)"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.960608Z", "level": "info", "msg": "[v2] mux complete \u2192 /workspace/Output/Test/dub.mkv"}
+{"logger": "anime_v2", "ts": "2026-01-01T03:09:49.967299Z", "level": "info", "msg": "job 666e566a-698e-45b6-b9f9-7ba1dce25199 finished state=JobState.DONE in 0.53s"}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 200, "duration_ms": 576.9199400674552, "logger": "anime_v2", "ts": "2026-01-01T03:09:49.967719Z", "level": "info", "request_id": "d743b7f878544497a18f3875aba668df", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:49.968732Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 200 OK\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 429, "duration_ms": 39.108404191210866, "logger": "anime_v2", "ts": "2026-01-01T03:09:50.013269Z", "level": "info", "request_id": "435a8f87a58a4a3eb5ac3f38af17033b", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:50.013883Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 429 Too Many Requests\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 400, "duration_ms": 3.528091125190258, "logger": "anime_v2", "ts": "2026-01-01T03:09:50.018684Z", "level": "info", "request_id": "f76b7ea2a5b942c69661c5b307afd170", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:50.019479Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 400 Bad Request\""}
+{"ip": "testclient", "method": "POST", "path": "/api/jobs", "status": 400, "duration_ms": 40.80920713022351, "logger": "anime_v2", "ts": "2026-01-01T03:09:50.061152Z", "level": "info", "request_id": "e63ea08eefb04dcc9e99736212347ec5", "msg": "http_done"}
+{"ts": "2026-01-01T03:09:50.061883Z", "level": "info", "msg": "HTTP Request: POST http://testserver/api/jobs \"HTTP/1.1 400 Bad Request\""}

@@ -30,3 +30,33 @@
 [2026-01-01T01:04:02.913412+00:00] tts
 [2026-01-01T01:04:02.917946+00:00] mux
 [2026-01-01T01:04:03.028752+00:00] done in 0.21s
+[2026-01-01T03:09:17.544898+00:00] start job=086e8d1a-8d63-4dcc-b6c2-5ce671b65d47
+[2026-01-01T03:09:17.546855+00:00] audio_extractor
+[2026-01-01T03:09:17.556731+00:00] diarize
+[2026-01-01T03:09:17.916487+00:00] diarize failed: CharacterStore file is not encrypted (missing header)
+[2026-01-01T03:09:17.923298+00:00] transcribe model=small device=cpu
+[2026-01-01T03:09:17.927767+00:00] translate src=auto tgt=en
+[2026-01-01T03:09:17.931616+00:00] tts
+[2026-01-01T03:09:17.941983+00:00] mix
+[2026-01-01T03:09:18.127198+00:00] mix failed: Command '['ffmpeg', '-y', '-i', '/workspace/Input/Test.mp4', '-i', '/workspace/Output/Test/Test.tts.wav', '-filter_complex', "[0:a:0]aresample=48000,volume=0.85[bg];[bg][1:a:0]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250[duck];[duck][1:a:0]amix=inputs=2:normalize=0:weights='0.9 1.1'[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:measured_I=-inf:measured_LRA=0.00:measured_TP=-inf:measured_thresh=-70.00:offset=inf:linear=true:print_format=summary[mix2];[mix2]alimiter=limit=0.891[mixout];", '-map', '[mixout]', '-ac', '1', '-ar', '48000', '-c:a', 'pcm_s16le', '/workspace/Output/Test/Test.mixed.wav']' returned non-zero exit status 222. (falling back to mux)
+[2026-01-01T03:09:18.238248+00:00] done in 0.69s
+[2026-01-01T03:09:48.816934+00:00] start job=81ab1d26-e62e-4762-976e-6d2300b388d2
+[2026-01-01T03:09:48.818962+00:00] audio_extractor
+[2026-01-01T03:09:48.828905+00:00] diarize
+[2026-01-01T03:09:49.038607+00:00] diarize failed: CharacterStore file is not encrypted (missing header)
+[2026-01-01T03:09:49.043474+00:00] transcribe model=small device=cpu
+[2026-01-01T03:09:49.048109+00:00] translate src=auto tgt=en
+[2026-01-01T03:09:49.052878+00:00] tts
+[2026-01-01T03:09:49.068336+00:00] mix
+[2026-01-01T03:09:49.266030+00:00] mix failed: Command '['ffmpeg', '-y', '-i', '/workspace/Input/Test.mp4', '-i', '/workspace/Output/Test/Test.tts.wav', '-filter_complex', "[0:a:0]aresample=48000,volume=0.85[bg];[bg][1:a:0]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250[duck];[duck][1:a:0]amix=inputs=2:normalize=0:weights='0.9 1.1'[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:measured_I=-inf:measured_LRA=0.00:measured_TP=-inf:measured_thresh=-70.00:offset=inf:linear=true:print_format=summary[mix2];[mix2]alimiter=limit=0.891[mixout];", '-map', '[mixout]', '-ac', '1', '-ar', '48000', '-c:a', 'pcm_s16le', '/workspace/Output/Test/Test.mixed.wav']' returned non-zero exit status 222. (falling back to mux)
+[2026-01-01T03:09:49.384162+00:00] done in 0.57s
+[2026-01-01T03:09:49.437005+00:00] start job=666e566a-698e-45b6-b9f9-7ba1dce25199
+[2026-01-01T03:09:49.439495+00:00] audio_extractor
+[2026-01-01T03:09:49.449027+00:00] diarize
+[2026-01-01T03:09:49.614994+00:00] diarize failed: CharacterStore file is not encrypted (missing header)
+[2026-01-01T03:09:49.620309+00:00] transcribe model=small device=cpu
+[2026-01-01T03:09:49.624457+00:00] translate src=auto tgt=en
+[2026-01-01T03:09:49.628767+00:00] tts
+[2026-01-01T03:09:49.640435+00:00] mix
+[2026-01-01T03:09:49.843028+00:00] mix failed: Command '['ffmpeg', '-y', '-i', '/workspace/Input/Test.mp4', '-i', '/workspace/Output/Test/Test.tts.wav', '-filter_complex', "[0:a:0]aresample=48000,volume=0.85[bg];[bg][1:a:0]sidechaincompress=threshold=0.02:ratio=10:attack=5:release=250[duck];[duck][1:a:0]amix=inputs=2:normalize=0:weights='0.9 1.1'[mix0];[mix0]apad,atrim=0:7.709,asetpts=N/SR/TB[mix1];[mix1]loudnorm=I=-16:LRA=11:TP=-1.0:measured_I=-inf:measured_LRA=0.00:measured_TP=-inf:measured_thresh=-70.00:offset=inf:linear=true:print_format=summary[mix2];[mix2]alimiter=limit=0.891[mixout];", '-map', '[mixout]', '-ac', '1', '-ar', '48000', '-c:a', 'pcm_s16le', '/workspace/Output/Test/Test.mixed.wav']' returned non-zero exit status 222. (falling back to mux)
+[2026-01-01T03:09:49.963157+00:00] done in 0.53s
