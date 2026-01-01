@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from anime_v2.api.models import AuthStore, Role, User, now_ts
 from anime_v2.api.security import create_access_token, create_refresh_token, decode_token, issue_csrf_token
-from anime_v2.config import get_api_settings
+from anime_v2.config import get_settings
 from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.ratelimit import RateLimiter
 
@@ -71,7 +71,7 @@ async def login(request: Request) -> Response:
         except Exception:
             raise HTTPException(status_code=500, detail="TOTP unavailable")
 
-    s = get_api_settings()
+    s = get_settings()
     access = create_access_token(sub=user.id, role=user.role.value, scopes=["read:job"], minutes=s.access_token_minutes)
     # role-based default scopes (viewer=read, operator=read+submit, admin implicit)
     scopes = ["read:job"]
@@ -108,7 +108,7 @@ async def login(request: Request) -> Response:
         try:
             from itsdangerous import URLSafeTimedSerializer  # type: ignore
 
-            ser = URLSafeTimedSerializer(s.session_secret, salt="session")
+            ser = URLSafeTimedSerializer(s.session_secret.get_secret_value(), salt="session")
             signed = ser.dumps(access)
             resp.set_cookie(
                 "session",
@@ -146,7 +146,7 @@ async def refresh(request: Request) -> Response:
     if user is None:
         raise HTTPException(status_code=401, detail="Unknown user")
 
-    s = get_api_settings()
+    s = get_settings()
     scopes = ["read:job"]
     if user.role in {Role.operator, Role.admin}:
         scopes.append("submit:job")

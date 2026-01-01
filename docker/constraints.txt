@@ -31,6 +31,10 @@ pyotp==2.9.0
 slowapi==0.1.9
 redis==5.1.1
 
+# centralized config
+pydantic==2.9.2
+pydantic-settings==2.6.1
+
 # jobs + realtime progress
 sqlitedict==2.1.0
 websockets==12.0

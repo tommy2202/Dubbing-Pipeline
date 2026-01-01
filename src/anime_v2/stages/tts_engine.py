@@ -9,6 +9,7 @@ from typing import Any
 from anime_v2.utils.config import get_settings
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
+from anime_v2.gates.license import require_coqui_tos
 
 
 class TTSEngine(abc.ABC):
@@ -38,9 +39,8 @@ class CoquiXTTS(TTSEngine):
     """
 
     def __init__(self) -> None:
+        require_coqui_tos()
         settings = get_settings()
-        if not settings.coqui_tos_agreed:
-            raise RuntimeError("COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.")
 
         self.model_name = settings.tts_model or "tts_models/multilingual/multi-dataset/xtts_v2"
         self._tts = None

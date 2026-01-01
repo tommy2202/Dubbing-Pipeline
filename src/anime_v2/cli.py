@@ -20,6 +20,7 @@ from anime_v2.utils.time import format_srt_timestamp
 import subprocess
 
 from anime_v2.utils.embeds import ecapa_embedding
+from anime_v2.utils.net import install_egress_policy
 
 
 MODE_TO_MODEL: dict[str, str] = {
@@ -175,6 +176,9 @@ def cli(
     """
     if not video.exists():
         raise click.ClickException(f"Video not found: {video}")
+
+    # Enforce OFFLINE_MODE / ALLOW_EGRESS policy early.
+    install_egress_policy()
 
     mode = mode.lower()
     chosen_model = MODE_TO_MODEL[mode]

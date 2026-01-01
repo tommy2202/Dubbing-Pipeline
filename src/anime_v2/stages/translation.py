@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from anime_v2.utils.log import logger
+from anime_v2.utils.net import egress_guard
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +153,8 @@ def _translate_marian(text: str, src_lang: str, tgt_lang: str) -> str:
     settings = get_settings()
     cache_dir = str(settings.transformers_cache) if settings.transformers_cache else None
     model = f"Helsinki-NLP/opus-mt-{src_lang}-{tgt_lang}"
-    pipe = _try_make_pipeline(model, cache_dir=cache_dir)
+    with egress_guard():
+        pipe = _try_make_pipeline(model, cache_dir=cache_dir)
     out = pipe([text])[0].get("translation_text", "")
     return str(out or "")
 
@@ -163,7 +165,8 @@ def _translate_nllb(text: str, src_lang: str, tgt_lang: str) -> str:
 
     settings = get_settings()
     cache_dir = str(settings.transformers_cache) if settings.transformers_cache else None
-    out = _translate_with_nllb([text], src_lang, tgt_lang, cache_dir=cache_dir)[0]
+    with egress_guard():
+        out = _translate_with_nllb([text], src_lang, tgt_lang, cache_dir=cache_dir)[0]
     return str(out or "")
 
 
@@ -173,8 +176,9 @@ def _whisper_translate(audio_path: str, *, device: str, model_name: str, src_lan
     except Exception as ex:
         raise RuntimeError(f"whisper not installed: {ex}")
     lang_opt = None if src_lang.lower() == "auto" else src_lang
-    model = whisper.load_model(model_name, device=device)
-    res = model.transcribe(audio_path, task="translate", language=lang_opt, verbose=False)
+    with egress_guard():
+        model = whisper.load_model(model_name, device=device)
+        res = model.transcribe(audio_path, task="translate", language=lang_opt, verbose=False)
     segs = res.get("segments") or []
     out = []
     for s in segs:

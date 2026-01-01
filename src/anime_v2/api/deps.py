@@ -8,7 +8,7 @@ from fastapi import Depends, HTTPException, Request, status
 
 from anime_v2.api.models import ApiKey, AuthStore, Role, User
 from anime_v2.api.security import decode_token, extract_api_key, extract_bearer, verify_csrf
-from anime_v2.config import get_api_settings
+from anime_v2.config import get_settings
 from anime_v2.utils.crypto import verify_secret
 from anime_v2.utils.ratelimit import RateLimiter
 
@@ -73,11 +73,11 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
     # 3) Optional signed session cookie (web UI mode)
     sess = request.cookies.get("session")
     if sess:
-        s = get_api_settings()
+        s = get_settings()
         try:
             from itsdangerous import BadSignature, URLSafeTimedSerializer  # type: ignore
 
-            ser = URLSafeTimedSerializer(s.session_secret, salt="session")
+            ser = URLSafeTimedSerializer(s.session_secret.get_secret_value(), salt="session")
             token = ser.loads(sess, max_age=60 * 60 * 24 * 7)
             data = decode_token(str(token), expected_typ="access")
             sub = str(data.get("sub") or "")

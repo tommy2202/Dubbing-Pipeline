@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -23,10 +24,24 @@ def _configure_logger() -> logging.Logger:
     log_path = _log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fmt = logging.Formatter(
-        fmt="%(asctime)s %(levelname)s %(name)s [%(process)d] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    class RedactingFormatter(logging.Formatter):
+        # Redact common secret/token patterns in the fully formatted output (incl. tracebacks).
+        _jwt_re = re.compile(r"\beyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\b")
+        _api_key_re = re.compile(r"\bdp_[a-z0-9]{6,}_[A-Za-z0-9_\-]{10,}\b", re.IGNORECASE)
+        _bearer_re = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9_\-\.=]+)")
+        _kv_re = re.compile(
+            r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|token|secret|password|api_key)\b\s*=\s*([^\s,;]+)"
+        )
+
+        def format(self, record: logging.LogRecord) -> str:
+            s = super().format(record)
+            s = self._jwt_re.sub("***REDACTED***", s)
+            s = self._api_key_re.sub("***REDACTED***", s)
+            s = self._bearer_re.sub("Bearer ***REDACTED***", s)
+            s = self._kv_re.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
+            return s
+
+    fmt = RedactingFormatter(fmt="%(asctime)s %(levelname)s %(name)s [%(process)d] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
     file_handler = RotatingFileHandler(
         filename=str(log_path),

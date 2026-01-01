@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request, status
 
-from anime_v2.config import get_api_settings
+from anime_v2.config import get_settings
 from anime_v2.utils.crypto import random_id, verify_secret
 
 
@@ -26,7 +26,7 @@ def _jwt():
 
 
 def create_access_token(*, sub: str, role: str, scopes: list[str], minutes: int) -> str:
-    s = get_api_settings()
+    s = get_settings()
     now = int(time.time())
     payload: dict[str, Any] = {
         "typ": "access",
@@ -36,11 +36,11 @@ def create_access_token(*, sub: str, role: str, scopes: list[str], minutes: int)
         "iat": now,
         "exp": now + int(minutes) * 60,
     }
-    return _jwt().encode(payload, s.jwt_secret, algorithm=s.jwt_alg)
+    return _jwt().encode(payload, s.jwt_secret.get_secret_value(), algorithm=s.jwt_alg)
 
 
 def create_refresh_token(*, sub: str, days: int) -> str:
-    s = get_api_settings()
+    s = get_settings()
     now = int(time.time())
     payload: dict[str, Any] = {
         "typ": "refresh",
@@ -49,13 +49,13 @@ def create_refresh_token(*, sub: str, days: int) -> str:
         "exp": now + int(days) * 86400,
         "jti": random_id("r_", 16),
     }
-    return _jwt().encode(payload, s.jwt_secret, algorithm=s.jwt_alg)
+    return _jwt().encode(payload, s.jwt_secret.get_secret_value(), algorithm=s.jwt_alg)
 
 
 def decode_token(token: str, *, expected_typ: str) -> dict[str, Any]:
-    s = get_api_settings()
+    s = get_settings()
     try:
-        data = _jwt().decode(token, s.jwt_secret, algorithms=[s.jwt_alg])
+        data = _jwt().decode(token, s.jwt_secret.get_secret_value(), algorithms=[s.jwt_alg])
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     if not isinstance(data, dict) or data.get("typ") != expected_typ:
@@ -65,13 +65,13 @@ def decode_token(token: str, *, expected_typ: str) -> dict[str, Any]:
 
 def issue_csrf_token() -> str:
     # Signed CSRF token stored in cookie and echoed in header (double-submit).
-    s = get_api_settings()
+    s = get_settings()
     try:
         from itsdangerous import URLSafeTimedSerializer  # type: ignore
     except Exception as ex:  # pragma: no cover
         raise RuntimeError("itsdangerous not installed") from ex
     raw = random_id("c_", 16)
-    ser = URLSafeTimedSerializer(s.csrf_secret, salt="csrf")
+    ser = URLSafeTimedSerializer(s.csrf_secret.get_secret_value(), salt="csrf")
     return ser.dumps(raw)
 
 
@@ -86,12 +86,12 @@ def verify_csrf(request: Request) -> None:
     header = request.headers.get("x-csrf-token") or ""
     if not cookie or not header or cookie != header:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF required")
-    s = get_api_settings()
+    s = get_settings()
     try:
         from itsdangerous import BadSignature, URLSafeTimedSerializer  # type: ignore
     except Exception:  # pragma: no cover
         return
-    ser = URLSafeTimedSerializer(s.csrf_secret, salt="csrf")
+    ser = URLSafeTimedSerializer(s.csrf_secret.get_secret_value(), salt="csrf")
     try:
         ser.loads(cookie, max_age=60 * 60 * 24 * 7)
     except BadSignature:

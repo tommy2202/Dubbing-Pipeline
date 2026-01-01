@@ -1,65 +1,74 @@
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-@dataclass(frozen=True, slots=True)
-class ApiSettings:
-    jwt_secret: str
-    jwt_alg: str
-    csrf_secret: str
-    session_secret: str
+class Settings(BaseSettings):
+    """
+    Single source of truth for config & secrets.
 
-    access_token_minutes: int
-    refresh_token_days: int
+    - Loads from env (and `.env` if present).
+    - Secrets use SecretStr so repr() won’t leak.
+    """
 
-    cors_origins: list[str]
-    cookie_secure: bool
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    redis_url: str | None
+    # security / auth
+    jwt_secret: SecretStr = Field(default=SecretStr("dev-insecure-jwt-secret"), alias="JWT_SECRET")
+    jwt_alg: str = Field(default="HS256", alias="JWT_ALG")
+    csrf_secret: SecretStr = Field(default=SecretStr("dev-insecure-csrf-secret"), alias="CSRF_SECRET")
+    session_secret: SecretStr = Field(default=SecretStr("dev-insecure-session-secret"), alias="SESSION_SECRET")
+    access_token_minutes: int = Field(default=15, alias="ACCESS_TOKEN_MINUTES")
+    refresh_token_days: int = Field(default=7, alias="REFRESH_TOKEN_DAYS")
 
-    # bootstrap
-    admin_username: str | None
-    admin_password: str | None
+    cors_origins: str = Field(default="", alias="CORS_ORIGINS")  # comma-separated
+    cookie_secure: bool = Field(default=False, alias="COOKIE_SECURE")
+    redis_url: str | None = Field(default=None, alias="REDIS_URL")
 
+    admin_username: str | None = Field(default=None, alias="ADMIN_USERNAME")
+    admin_password: SecretStr | None = Field(default=None, alias="ADMIN_PASSWORD")
 
-def _env(key: str, default: str | None = None) -> str | None:
-    v = os.environ.get(key)
-    if v is None:
-        return default
-    v = v.strip()
-    return v if v else default
+    # egress/offline controls
+    offline_mode: bool = Field(default=False, alias="OFFLINE_MODE")
+    allow_egress: bool = Field(default=True, alias="ALLOW_EGRESS")
+    allow_hf_egress: bool = Field(default=False, alias="ALLOW_HF_EGRESS")
 
+    # pipeline
+    whisper_model: str = Field(default="medium", alias="WHISPER_MODEL")
+    hf_token: SecretStr | None = Field(default=None, alias="HUGGINGFACE_TOKEN")
 
-def _env_bool(key: str, default: bool = False) -> bool:
-    v = (_env(key, None) or "").lower()
-    if not v:
-        return default
-    if v in {"1", "true", "yes", "on"}:
-        return True
-    if v in {"0", "false", "no", "off"}:
-        return False
-    return default
+    hf_home: Path = Field(default=Path.home() / ".cache" / "huggingface", alias="HF_HOME")
+    torch_home: Path = Field(default=Path.home() / ".cache" / "torch", alias="TORCH_HOME")
+    tts_home: Path = Field(default=Path.home() / ".local" / "share" / "tts", alias="TTS_HOME")
+
+    enable_pyannote: bool = Field(default=False, alias="ENABLE_PYANNOTE")
+    char_sim_thresh: float = Field(default=0.72, alias="CHAR_SIM_THRESH")
+    mt_lowconf_thresh: float = Field(default=-0.45, alias="MT_LOWCONF_THRESH")
+
+    mix_profile: str = Field(default="streaming", alias="MIX_PROFILE")
+    emit_formats: str = Field(default="mkv,mp4", alias="EMIT_FORMATS")
+
+    tts_model: str = Field(default="tts_models/multilingual/multi-dataset/xtts_v2", alias="TTS_MODEL")
+    tts_lang: str = Field(default="en", alias="TTS_LANG")
+    tts_speaker: str = Field(default="default", alias="TTS_SPEAKER")
+    coqui_tos_agreed: bool = Field(default=False, alias="COQUI_TOS_AGREED")
+
+    translation_model: str | None = Field(default=None, alias="TRANSLATION_MODEL")
+    transformers_cache: Path | None = Field(default=None, alias="TRANSFORMERS_CACHE")
+
+    tts_speaker_wav: Path | None = Field(default=None, alias="TTS_SPEAKER_WAV")
+    voice_preset_dir: Path = Field(default=Path.cwd() / "voices" / "presets", alias="VOICE_PRESET_DIR")
+    voice_db_path: Path = Field(default=Path.cwd() / "voices" / "presets.json", alias="VOICE_DB")
+
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in (self.cors_origins or "").split(",") if o.strip()]
 
 
 @lru_cache(maxsize=1)
-def get_api_settings() -> ApiSettings:
-    cors = _env("CORS_ORIGINS", "") or ""
-    cors_origins = [o.strip() for o in cors.split(",") if o.strip()]
-
-    return ApiSettings(
-        jwt_secret=_env("JWT_SECRET", "dev-insecure-jwt-secret") or "dev-insecure-jwt-secret",
-        jwt_alg=_env("JWT_ALG", "HS256") or "HS256",
-        csrf_secret=_env("CSRF_SECRET", "dev-insecure-csrf-secret") or "dev-insecure-csrf-secret",
-        session_secret=_env("SESSION_SECRET", "dev-insecure-session-secret") or "dev-insecure-session-secret",
-        access_token_minutes=int(_env("ACCESS_TOKEN_MINUTES", "15") or "15"),
-        refresh_token_days=int(_env("REFRESH_TOKEN_DAYS", "7") or "7"),
-        cors_origins=cors_origins,
-        cookie_secure=_env_bool("COOKIE_SECURE", default=False),
-        redis_url=_env("REDIS_URL", None),
-        admin_username=_env("ADMIN_USERNAME", None),
-        admin_password=_env("ADMIN_PASSWORD", None),
-    )
+def get_settings() -> Settings:
+    return Settings()
 

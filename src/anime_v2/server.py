@@ -18,12 +18,13 @@ from anime_v2.api.deps import require_role, require_scope
 from anime_v2.api.models import AuthStore, Role, User, now_ts
 from anime_v2.api.routes_auth import router as auth_router
 from anime_v2.api.routes_keys import router as keys_router
-from anime_v2.config import get_api_settings
+from anime_v2.config import get_settings
 from anime_v2.jobs.queue import JobQueue
 from anime_v2.jobs.store import JobStore
 from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.log import logger
 from anime_v2.utils.ratelimit import RateLimiter
+from anime_v2.utils.net import install_egress_policy
 from anime_v2.web.routes_jobs import router as jobs_router
 from anime_v2.web.routes_webrtc import router as webrtc_router
 
@@ -45,13 +46,14 @@ async def lifespan(app: FastAPI):
     app.state.rate_limiter = RateLimiter()
 
     # bootstrap admin user
-    s = get_api_settings()
+    s = get_settings()
+    install_egress_policy()
     if s.admin_username and s.admin_password:
         ph = PasswordHasher()
         u = User(
             id=random_id("u_", 16),
             username=s.admin_username,
-            password_hash=ph.hash(s.admin_password),
+            password_hash=ph.hash(s.admin_password.get_secret_value()),
             role=Role.admin,
             totp_secret=None,
             totp_enabled=False,
@@ -70,8 +72,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="anime_v2 server", lifespan=lifespan)
 
 # Strict CORS: only configured origins, credentials on for cookies
-s = get_api_settings()
-allow_origins = s.cors_origins if s.cors_origins else []
+s = get_settings()
+allow_origins = s.cors_origin_list()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,

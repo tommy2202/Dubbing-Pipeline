@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from anime_v2.config import get_api_settings
+from anime_v2.config import get_settings
 from anime_v2.utils.log import logger
 
 
@@ -21,7 +21,7 @@ class RateLimiter:
     """
 
     def __init__(self) -> None:
-        s = get_api_settings()
+        s = get_settings()
         self.redis_url = s.redis_url
         self._mem: dict[str, _Bucket] = {}
 

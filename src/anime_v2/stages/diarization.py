@@ -8,6 +8,7 @@ from pathlib import Path
 
 from anime_v2.utils.log import logger
 from anime_v2.utils.vad import VADConfig, detect_speech_segments
+from anime_v2.utils.net import egress_guard
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,8 +39,9 @@ def _intersect_with_vad(utts: list[dict], speech: list[tuple[float, float]]) -> 
 def _pyannote(audio_path: Path, cfg: DiarizeConfig) -> list[dict]:
     from pyannote.audio import Pipeline  # type: ignore
 
-    pipeline = Pipeline.from_pretrained(cfg.pyannote_model, use_auth_token=cfg.hf_token)
-    diar = pipeline(str(audio_path))
+    with egress_guard():
+        pipeline = Pipeline.from_pretrained(cfg.pyannote_model, use_auth_token=cfg.hf_token)
+        diar = pipeline(str(audio_path))
     out: list[dict] = []
     labels: dict[str, int] = {}
     for turn, _, speaker in diar.itertracks(yield_label=True):

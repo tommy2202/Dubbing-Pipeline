@@ -6,6 +6,7 @@ from pathlib import Path
 
 from anime_v2.utils.log import logger
 from anime_v2.utils.time import format_srt_timestamp
+from anime_v2.utils.net import egress_guard
 
 
 def _write_srt(segments: list[dict], srt_path: Path) -> None:
@@ -86,13 +87,14 @@ def transcribe(
         meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
         return srt_out
 
-    model = whisper.load_model(model_name, device=device)
-    result = model.transcribe(
-        str(audio_path),
-        task=task,
-        language=lang_opt,
-        verbose=False,
-    )
+    with egress_guard():
+        model = whisper.load_model(model_name, device=device)
+        result = model.transcribe(
+            str(audio_path),
+            task=task,
+            language=lang_opt,
+            verbose=False,
+        )
 
     segments = list(result.get("segments") or [])
     _write_srt(segments, srt_out)

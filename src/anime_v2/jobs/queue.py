@@ -21,6 +21,7 @@ from anime_v2.stages.translation import TranslationConfig, translate_segments
 from anime_v2.utils.log import logger
 from anime_v2.utils.paths import output_dir_for
 from anime_v2.utils.time import format_srt_timestamp
+from anime_v2.utils.net import install_egress_policy
 
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-")
@@ -124,6 +125,9 @@ class JobQueue:
     async def start(self) -> None:
         if self._tasks:
             return
+
+        # Enforce OFFLINE_MODE / ALLOW_EGRESS policy for background workers.
+        install_egress_policy()
 
         # Recover unfinished jobs (durable-ish single node)
         for j in self.store.list(limit=1000):
