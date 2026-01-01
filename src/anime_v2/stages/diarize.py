@@ -359,3 +359,8 @@ def run(
     logger.info("[v2] Diarization: diar_speakers=%s stable_speakers=%s segments=%s", diar_speakers, stable_speakers, len(segments))
     return segments, sid_to_emb_path
 
+
+# Alias for orchestrator naming
+def identify(audio_path: Path, out_dir: Path) -> tuple[list[dict], dict[str, str]]:
+    return run(audio_path=audio_path, out_dir=out_dir)
+

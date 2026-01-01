@@ -137,10 +137,14 @@ def translate_lines(lines: list[dict[str, Any]], src_lang: str, tgt_lang: str) -
                 logger.warning("[v2] translate: NLLB failed (%s); returning original text", ex2)
                 return lines
 
-    # Preserve terminal punctuation if dropped
+    # Preserve terminal punctuation if dropped; if a line translation fails/empties,
+    # fall back to original line text.
     new_lines: list[dict[str, Any]] = []
     for l, t_src, t_out in zip(lines, texts, out_texts):
         new_l = dict(l)
-        new_l["text"] = _ensure_terminal_punct(t_src, t_out)
+        out = (t_out or "").strip()
+        if t_src.strip() and not out:
+            out = t_src
+        new_l["text"] = _ensure_terminal_punct(t_src, out)
         new_lines.append(new_l)
     return new_lines

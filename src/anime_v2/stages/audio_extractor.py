@@ -27,3 +27,8 @@ def run(video: Path, ckpt_dir: Path, wav_out: Path | None = None, **_) -> Path:
     )
     return wav
 
+
+# Alias for orchestrator naming
+def extract(video: Path, out_dir: Path, *, wav_out: Path | None = None) -> Path:
+    return run(video=video, ckpt_dir=out_dir, wav_out=wav_out)
+
