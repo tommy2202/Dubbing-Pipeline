@@ -58,6 +58,9 @@
 
       <div class="panel" style="flex: 2 1 520px;">
         <h3 style="margin: 0 0 8px 0;">Player</h3>
+        <div class="muted" style="margin-bottom:8px;">
+          <a id="webrtcLink" href="/webrtc/demo">WebRTC preview</a>
+        </div>
         <label class="muted" for="job">Choose a file</label>
         <select id="job">
           {% for v in videos %}
@@ -207,6 +210,15 @@
 
       refreshJobs();
       setInterval(refreshJobs, 5000);
+
+      // WebRTC demo link (token propagated if provided)
+      const webrtcLink = document.getElementById("webrtcLink");
+      if (webrtcLink) {
+        webrtcLink.addEventListener("click", (ev) => {
+          const t = localStorage.getItem("apiToken") || "";
+          if (t) webrtcLink.href = `/webrtc/demo?token=${encodeURIComponent(t)}`;
+        });
+      }
     </script>
   </body>
 </html>

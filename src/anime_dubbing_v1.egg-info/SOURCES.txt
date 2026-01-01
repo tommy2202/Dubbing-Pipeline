@@ -46,6 +46,7 @@ src/anime_v2/utils/time.py
 src/anime_v2/web/__init__.py
 src/anime_v2/web/app.py
 src/anime_v2/web/routes_jobs.py
+src/anime_v2/web/routes_webrtc.py
 src/anime_v2/web/run.py
 tests/test_basic.py
 tests/test_diar.py

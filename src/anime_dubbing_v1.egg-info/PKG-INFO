@@ -28,6 +28,9 @@ Requires-Dist: resemblyzer>=0.1.4; extra == "tts"
 Requires-Dist: TTS>=0.22.0; extra == "tts"
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0.0; extra == "dev"
+Provides-Extra: webrtc
+Requires-Dist: aiortc==1.9.0; extra == "webrtc"
+Requires-Dist: av==12.3.0; extra == "webrtc"
 
 ## Anime dubbing pipeline (v2)
 
@@ -226,6 +229,33 @@ When speaker embeddings exist, the pipeline chooses the closest preset via cosin
 - If you need internet access, use a tunnel that provides HTTPS (e.g. ngrok / Cloudflare Tunnel) and set a strong `API_TOKEN`.
 - The server **does not log tokens** (request logs omit query strings), and auth failures are rate-limited per IP.
 - Logs are written to `logs/app.log` with rotation.
+
+---
+
+## WebRTC Preview
+
+If a mobile browser struggles with MKV seeking/compatibility over HTTP range streaming, you can use an optional **server-push WebRTC preview** that streams the **finished output file**.
+
+- **Endpoint**: `POST /webrtc/offer` (used by the demo page)
+- **Demo page**: `/webrtc/demo?token=<API_TOKEN>`
+
+### STUN vs TURN (important)
+
+- **LAN use**: STUN alone is typically fine.
+- **Public internet / NAT traversal**: you usually need a **TURN server**.
+
+Env configuration:
+
+- `WEBRTC_STUN` (default `stun:stun.l.google.com:19302`)
+- `TURN_URL` (optional, e.g. `turn:turn.example.com:3478`)
+- `TURN_USERNAME` (optional)
+- `TURN_PASSWORD` (optional)
+
+Notes:
+
+- This is a **preview of the completed MKV/MP4** (not a live encode of a running job).
+- No mic/camera permissions are requested (server-push only).
+- If your browser plays the MKV fine with the normal player, prefer the simpler HTTP range streaming path.
 
 ---
 

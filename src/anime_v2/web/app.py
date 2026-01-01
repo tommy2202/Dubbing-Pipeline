@@ -19,6 +19,7 @@ from anime_v2.jobs.store import JobStore
 from anime_v2.utils.log import logger
 from anime_v2.utils.security import verify_api_key
 from anime_v2.web.routes_jobs import router as jobs_router
+from anime_v2.web.routes_webrtc import router as webrtc_router
 
 OUTPUT_ROOT = Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -47,6 +48,7 @@ JOB_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 app.include_router(jobs_router)
+app.include_router(webrtc_router)
 
 
 @app.middleware("http")

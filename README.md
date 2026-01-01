@@ -198,6 +198,33 @@ When speaker embeddings exist, the pipeline chooses the closest preset via cosin
 
 ---
 
+## WebRTC Preview
+
+If a mobile browser struggles with MKV seeking/compatibility over HTTP range streaming, you can use an optional **server-push WebRTC preview** that streams the **finished output file**.
+
+- **Endpoint**: `POST /webrtc/offer` (used by the demo page)
+- **Demo page**: `/webrtc/demo?token=<API_TOKEN>`
+
+### STUN vs TURN (important)
+
+- **LAN use**: STUN alone is typically fine.
+- **Public internet / NAT traversal**: you usually need a **TURN server**.
+
+Env configuration:
+
+- `WEBRTC_STUN` (default `stun:stun.l.google.com:19302`)
+- `TURN_URL` (optional, e.g. `turn:turn.example.com:3478`)
+- `TURN_USERNAME` (optional)
+- `TURN_PASSWORD` (optional)
+
+Notes:
+
+- This is a **preview of the completed MKV/MP4** (not a live encode of a running job).
+- No mic/camera permissions are requested (server-push only).
+- If your browser plays the MKV fine with the normal player, prefer the simpler HTTP range streaming path.
+
+---
+
 ## Troubleshooting
 
 ### CUDA / GPU not detected
