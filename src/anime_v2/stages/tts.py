@@ -11,6 +11,8 @@ from anime_v2.utils.log import logger
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from anime_v2.utils.circuit import Circuit
+from anime_v2.utils.retry import retry_call
 
 
 class TTSCanceled(Exception):
@@ -68,6 +70,14 @@ def _write_silence_wav(path: Path, *, duration_s: float, sr: int = 16000) -> Non
         wf.setsampwidth(2)  # pcm_s16le
         wf.setframerate(sr)
         wf.writeframes(b"\x00\x00" * frames)
+
+
+def _espeak_fallback(text: str, out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(["espeak-ng", "-w", str(out_path), text], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as ex:
+        raise RuntimeError(f"espeak-ng failed: {ex}") from ex
 
 
 def render_aligned_track(lines: list[dict], clip_paths: list[Path], out_wav: Path, *, sr: int = 16000) -> None:
@@ -212,10 +222,11 @@ def run(
 
     # Engine (lazy-loaded per run)
     engine: CoquiXTTS | None = None
+    cb = Circuit.get("tts")
     try:
         engine = CoquiXTTS()
     except Exception as ex:
-        logger.warning("[v2] TTS engine unavailable: %s", ex)
+        logger.warning("[v2] XTTS unavailable: %s", ex)
 
     clips_dir = out_dir / "tts_clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
@@ -274,42 +285,88 @@ def run(
                 pass
 
         synthesized = False
-        if engine is not None and speaker_wav is not None and speaker_wav.exists():
-            try:
-                engine.synthesize(
-                    text,
-                    language=settings.tts_lang,
-                    speaker_wav=speaker_wav,
-                    out_path=raw_clip,
-                )
-                synthesized = True
-            except Exception as ex:
-                logger.warning("[v2] clone failed; using preset %s (%s)", speaker_id, ex)
-                synthesized = False
+        fallback_used = None
 
-        if not synthesized and engine is not None:
-            # Choose best preset if we have speaker embedding; else default preset
-            preset = voice_map.get(speaker_id) or (settings.tts_speaker or "default")
-            emb_path = speaker_embeddings.get(speaker_id)
-            if emb_path and emb_path.exists():
-                best = choose_similar_voice(
-                    emb_path,
-                    preset_dir=settings.voice_preset_dir,
-                    db_path=settings.voice_db_path,
-                    embeddings_dir=voice_db_embeddings_dir,
-                )
-                if best:
-                    preset = best
+        def _retry_wrap(fn_name: str, fn):
+            def _on_retry(n, delay, ex):
+                logger.warning("tts_retry", method=fn_name, attempt=n, delay_s=delay, error=str(ex))
+
+            return retry_call(fn, retries=int(os.environ.get("RETRY_MAX", "3")), base=float(os.environ.get("RETRY_BASE_SEC", "0.5")), cap=float(os.environ.get("RETRY_CAP_SEC", "8.0")), jitter=True, on_retry=_on_retry)
+
+        # If breaker is open, skip XTTS and go straight to fallbacks.
+        if engine is not None and cb.allow():
+            # 1) XTTS clone (if speaker_wav)
+            if speaker_wav is not None and speaker_wav.exists():
+                try:
+                    _retry_wrap(
+                        "xtts_clone",
+                        lambda: engine.synthesize(text, language=settings.tts_lang, speaker_wav=speaker_wav, out_path=raw_clip),
+                    )
+                    cb.mark_success()
+                    synthesized = True
+                except Exception as ex:
+                    cb.mark_failure()
+                    logger.warning("tts_xtts_clone_failed", error=str(ex), breaker=cb.snapshot().state)
+                    synthesized = False
+
+            # 2) XTTS preset
+            if not synthesized:
+                # Choose best preset if we have speaker embedding; else default preset
+                preset = voice_map.get(speaker_id) or (settings.tts_speaker or "default")
+                emb_path = speaker_embeddings.get(speaker_id)
+                if emb_path and emb_path.exists():
+                    best = choose_similar_voice(
+                        emb_path,
+                        preset_dir=settings.voice_preset_dir,
+                        db_path=settings.voice_db_path,
+                        embeddings_dir=voice_db_embeddings_dir,
+                    )
+                    if best:
+                        preset = best
+                try:
+                    _retry_wrap("xtts_preset", lambda: engine.synthesize(text, language=settings.tts_lang, speaker_id=preset, out_path=raw_clip))
+                    cb.mark_success()
+                    synthesized = True
+                except Exception as ex:
+                    cb.mark_failure()
+                    logger.warning("tts_xtts_preset_failed", error=str(ex), breaker=cb.snapshot().state)
+                    synthesized = False
+        else:
+            logger.info("tts_breaker_open_or_engine_missing", breaker=cb.snapshot().state, engine=bool(engine))
+
+        # 3) Basic English single-speaker (Coqui) (still requires COQUI_TOS_AGREED)
+        # Use a common Coqui model as fallback.
+        if not synthesized:
             try:
-                engine.synthesize(
-                    text,
-                    language=settings.tts_lang,
-                    speaker_id=preset,
-                    out_path=raw_clip,
-                )
+                from anime_v2.runtime.model_manager import ModelManager
+                from anime_v2.runtime.device_allocator import pick_device
+                from anime_v2.gates.license import require_coqui_tos
+
+                require_coqui_tos()
+                basic_model = os.environ.get("TTS_BASIC_MODEL") or "tts_models/en/ljspeech/tacotron2-DDC"
+                dev = pick_device("auto")
+                tts_basic = ModelManager.instance().get_tts(basic_model, dev)
+
+                def _basic():
+                    try:
+                        return tts_basic.tts_to_file(text=text, file_path=str(raw_clip))
+                    except TypeError:
+                        return tts_basic.tts_to_file(text=text, path=str(raw_clip))
+
+                _retry_wrap("basic_tts", _basic)
                 synthesized = True
+                fallback_used = "basic_tts"
             except Exception as ex:
-                logger.warning("[v2] preset synth failed (%s). Writing silence clip.", ex)
+                logger.warning("tts_basic_failed", error=str(ex))
+
+        # 4) espeak-ng last resort
+        if not synthesized:
+            try:
+                _retry_wrap("espeak", lambda: _espeak_fallback(text, raw_clip))
+                synthesized = True
+                fallback_used = "espeak"
+            except Exception as ex:
+                logger.warning("tts_espeak_failed", error=str(ex))
                 synthesized = False
 
         if not synthesized:

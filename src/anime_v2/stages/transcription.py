@@ -9,6 +9,9 @@ from anime_v2.utils.time import format_srt_timestamp
 from anime_v2.utils.net import egress_guard
 from anime_v2.runtime.model_manager import ModelManager
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from anime_v2.utils.circuit import Circuit
+from anime_v2.utils.retry import retry_call
+from anime_v2.config import get_settings
 
 
 def _write_srt(segments: list[dict], srt_path: Path) -> None:
@@ -62,6 +65,17 @@ def transcribe(
     )
 
     t0 = time.perf_counter()
+    s = get_settings()
+    cb = Circuit.get("whisper")
+
+    def _fallback_chain(first: str) -> list[str]:
+        order = ["large-v3", "medium", "small"]
+        first = str(first)
+        out = [first]
+        for m in order:
+            if m not in out:
+                out.append(m)
+        return out
 
     ckpt_path = srt_out.parent / ".checkpoint.json"
     if job_id:
@@ -109,15 +123,56 @@ def transcribe(
                 pass
         return srt_out
 
-    with egress_guard():
-        mm = ModelManager.instance()
-        with mm.acquire_whisper(model_name, device) as model:
-            result = model.transcribe(
-                str(audio_path),
-                task=task,
-                language=lang_opt,
-                verbose=False,
-            )
+    attempts: list[dict] = []
+    chosen_model = None
+    chosen_device = device
+    breaker_state = cb.snapshot().state
+
+    for cand_model in _fallback_chain(model_name):
+        # circuit open => degrade to CPU for this attempt (and skip if even CPU is blocked by circuit)
+        breaker_state = cb.snapshot().state
+        cand_device = chosen_device
+        if not cb.allow():
+            breaker_state = cb.snapshot().state
+            if cand_device == "cuda":
+                cand_device = "cpu"
+            else:
+                # already cpu and breaker open => try next model (or ultimately fail)
+                attempts.append({"model": cand_model, "device": cand_device, "skipped": True, "reason": f"breaker_{breaker_state}"})
+                continue
+
+        def _do_once():
+            with egress_guard():
+                mm = ModelManager.instance()
+                with mm.acquire_whisper(cand_model, cand_device) as model:
+                    return model.transcribe(
+                        str(audio_path),
+                        task=task,
+                        language=lang_opt,
+                        verbose=False,
+                    )
+
+        tries = {"n": 0}
+
+        def _on_retry(n, delay, ex):
+            tries["n"] = n
+            logger.warning("whisper_retry", model=cand_model, device=cand_device, attempt=n, delay_s=delay, error=str(ex))
+
+        try:
+            result = retry_call(_do_once, retries=s.retry_max, base=s.retry_base_sec, cap=s.retry_cap_sec, jitter=True, on_retry=_on_retry)
+            cb.mark_success()
+            chosen_model = cand_model
+            chosen_device = cand_device
+            attempts.append({"model": cand_model, "device": cand_device, "ok": True, "retries": tries["n"]})
+            break
+        except Exception as ex:
+            cb.mark_failure()
+            attempts.append({"model": cand_model, "device": cand_device, "ok": False, "error": str(ex)})
+            logger.warning("whisper_failed", model=cand_model, device=cand_device, error=str(ex), breaker=cb.snapshot().state)
+            continue
+
+    if chosen_model is None:
+        raise RuntimeError(f"whisper failed after retries/fallbacks; breaker={cb.snapshot().state}")
 
     segments = list(result.get("segments") or [])
     _write_srt(segments, srt_out)
@@ -147,8 +202,8 @@ def transcribe(
             continue
 
     meta = {
-        "model_name": model_name,
-        "device": device,
+        "model_name": chosen_model or model_name,
+        "device": chosen_device,
         "task": task,
         "requested_src_lang": src_lang,
         "detected_language": detected_lang,
@@ -157,6 +212,9 @@ def transcribe(
         "segments_detail": seg_details,
         "audio_duration_s": audio_duration_s,
         "wall_time_s": time.perf_counter() - t0,
+        "attempts": attempts,
+        "fallback_used": (chosen_model != model_name) if chosen_model else True,
+        "breaker_state": cb.snapshot().state,
     }
     meta_path = srt_out.with_suffix(".json")
     meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")

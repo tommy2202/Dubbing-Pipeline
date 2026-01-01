@@ -28,6 +28,7 @@ from anime_v2.utils.time import format_srt_timestamp
 from anime_v2.utils.net import install_egress_policy
 from anime_v2.runtime.scheduler import Scheduler
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from anime_v2.utils.circuit import Circuit
 
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-")
@@ -196,12 +197,18 @@ class JobQueue:
         log_path = out_dir / "job.log"
         ckpt_path = out_dir / ".checkpoint.json"
         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or {}
+        # runtime report fields persisted on the job
+        runtime = dict(job.runtime or {})
+        runtime.setdefault("attempts", {})
+        runtime.setdefault("fallback_used", {})
+        runtime.setdefault("breaker_state", {})
         self.store.update(
             job_id,
             work_dir=str(out_dir),
             log_path=str(log_path),
             output_mkv=str(out_dir / "dub.mkv"),
             output_srt=str(out_dir / f"{video_path.stem}.translated.srt"),
+            runtime=runtime,
         )
 
         t0 = time.perf_counter()
@@ -341,6 +348,16 @@ class JobQueue:
                             tgt_lang=job.tgt_lang,
                                 job_id=job_id,
                         )
+                    # reflect circuit state into job
+                    try:
+                        rt = dict((self.store.get(job_id).runtime or {}) if self.store.get(job_id) else runtime)
+                        rt.setdefault("breaker_state", {})
+                        rt["breaker_state"]["whisper"] = Circuit.get("whisper").snapshot().state
+                        rt.setdefault("attempts", {})
+                        rt["attempts"]["whisper"] = int(rt["attempts"].get("whisper", 0)) + 1
+                        self.store.update(job_id, runtime=rt)
+                    except Exception:
+                        pass
                     try:
                         write_ckpt(
                             job_id,
@@ -496,6 +513,15 @@ class JobQueue:
                     else:
                         with sched.phase("tts"):
                             run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
+                    try:
+                        rt = dict((self.store.get(job_id).runtime or {}) if self.store.get(job_id) else runtime)
+                        rt.setdefault("breaker_state", {})
+                        rt["breaker_state"]["tts"] = Circuit.get("tts").snapshot().state
+                        rt.setdefault("attempts", {})
+                        rt["attempts"]["tts"] = int(rt["attempts"].get("tts", 0)) + 1
+                        self.store.update(job_id, runtime=rt)
+                    except Exception:
+                        pass
                     try:
                         write_ckpt(job_id, "tts", {"tts_wav": tts_wav, "manifest": tts_manifest}, {"work_dir": str(out_dir)}, ckpt_path=ckpt_path)
                         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt

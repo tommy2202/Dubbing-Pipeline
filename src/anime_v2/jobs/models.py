@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -44,6 +44,7 @@ class Job:
     log_path: str
     error: str | None = None
     request_id: str = ""
+    runtime: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -58,6 +59,7 @@ class Job:
         dd.setdefault("duration_s", 0.0)
         dd.setdefault("request_id", "")
         dd.setdefault("error", None)
+        dd.setdefault("runtime", {})
         st = dd["state"]
         if isinstance(st, str) and st.startswith("JobState."):
             st = st.split(".", 1)[1]

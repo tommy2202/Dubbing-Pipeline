@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     max_concurrency_tts: int = Field(default=1, alias="MAX_CONCURRENCY_TTS")
     backpressure_q_max: int = Field(default=6, alias="BACKPRESSURE_Q_MAX")
 
+    # retry / circuit breaker
+    retry_max: int = Field(default=3, alias="RETRY_MAX")
+    retry_base_sec: float = Field(default=0.5, alias="RETRY_BASE_SEC")
+    retry_cap_sec: float = Field(default=8.0, alias="RETRY_CAP_SEC")
+    cb_fail_threshold: int = Field(default=5, alias="CB_FAIL_THRESHOLD")
+    cb_cooldown_sec: int = Field(default=60, alias="CB_COOLDOWN_SEC")
+
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in (self.cors_origins or "").split(",") if o.strip()]
 
