@@ -6,6 +6,9 @@ Author: Your Name
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 Requires-Dist: click>=8.1.0
+Requires-Dist: fastapi>=0.110.0
+Requires-Dist: uvicorn>=0.27.0
+Requires-Dist: jinja2>=3.1.0
 Provides-Extra: diarization
 Requires-Dist: numpy>=1.24; extra == "diarization"
 Requires-Dist: pyannote.audio>=3.1.0; extra == "diarization"

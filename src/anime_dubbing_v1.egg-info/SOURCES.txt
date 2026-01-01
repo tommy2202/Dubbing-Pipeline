@@ -37,7 +37,9 @@ src/anime_v2/utils/config.py
 src/anime_v2/utils/io.py
 src/anime_v2/utils/log.py
 src/anime_v2/utils/paths.py
+src/anime_v2/web/__init__.py
 src/anime_v2/web/app.py
+src/anime_v2/web/run.py
 tests/test_basic.py
 tests/test_diar.py
 tests/test_export.py

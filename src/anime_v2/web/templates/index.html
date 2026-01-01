@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Anime v2 – Player</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
+      h2 { margin: 0 0 12px 0; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; }
+      .panel { flex: 1 1 320px; }
+      select { width: 100%; padding: 10px; font-size: 16px; }
+      video { width: 100%; max-width: 960px; background: #000; border-radius: 10px; }
+      .muted { color: #666; font-size: 14px; }
+      .token { word-break: break-all; }
+    </style>
+  </head>
+  <body>
+    <h2>Dubbed Episodes</h2>
+    <div class="muted">
+      Logged in. Token in use: <span class="token">{{ token }}</span>
+    </div>
+
+    <div class="row" style="margin-top: 12px;">
+      <div class="panel">
+        <label class="muted" for="job">Choose a file</label>
+        <select id="job">
+          {% for v in videos %}
+          <option value="{{ v.job }}">{{ v.name }}</option>
+          {% endfor %}
+        </select>
+        <div class="muted" style="margin-top: 8px;">
+          Tip: seeking works (Range requests).
+        </div>
+      </div>
+
+      <div class="panel" style="flex: 2 1 520px;">
+        <video id="player" controls playsinline>
+          <source id="source" src="" />
+          Your browser does not support HTML5 video.
+        </video>
+      </div>
+    </div>
+
+    <script>
+      const token = encodeURIComponent("{{ token }}");
+      const jobSel = document.getElementById("job");
+      const srcEl = document.getElementById("source");
+      const player = document.getElementById("player");
+
+      function setSource(job) {
+        const url = `/video/${encodeURIComponent(job)}?token=${token}`;
+        srcEl.src = url;
+        player.load();
+      }
+
+      jobSel.addEventListener("change", () => setSource(jobSel.value));
+      if (jobSel.value) setSource(jobSel.value);
+    </script>
+  </body>
+</html>
