@@ -262,6 +262,26 @@ Artifacts:
 Interaction with the existing transcript editor:
 - The older “approve + resynthesize” flow is preserved for compatibility, but approved-only resynth now also **writes/locks** those segments into `Output/<job>/review/state.json` so the review loop is the canonical lock store.
 
+### Lip-sync plugin (Tier‑3 A, optional)
+
+Optional post-processing step that can produce a lip-synced video using a local Wav2Lip install. **Off by default**.
+
+Setup (offline):
+- Place the Wav2Lip repo at `third_party/wav2lip/` (or set `WAV2LIP_DIR`)
+- Provide a local checkpoint file and point `WAV2LIP_CHECKPOINT` to it (e.g. `MODELS_DIR/wav2lip/wav2lip.pth`)
+
+Run:
+
+```bash
+anime-v2 Input/Test.mp4 --lipsync wav2lip --wav2lip-checkpoint /models/wav2lip/wav2lip.pth
+```
+
+Output:
+- `Output/<job>/final_lipsynced.mp4` (when successful)
+
+Notes:
+- If Wav2Lip is missing, the job continues without lipsync unless `--strict-plugins` is set.
+
 ### Pseudo-streaming (chunk mode)
 
 ```bash

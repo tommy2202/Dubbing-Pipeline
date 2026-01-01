@@ -1479,6 +1479,7 @@ async def job_files(
     mp4 = None
     mkv = None
     hls = None
+    lipsync = None
 
     for cand in [
         base_dir / f"{stem}.dub.mp4",
@@ -1487,6 +1488,14 @@ async def job_files(
     ]:
         if cand.exists():
             mp4 = cand
+            break
+    for cand in [
+        base_dir / "final_lipsynced.mp4",
+        base_dir / f"{stem}.final_lipsynced.mp4",
+        *list(base_dir.glob("*lipsync*.mp4")),
+    ]:
+        if cand.exists():
+            lipsync = cand
             break
     for cand in [
         base_dir / f"{stem}.dub.mkv",
@@ -1513,7 +1522,7 @@ async def job_files(
         return f"/files/{rel}"
 
     files: list[dict[str, Any]] = []
-    for kind, p in [("hls_manifest", hls), ("mp4", mp4), ("mkv", mkv)]:
+    for kind, p in [("hls_manifest", hls), ("lipsync_mp4", lipsync), ("mp4", mp4), ("mkv", mkv)]:
         if p is None:
             continue
         try:
@@ -1531,11 +1540,19 @@ async def job_files(
         except Exception:
             continue
 
-    data: dict[str, Any] = {"files": files, "hls_manifest": None, "mp4": None, "mkv": None}
+    data: dict[str, Any] = {
+        "files": files,
+        "hls_manifest": None,
+        "lipsync_mp4": None,
+        "mp4": None,
+        "mkv": None,
+    }
     if hls is not None:
         data["hls_manifest"] = {"url": rel_url(hls), "path": str(hls)}
     if mp4 is not None:
         data["mp4"] = {"url": rel_url(mp4), "path": str(mp4)}
+    if lipsync is not None:
+        data["lipsync_mp4"] = {"url": rel_url(lipsync), "path": str(lipsync)}
     if mkv is not None:
         data["mkv"] = {"url": rel_url(mkv), "path": str(mkv)}
     return data

@@ -205,6 +205,16 @@ class PublicConfig(BaseSettings):
     # Provider selection (F9)
     tts_provider: str = Field(default="auto", alias="TTS_PROVIDER")  # auto|xtts|basic|espeak
 
+    # --- Tier-3 A: lip-sync plugin (optional; default off) ---
+    lipsync: str = Field(default="off", alias="LIPSYNC")  # off|wav2lip
+    strict_plugins: bool = Field(default=False, alias="STRICT_PLUGINS")
+    wav2lip_dir: Path | None = Field(default=None, alias="WAV2LIP_DIR")
+    wav2lip_checkpoint: Path | None = Field(default=None, alias="WAV2LIP_CHECKPOINT")
+    lipsync_face: str = Field(default="auto", alias="LIPSYNC_FACE")  # auto|center|bbox
+    lipsync_device: str = Field(default="auto", alias="LIPSYNC_DEVICE")  # auto|cpu|cuda
+    lipsync_box: str | None = Field(default=None, alias="LIPSYNC_BOX")  # "x1,y1,x2,y2"
+    lipsync_timeout_s: int = Field(default=1200, alias="LIPSYNC_TIMEOUT_S")
+
     # --- ops: retention/cleanup ---
     # latency budgets (seconds): mark jobs "degraded" when exceeded
     budget_transcribe_sec: int = Field(default=600, alias="BUDGET_TRANSCRIBE_SEC")

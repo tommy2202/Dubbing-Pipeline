@@ -1306,6 +1306,61 @@ class JobQueue:
             _move_best_effort(Path(out_mkv), final_mkv)
             if out_mp4 and Path(out_mp4).exists():
                 _move_best_effort(Path(out_mp4), final_mp4)
+
+            # Tier-3A: optional lip-sync plugin (default off).
+            try:
+                mode = str(getattr(settings, "lipsync", "off") or "off").strip().lower()
+                if mode != "off":
+                    from anime_v2.plugins.lipsync.base import LipSyncRequest
+                    from anime_v2.plugins.lipsync.registry import resolve_lipsync_plugin
+                    from anime_v2.plugins.lipsync.wav2lip_plugin import _parse_bbox
+
+                    plugin = resolve_lipsync_plugin(
+                        mode,
+                        wav2lip_dir=getattr(settings, "wav2lip_dir", None),
+                        wav2lip_checkpoint=getattr(settings, "wav2lip_checkpoint", None),
+                    )
+                    if plugin is None or not plugin.is_available():
+                        msg = (
+                            "Lip-sync plugin requested but unavailable. "
+                            "Place Wav2Lip at third_party/wav2lip and set WAV2LIP_CHECKPOINT "
+                            "(or pass --wav2lip-dir/--wav2lip-checkpoint)."
+                        )
+                        if bool(getattr(settings, "strict_plugins", False)):
+                            raise RuntimeError(msg)
+                        self.store.append_log(job_id, f"[{now_utc()}] {msg}")
+                    else:
+                        tmp_dir = base_dir / "tmp" / "lipsync"
+                        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+                        # Prefer enhanced mix audio when present, else use TTS track.
+                        audio_for_lip = (
+                            (base_dir / "audio" / "final_mix.wav")
+                            if (base_dir / "audio" / "final_mix.wav").exists()
+                            else tts_wav
+                        )
+                        out_lip = base_dir / "final_lipsynced.mp4"
+                        bbox = (
+                            _parse_bbox(str(getattr(settings, "lipsync_box", "") or ""))
+                            if str(getattr(settings, "lipsync_face", "auto")).lower() == "bbox"
+                            else None
+                        )
+                        req = LipSyncRequest(
+                            input_video=video_path,
+                            dubbed_audio_wav=audio_for_lip,
+                            output_video=out_lip,
+                            work_dir=tmp_dir,
+                            face_mode=str(getattr(settings, "lipsync_face", "auto")).lower(),
+                            device=str(getattr(settings, "lipsync_device", "auto")).lower(),
+                            bbox=bbox,
+                            timeout_s=int(getattr(settings, "lipsync_timeout_s", 1200)),
+                        )
+                        plugin.run(req)
+                        self.store.append_log(job_id, f"[{now_utc()}] lipsync ok → {out_lip}")
+            except Exception as ex:
+                if bool(getattr(settings, "strict_plugins", False)):
+                    raise
+                self.store.append_log(job_id, f"[{now_utc()}] lipsync skipped: {ex}")
             # Update checkpoint to point at final artifacts (so a restart doesn't reference temp paths).
             try:
                 art2 = {"mkv": final_mkv}

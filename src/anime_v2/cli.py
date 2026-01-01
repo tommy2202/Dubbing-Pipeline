@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import click
@@ -383,6 +384,39 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     show_default=True,
 )
 @click.option(
+    "--lipsync",
+    "lipsync_mode",
+    type=click.Choice(["off", "wav2lip"], case_sensitive=False),
+    default=str(get_settings().lipsync),
+    show_default=True,
+    help="Optional Tier-3A lip-sync plugin (post-process output video)",
+)
+@click.option("--wav2lip-dir", type=click.Path(path_type=Path), default=None)
+@click.option("--wav2lip-checkpoint", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "--lipsync-face",
+    type=click.Choice(["auto", "center", "bbox"], case_sensitive=False),
+    default=str(get_settings().lipsync_face),
+    show_default=True,
+)
+@click.option(
+    "--lipsync-device",
+    type=click.Choice(["auto", "cpu", "cuda"], case_sensitive=False),
+    default=str(get_settings().lipsync_device),
+    show_default=True,
+)
+@click.option(
+    "--lipsync-box",
+    default=None,
+    help="Face box override for Wav2Lip when --lipsync-face bbox: 'x1,y1,x2,y2'",
+)
+@click.option(
+    "--strict-plugins",
+    is_flag=True,
+    default=False,
+    help="Fail the job if a requested optional plugin is unavailable",
+)
+@click.option(
     "--print-config",
     is_flag=True,
     default=False,
@@ -456,6 +490,13 @@ def run(
     set_character_voice_mode: tuple[str, str] | None,
     set_character_preset: tuple[str, str] | None,
     tts_provider: str,
+    lipsync_mode: str,
+    wav2lip_dir: Path | None,
+    wav2lip_checkpoint: Path | None,
+    lipsync_face: str,
+    lipsync_device: str,
+    lipsync_box: str | None,
+    strict_plugins: bool,
     print_config: bool,
     dry_run: bool,
     verbose: bool,
@@ -474,6 +515,11 @@ def run(
 
         click.echo(_json.dumps(get_safe_config_report(), indent=2, sort_keys=True))
         return
+
+    # Strict plugins default from settings unless flag is set.
+    if not strict_plugins:
+        with suppress(Exception):
+            strict_plugins = bool(get_settings().strict_plugins)
 
     # Tier-2A management commands (no pipeline run required)
     if list_characters or rename_character or set_character_voice_mode or set_character_preset:
@@ -679,6 +725,13 @@ def run(
                     set_character_voice_mode=None,
                     set_character_preset=None,
                     tts_provider=tts_provider,
+                    lipsync_mode=lipsync_mode,
+                    wav2lip_dir=wav2lip_dir,
+                    wav2lip_checkpoint=wav2lip_checkpoint,
+                    lipsync_face=lipsync_face,
+                    lipsync_device=lipsync_device,
+                    lipsync_box=lipsync_box,
+                    strict_plugins=bool(strict_plugins),
                     emit=emit,
                     emotion_mode=emotion_mode,
                     speech_rate=speech_rate,
@@ -1511,6 +1564,57 @@ def run(
             return
 
     logger.info("[v2] Done in %.2fs", time.perf_counter() - t0)
+
+    # Tier-3A: optional lip-sync plugin (default off)
+    try:
+        mode = str(lipsync_mode or get_settings().lipsync or "off").strip().lower()
+        if mode != "off":
+            from anime_v2.plugins.lipsync.base import LipSyncRequest
+            from anime_v2.plugins.lipsync.registry import resolve_lipsync_plugin
+            from anime_v2.plugins.lipsync.wav2lip_plugin import _parse_bbox
+
+            plugin = resolve_lipsync_plugin(
+                mode, wav2lip_dir=wav2lip_dir, wav2lip_checkpoint=wav2lip_checkpoint
+            )
+            if plugin is None or not plugin.is_available():
+                msg = (
+                    "Lip-sync plugin requested but unavailable. "
+                    "Setup: place Wav2Lip at third_party/wav2lip and set WAV2LIP_CHECKPOINT "
+                    "(or pass --wav2lip-dir/--wav2lip-checkpoint)."
+                )
+                if bool(strict_plugins) or bool(get_settings().strict_plugins):
+                    raise RuntimeError(msg)
+                logger.warning("[v2] %s", msg)
+            else:
+                tmp_dir = out_dir / "tmp" / "lipsync"
+                out_lip = out_dir / "final_lipsynced.mp4"
+                audio_for_lip = (
+                    (audio_dir / "final_mix.wav")
+                    if (audio_dir / "final_mix.wav").exists()
+                    else tts_wav
+                )
+                bbox = (
+                    _parse_bbox(str(lipsync_box or ""))
+                    if str(lipsync_face or "").lower() == "bbox"
+                    else None
+                )
+                req = LipSyncRequest(
+                    input_video=video,
+                    dubbed_audio_wav=audio_for_lip,
+                    output_video=out_lip,
+                    work_dir=tmp_dir,
+                    face_mode=str(lipsync_face or "auto").lower(),
+                    device=str(lipsync_device or "auto").lower(),
+                    bbox=bbox,
+                    timeout_s=int(get_settings().lipsync_timeout_s),
+                )
+                outp = plugin.run(req)
+                logger.info("[v2] lipsync: ok → %s", outp)
+    except Exception as ex:
+        if bool(strict_plugins) or bool(get_settings().strict_plugins):
+            raise
+        logger.warning("[v2] lipsync skipped (%s)", ex)
+
     logger.info("[v2] Done. Output: %s", dub_mkv)
 
 # Public entrypoint (project.scripts -> anime_v2.cli:cli)
