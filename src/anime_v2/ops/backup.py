@@ -5,9 +5,10 @@ import json
 import os
 import time
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from anime_v2.utils.log import logger
 
@@ -48,9 +49,7 @@ def _iter_backup_files(app_root: Path) -> Iterable[Path]:
         for p in out_dir.rglob("*"):
             if not p.is_file():
                 continue
-            if p.suffix.lower() in {".json", ".srt"}:
-                yield p
-            elif p.name == "job.log":
+            if p.suffix.lower() in {".json", ".srt"} or p.name == "job.log":
                 yield p
 
 
@@ -62,7 +61,11 @@ class BackupResult:
 
 
 def create_backup(*, app_root: Path | None = None) -> BackupResult:
-    root = (Path(app_root) if app_root else Path(os.environ.get("APP_ROOT") or ("/app" if Path("/app").exists() else Path.cwd()))).resolve()
+    root = (
+        Path(app_root)
+        if app_root
+        else Path(os.environ.get("APP_ROOT") or ("/app" if Path("/app").exists() else Path.cwd()))
+    ).resolve()
     backups_dir = (root / "backups").resolve()
     backups_dir.mkdir(parents=True, exist_ok=True)
 
@@ -96,7 +99,12 @@ def create_backup(*, app_root: Path | None = None) -> BackupResult:
         z.writestr("manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
 
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
-    logger.info("backup_created", zip=str(zip_path), manifest=str(manifest_path), files=len(manifest["files"]))
+    logger.info(
+        "backup_created",
+        zip=str(zip_path),
+        manifest=str(manifest_path),
+        files=len(manifest["files"]),
+    )
 
     s3 = os.environ.get("BACKUP_S3_URL")
     if s3:
@@ -106,15 +114,29 @@ def create_backup(*, app_root: Path | None = None) -> BackupResult:
             import subprocess
 
             if shutil.which("aws"):
-                subprocess.run(["aws", "s3", "cp", str(zip_path), s3.rstrip("/") + "/" + zip_path.name], check=True)
-                subprocess.run(["aws", "s3", "cp", str(manifest_path), s3.rstrip("/") + "/" + manifest_path.name], check=True)
+                subprocess.run(
+                    ["aws", "s3", "cp", str(zip_path), s3.rstrip("/") + "/" + zip_path.name],
+                    check=True,
+                )
+                subprocess.run(
+                    [
+                        "aws",
+                        "s3",
+                        "cp",
+                        str(manifest_path),
+                        s3.rstrip("/") + "/" + manifest_path.name,
+                    ],
+                    check=True,
+                )
                 logger.info("backup_uploaded", dest=s3)
             else:
                 logger.warning("backup_upload_skipped", reason="aws_cli_not_found", dest=s3)
         except Exception as ex:
             logger.warning("backup_upload_failed", dest=s3, error=str(ex))
 
-    return BackupResult(zip_path=zip_path, manifest_path=manifest_path, file_count=len(manifest["files"]))
+    return BackupResult(
+        zip_path=zip_path, manifest_path=manifest_path, file_count=len(manifest["files"])
+    )
 
 
 def main() -> None:
@@ -123,4 +145,3 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

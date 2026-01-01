@@ -41,4 +41,3 @@ def test_smoke_whisper_small_and_tts_one_line(tmp_path: Path) -> None:
     result = model.transcribe(str(wav), fp16=False, language="en")
     text = str(result.get("text") or "").lower()
     assert "hello" in text
-

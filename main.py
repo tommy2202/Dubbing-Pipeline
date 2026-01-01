@@ -5,11 +5,11 @@ import shutil
 import subprocess
 import sys
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse
-
 
 # Ensure `src/` is importable when running `uvicorn main:app` from repo root.
 REPO_ROOT = Path(__file__).resolve().parent
@@ -145,10 +145,8 @@ async def dub_endpoint(file: UploadFile | None = File(default=None)) -> FileResp
             detail=f"Failed to save upload: {ex}",
         ) from ex
     finally:
-        try:
+        with suppress(Exception):
             file.file.close()
-        except Exception:
-            pass
 
     try:
         dub_video(str(upload_path), str(output_path))

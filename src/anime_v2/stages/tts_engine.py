@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from anime_v2.gates.license import require_coqui_tos
+from anime_v2.runtime.device_allocator import pick_device
+from anime_v2.runtime.model_manager import ModelManager
 from anime_v2.utils.config import get_settings
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
-from anime_v2.gates.license import require_coqui_tos
-from anime_v2.runtime.model_manager import ModelManager
-from anime_v2.runtime.device_allocator import pick_device
 
 
 class TTSEngine(abc.ABC):
@@ -51,7 +51,11 @@ class CoquiXTTS(TTSEngine):
     def _load(self):
         if self._tts is not None:
             return self._tts
-        logger.info("[v2] Loading Coqui TTS model (via ModelManager): %s device=%s", self.model_name, self._device)
+        logger.info(
+            "[v2] Loading Coqui TTS model (via ModelManager): %s device=%s",
+            self.model_name,
+            self._device,
+        )
         self._tts = ModelManager.instance().get_tts(self.model_name, self._device)
         return self._tts
 
@@ -77,12 +81,22 @@ class CoquiXTTS(TTSEngine):
         # - preset path requires a speaker string for multi-speaker models
         if speaker_wav is not None:
             logger.debug("[v2] XTTS clone synth (speaker_wav=%s)", speaker_wav)
-            kwargs: dict[str, Any] = {"text": text, "language": language, "speaker_wav": str(speaker_wav), "file_path": str(out_path)}
+            kwargs: dict[str, Any] = {
+                "text": text,
+                "language": language,
+                "speaker_wav": str(speaker_wav),
+                "file_path": str(out_path),
+            }
             try:
                 tts.tts_to_file(**kwargs)
             except TypeError:
                 # Older API variants
-                tts.tts_to_file(text=text, speaker_wav=str(speaker_wav), language=language, file_path=str(out_path))
+                tts.tts_to_file(
+                    text=text,
+                    speaker_wav=str(speaker_wav),
+                    language=language,
+                    file_path=str(out_path),
+                )
             return out_path
 
         if not speaker_id:
@@ -93,10 +107,14 @@ class CoquiXTTS(TTSEngine):
 
         logger.debug("[v2] XTTS preset synth (speaker_id=%s)", speaker_id)
         try:
-            tts.tts_to_file(text=text, speaker=str(speaker_id), language=language, file_path=str(out_path))
+            tts.tts_to_file(
+                text=text, speaker=str(speaker_id), language=language, file_path=str(out_path)
+            )
         except TypeError:
             # Some Coqui versions use speaker_id parameter name
-            tts.tts_to_file(text=text, speaker_id=str(speaker_id), language=language, file_path=str(out_path))
+            tts.tts_to_file(
+                text=text, speaker_id=str(speaker_id), language=language, file_path=str(out_path)
+            )
         return out_path
 
 
@@ -182,7 +200,9 @@ def load_voice_db(*, preset_dir: Path, db_path: Path, embeddings_dir: Path) -> d
     return build_voice_db(preset_dir=preset_dir, db_path=db_path, embeddings_dir=embeddings_dir)
 
 
-def choose_similar_voice(target_embedding: Path, *, preset_dir: Path, db_path: Path, embeddings_dir: Path) -> str | None:
+def choose_similar_voice(
+    target_embedding: Path, *, preset_dir: Path, db_path: Path, embeddings_dir: Path
+) -> str | None:
     """
     Returns best preset name by cosine similarity.
     """
@@ -221,6 +241,7 @@ def choose_similar_voice(target_embedding: Path, *, preset_dir: Path, db_path: P
         except Exception:
             continue
 
-    logger.info("[v2] choose_similar_voice: best=%s sim=%.3f", best_name, best_sim if best_name else -1.0)
+    logger.info(
+        "[v2] choose_similar_voice: best=%s sim=%.3f", best_name, best_sim if best_name else -1.0
+    )
     return best_name
-

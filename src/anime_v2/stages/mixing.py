@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from anime_v2.utils.log import logger
 from anime_v2.stages.export import export_hls, export_mkv, export_mp4
+from anime_v2.utils.log import logger
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,12 +221,25 @@ def mix(
             # Extract original audio to a demucs-friendly WAV (stereo 44.1k)
             demucs_wav = out_dir / "orig_audio_44k.wav"
             subprocess.run(
-                ["ffmpeg", "-y", "-i", str(video_in), "-vn", "-ac", "2", "-ar", "44100", str(demucs_wav)],
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(video_in),
+                    "-vn",
+                    "-ac",
+                    "2",
+                    "-ar",
+                    "44100",
+                    str(demucs_wav),
+                ],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            bed = _run_demucs_if_enabled(audio_wav=demucs_wav, out_dir=out_dir, timeout_s=int(cfg.demucs_timeout_s))
+            bed = _run_demucs_if_enabled(
+                audio_wav=demucs_wav, out_dir=out_dir, timeout_s=int(cfg.demucs_timeout_s)
+            )
             if bed is not None and bed.exists():
                 bg_input = bed
                 bg_is_wav = True
@@ -253,8 +266,26 @@ def mix(
             bg_stream = "0:a:0"
             tts_stream = "1:a:0"
 
-        fg, out_bus = _build_filtergraph(bg_stream=bg_stream, tts_stream=tts_stream, loudnorm=loudnorm_filter, limiter=True, vid_dur=vid_dur)
-        cmd += ["-filter_complex", fg, "-map", f"[{out_bus}]", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(mixed_wav)]
+        fg, out_bus = _build_filtergraph(
+            bg_stream=bg_stream,
+            tts_stream=tts_stream,
+            loudnorm=loudnorm_filter,
+            limiter=True,
+            vid_dur=vid_dur,
+        )
+        cmd += [
+            "-filter_complex",
+            fg,
+            "-map",
+            f"[{out_bus}]",
+            "-ac",
+            "1",
+            "-ar",
+            "48000",
+            "-c:a",
+            "pcm_s16le",
+            str(mixed_wav),
+        ]
         subprocess.run(cmd, check=True)
 
     # Loudnorm 2-pass for streaming/broadcast
@@ -267,10 +298,22 @@ def mix(
             # Minimal pass: audio-only null output.
             if bg_is_wav:
                 cmd = ["ffmpeg", "-y", "-i", str(bg_input), "-i", str(tts_wav), "-filter_complex"]
-                fg, out_bus = _build_filtergraph(bg_stream="0:a:0", tts_stream="1:a:0", loudnorm=loud1, limiter=False, vid_dur=vid_dur)
+                fg, out_bus = _build_filtergraph(
+                    bg_stream="0:a:0",
+                    tts_stream="1:a:0",
+                    loudnorm=loud1,
+                    limiter=False,
+                    vid_dur=vid_dur,
+                )
             else:
                 cmd = ["ffmpeg", "-y", "-i", str(video_in), "-i", str(tts_wav), "-filter_complex"]
-                fg, out_bus = _build_filtergraph(bg_stream="0:a:0", tts_stream="1:a:0", loudnorm=loud1, limiter=False, vid_dur=vid_dur)
+                fg, out_bus = _build_filtergraph(
+                    bg_stream="0:a:0",
+                    tts_stream="1:a:0",
+                    loudnorm=loud1,
+                    limiter=False,
+                    vid_dur=vid_dur,
+                )
             cmd += [fg]
             cmd += ["-map", f"[{out_bus}]", "-f", "null", "-"]
             p = subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -286,7 +329,9 @@ def mix(
                 logger.info("[v2] mixing: loudnorm pass1 ok (%.2fs)", time.perf_counter() - t0)
         except Exception as ex:
             logger.warning("[v2] mixing: loudnorm pass1 failed (%s); using single-pass", ex)
-            loudnorm_pass2 = f"loudnorm=I={loudnorm_target}:LRA=11:TP=-1.0:linear=true:print_format=summary"
+            loudnorm_pass2 = (
+                f"loudnorm=I={loudnorm_target}:LRA=11:TP=-1.0:linear=true:print_format=summary"
+            )
 
     # 1) Mixdown to WAV
     mixed_wav.parent.mkdir(parents=True, exist_ok=True)
@@ -313,4 +358,3 @@ def mix(
         outputs["hls"] = master
 
     return outputs
-

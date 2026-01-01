@@ -5,15 +5,16 @@ import json
 import os
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from anime_v2.api.deps import require_scope
 from anime_v2.jobs.models import JobState
 from anime_v2.utils.log import logger
-from anime_v2.api.deps import require_scope
 
 router = APIRouter()
 
@@ -114,7 +115,7 @@ async def webrtc_offer(request: Request) -> dict:
         from aiortc import RTCPeerConnection, RTCSessionDescription  # type: ignore
         from aiortc.contrib.media import MediaPlayer  # type: ignore
     except Exception as ex:
-        raise HTTPException(status_code=503, detail=f"WebRTC deps not installed: {ex}")
+        raise HTTPException(status_code=503, detail=f"WebRTC deps not installed: {ex}") from ex
 
     body = await request.json()
     if not isinstance(body, dict):
@@ -127,7 +128,9 @@ async def webrtc_offer(request: Request) -> dict:
     if not job_id or not isinstance(sdp, str) or not isinstance(typ, str):
         raise HTTPException(status_code=400, detail="Required: job_id, sdp, type")
 
-    media_path = _resolve_job_media_path(request, job_id=job_id, video_path=str(video_path) if video_path else None)
+    media_path = _resolve_job_media_path(
+        request, job_id=job_id, video_path=str(video_path) if video_path else None
+    )
 
     ip = request.client.host if request.client else "unknown"
 
@@ -154,7 +157,9 @@ async def webrtc_offer(request: Request) -> dict:
 
         now = time.monotonic()
         async with _peers_lock:
-            _peers[peer_token] = _Peer(pc=pc, player=player, created_at=now, last_activity=now, ip=ip)
+            _peers[peer_token] = _Peer(
+                pc=pc, player=player, created_at=now, last_activity=now, ip=ip
+            )
 
         def touch() -> None:
             # best-effort update
@@ -163,6 +168,7 @@ async def webrtc_offer(request: Request) -> dict:
                     p = _peers.get(peer_token)
                     if p:
                         p.last_activity = time.monotonic()
+
             asyncio.create_task(_t())
 
         @pc.on("iceconnectionstatechange")
@@ -184,22 +190,28 @@ async def webrtc_offer(request: Request) -> dict:
         await pc.setLocalDescription(answer)
 
         asyncio.create_task(_idle_watch(peer_token))
-        logger.info("webrtc peer created token=%s job_id=%s ip=%s file=%s", peer_token, job_id, ip, media_path.name)
+        logger.info(
+            "webrtc peer created token=%s job_id=%s ip=%s file=%s",
+            peer_token,
+            job_id,
+            ip,
+            media_path.name,
+        )
 
-        return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type, "peer_token": peer_token}
+        return {
+            "sdp": pc.localDescription.sdp,
+            "type": pc.localDescription.type,
+            "peer_token": peer_token,
+        }
     except HTTPException:
         raise
     except Exception as ex:
-        try:
+        with suppress(Exception):
             await pc.close()
-        except Exception:
-            pass
-        try:
+        with suppress(Exception):
             if player is not None:
                 player.stop()
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=f"WebRTC offer failed: {ex}")
+        raise HTTPException(status_code=500, detail=f"WebRTC offer failed: {ex}") from ex
 
 
 @router.get("/webrtc/demo", response_class=HTMLResponse)
@@ -211,7 +223,12 @@ async def webrtc_demo(request: Request) -> HTMLResponse:
     ice = _ice_servers()
     ice_json = json.dumps(ice)
 
-    opts = "\n".join([f'<option value="{j.id}">{j.id} — {Path(j.output_mkv).name}</option>' for j in jobs]) or "<option value=\"\">(no done jobs)</option>"
+    opts = (
+        "\n".join(
+            [f'<option value="{j.id}">{j.id} — {Path(j.output_mkv).name}</option>' for j in jobs]
+        )
+        or '<option value="">(no done jobs)</option>'
+    )
 
     html = f"""<!doctype html>
 <html>
@@ -293,4 +310,3 @@ async def webrtc_demo(request: Request) -> HTMLResponse:
   </body>
 </html>"""
     return HTMLResponse(html)
-

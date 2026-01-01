@@ -30,7 +30,6 @@ def ecapa_embedding(wav_path: str | Path, device: str = "cpu", cfg: EmbedConfig 
         return None
 
     try:
-        import numpy as np  # type: ignore
         import torch  # type: ignore
         from speechbrain.inference.speaker import EncoderClassifier  # type: ignore
     except Exception as ex:

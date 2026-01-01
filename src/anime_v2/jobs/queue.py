@@ -4,16 +4,16 @@ import asyncio
 import os
 import re
 import shutil
-import subprocess
 import time
-from dataclasses import replace
+from contextlib import suppress
 from pathlib import Path
 
+from anime_v2.config import get_settings
+from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from anime_v2.jobs.limits import get_limits
 from anime_v2.jobs.models import Job, JobState, now_utc
 from anime_v2.jobs.store import JobStore
-from anime_v2.jobs.limits import get_limits
 from anime_v2.jobs.watchdog import PhaseTimeout, run_with_timeout
-from anime_v2.config import get_settings
 from anime_v2.ops.metrics import (
     job_errors,
     jobs_finished,
@@ -22,27 +22,25 @@ from anime_v2.ops.metrics import (
     pipeline_mux_seconds,
     pipeline_transcribe_seconds,
     pipeline_tts_seconds,
-    tts_seconds,
     time_hist,
+    tts_seconds,
     whisper_seconds,
 )
+from anime_v2.runtime.scheduler import Scheduler
 from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.character_store import CharacterStore
-from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
+from anime_v2.stages.diarization import DiarizeConfig
+from anime_v2.stages.diarization import diarize as diarize_v2
 from anime_v2.stages.mixing import MixConfig, mix
-from anime_v2.utils.embeds import ecapa_embedding
 from anime_v2.stages.transcription import transcribe
 from anime_v2.stages.translation import TranslationConfig, translate_segments
-from anime_v2.utils.ffmpeg_safe import extract_audio_mono_16k
-from anime_v2.utils.log import logger
-from anime_v2.utils.paths import output_dir_for
-from anime_v2.utils.time import format_srt_timestamp
-from anime_v2.utils.net import install_egress_policy
-from anime_v2.runtime.scheduler import Scheduler
-from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 from anime_v2.utils.circuit import Circuit
+from anime_v2.utils.embeds import ecapa_embedding
+from anime_v2.utils.ffmpeg_safe import extract_audio_mono_16k
 from anime_v2.utils.hashio import hash_audio_from_video
-
+from anime_v2.utils.log import logger
+from anime_v2.utils.net import install_egress_policy
+from anime_v2.utils.time import format_srt_timestamp
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-")
 
@@ -86,7 +84,7 @@ def _parse_srt_to_cues(srt_path: Path) -> list[dict]:
         lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
         if len(lines) < 2 or "-->" not in lines[1]:
             continue
-        start_s, end_s = [p.strip() for p in lines[1].split("-->", 1)]
+        start_s, end_s = (p.strip() for p in lines[1].split("-->", 1))
         start = parse_ts(start_s)
         end = parse_ts(end_s)
         cue_text = " ".join(lines[2:]).strip() if len(lines) > 2 else ""
@@ -109,22 +107,31 @@ def _assign_speakers(cues: list[dict], diar_segments: list[dict] | None) -> list
                     break
             except Exception:
                 continue
-        out.append({"start": start, "end": end, "speaker_id": speaker_id, "text": str(c.get("text", "") or "")})
+        out.append(
+            {
+                "start": start,
+                "end": end,
+                "speaker_id": speaker_id,
+                "text": str(c.get("text", "") or ""),
+            }
+        )
     return out
 
 
 def _write_srt(lines: list[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
-        for i, l in enumerate(lines, 1):
-            st = format_srt_timestamp(float(l["start"]))
-            en = format_srt_timestamp(float(l["end"]))
-            txt = str(l.get("text", "") or "").strip()
+        for i, line in enumerate(lines, 1):
+            st = format_srt_timestamp(float(line["start"]))
+            en = format_srt_timestamp(float(line["end"]))
+            txt = str(line.get("text", "") or "").strip()
             f.write(f"{i}\n{st} --> {en}\n{txt}\n\n")
 
 
 class JobQueue:
-    def __init__(self, store: JobStore, *, concurrency: int = 1, app_root: Path | None = None) -> None:
+    def __init__(
+        self, store: JobStore, *, concurrency: int = 1, app_root: Path | None = None
+    ) -> None:
         self.store = store
         self.concurrency = max(1, int(concurrency))
         self._q: asyncio.Queue[str] = asyncio.Queue()
@@ -159,7 +166,15 @@ class JobQueue:
                     try:
                         from anime_v2.runtime.scheduler import JobRecord
 
-                        sched.submit(JobRecord(job_id=j.id, mode=j.mode, device_pref=j.device, created_at=time.time(), priority=100))
+                        sched.submit(
+                            JobRecord(
+                                job_id=j.id,
+                                mode=j.mode,
+                                device_pref=j.device,
+                                created_at=time.time(),
+                                priority=100,
+                            )
+                        )
                     except Exception:
                         await self._q.put(j.id)
                 else:
@@ -181,11 +196,9 @@ class JobQueue:
         Stop accepting new work (handled by lifecycle/scheduler) and let active tasks finish.
         After timeout, cancel remaining workers.
         """
-        try:
-            # Wait for queued items to be processed.
+        # Wait for queued items to be processed (best-effort).
+        with suppress(Exception):
             await asyncio.wait_for(self._q.join(), timeout=float(timeout_s))
-        except Exception:
-            pass
         # Cancel workers (if any still running, they will be interrupted)
         await self.stop()
 
@@ -246,13 +259,17 @@ class JobQueue:
         sched = Scheduler.instance_optional()
 
         if await self._is_canceled(job_id):
-            self.store.update(job_id, state=JobState.CANCELED, progress=0.0, message="Canceled before start")
+            self.store.update(
+                job_id, state=JobState.CANCELED, progress=0.0, message="Canceled before start"
+            )
             return
 
         # Establish work/log paths before writing logs.
         video_path = Path(job.video_path)
         # Prefer ANIME_V2_OUTPUT_DIR (server-configured) over APP_ROOT/Output.
-        out_root = Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(self.app_root / "Output"))).resolve()
+        out_root = Path(
+            os.environ.get("ANIME_V2_OUTPUT_DIR", str(self.app_root / "Output"))
+        ).resolve()
         # Optional project output subdir (stored on job.runtime by batch/project submission).
         runtime = dict(job.runtime or {})
         proj_sub = ""
@@ -343,7 +360,12 @@ class JobQueue:
                             timeout_s=limits.timeout_audio_s,
                             fn=audio_extractor.extract,
                             args=(),
-                            kwargs={"video": video_path, "out_dir": work_dir, "wav_out": work_dir / "audio.wav", "job_id": job_id},
+                            kwargs={
+                                "video": video_path,
+                                "out_dir": work_dir,
+                                "wav_out": work_dir / "audio.wav",
+                                "job_id": job_id,
+                            },
                         )
                     else:
                         with sched.phase("audio"):
@@ -352,16 +374,27 @@ class JobQueue:
                                 timeout_s=limits.timeout_audio_s,
                                 fn=audio_extractor.extract,
                                 args=(),
-                                kwargs={"video": video_path, "out_dir": work_dir, "wav_out": work_dir / "audio.wav", "job_id": job_id},
+                                kwargs={
+                                    "video": video_path,
+                                    "out_dir": work_dir,
+                                    "wav_out": work_dir / "audio.wav",
+                                    "job_id": job_id,
+                                },
                             )
                     try:
-                        write_ckpt(job_id, "audio", {"audio_wav": Path(str(wav))}, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path)
+                        write_ckpt(
+                            job_id,
+                            "audio",
+                            {"audio_wav": Path(str(wav))},
+                            {"work_dir": str(work_dir)},
+                            ckpt_path=ckpt_path,
+                        )
                         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
                     except Exception:
                         pass
             except PhaseTimeout as ex:
                 job_errors.labels(stage="audio_timeout").inc()
-                raise RuntimeError(str(ex))
+                raise RuntimeError(str(ex)) from ex
             self.store.update(job_id, progress=0.10, message="Audio extracted")
             await self._check_canceled(job_id)
 
@@ -385,7 +418,9 @@ class JobQueue:
                     lab = str(u["speaker"])
                     seg_wav = seg_dir / f"{i:04d}_{lab}.wav"
                     try:
-                        extract_audio_mono_16k(src=Path(str(wav)), dst=seg_wav, start_s=s, end_s=e, timeout_s=120)
+                        extract_audio_mono_16k(
+                            src=Path(str(wav)), dst=seg_wav, start_s=s, end_s=e, timeout_s=120
+                        )
                     except Exception:
                         seg_wav = Path(str(wav))
                     by_label.setdefault(lab, []).append((s, e, seg_wav))
@@ -411,13 +446,26 @@ class JobQueue:
                 for lab, segs in by_label.items():
                     for s, e, wav_p in segs:
                         diar_segments.append(
-                            {"start": s, "end": e, "diar_label": lab, "speaker_id": lab_to_char.get(lab, lab), "wav_path": str(wav_p)}
+                            {
+                                "start": s,
+                                "end": e,
+                                "diar_label": lab,
+                                "speaker_id": lab_to_char.get(lab, lab),
+                                "wav_path": str(wav_p),
+                            }
                         )
 
                 from anime_v2.utils.io import write_json
 
                 # Work version includes wav_path for TTS voice selection.
-                write_json(diar_json_work, {"audio_path": str(wav), "segments": diar_segments, "speaker_embeddings": speaker_embeddings})
+                write_json(
+                    diar_json_work,
+                    {
+                        "audio_path": str(wav),
+                        "segments": diar_segments,
+                        "speaker_embeddings": speaker_embeddings,
+                    },
+                )
                 # Public version excludes temp wav paths (workdir is pruned after completion).
                 pub_segments = []
                 for seg in diar_segments:
@@ -433,7 +481,11 @@ class JobQueue:
                     except Exception:
                         continue
                 write_json(diar_json_public, {"audio_path": str(wav), "segments": pub_segments})
-                self.store.update(job_id, progress=0.25, message=f"Diarized ({len(set(s.get('speaker_id') for s in diar_segments))} speakers)")
+                self.store.update(
+                    job_id,
+                    progress=0.25,
+                    message=f"Diarized ({len(set(s.get('speaker_id') for s in diar_segments))} speakers)",
+                )
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] diarize failed: {ex}")
                 self.store.update(job_id, progress=0.25, message="Diarize skipped")
@@ -447,7 +499,9 @@ class JobQueue:
             # Persist a stable copy in Output/<stem>/ for inspection / playback.
             srt_public = base_dir / f"{video_path.stem}.srt"
             self.store.update(job_id, progress=0.30, message=f"Transcribing (Whisper {model_name})")
-            self.store.append_log(job_id, f"[{now_utc()}] transcribe model={model_name} device={device}")
+            self.store.append_log(
+                job_id, f"[{now_utc()}] transcribe model={model_name} device={device}"
+            )
             try:
                 with time_hist(pipeline_transcribe_seconds) as elapsed:
                     t_wh0 = time.perf_counter()
@@ -512,7 +566,9 @@ class JobQueue:
             try:
                 srt_public.write_bytes(srt_out.read_bytes())
                 if srt_out.with_suffix(".json").exists():
-                    srt_public.with_suffix(".json").write_bytes(srt_out.with_suffix(".json").read_bytes())
+                    srt_public.with_suffix(".json").write_bytes(
+                        srt_out.with_suffix(".json").read_bytes()
+                    )
             except Exception:
                 pass
             # Prefer rich segment metadata (avg_logprob) when available.
@@ -531,7 +587,14 @@ class JobQueue:
             # d) translation manager (~0.75) when needed
             # Prefer diarization utterances for timing; assign text/logprob from transcription overlaps.
             diar_utts = sorted(
-                [{"start": float(s["start"]), "end": float(s["end"]), "speaker": str(s.get("speaker_id") or "SPEAKER_01")} for s in diar_segments],
+                [
+                    {
+                        "start": float(s["start"]),
+                        "end": float(s["end"]),
+                        "speaker": str(s.get("speaker_id") or "SPEAKER_01"),
+                    }
+                    for s in diar_segments
+                ],
                 key=lambda x: (x["start"], x["end"]),
             )
 
@@ -565,8 +628,18 @@ class JobQueue:
                     if lp_parts and w_parts and len(lp_parts) == len(w_parts):
                         tot = sum(w_parts)
                         if tot > 0:
-                            logprob = sum(lp * w for lp, w in zip(lp_parts, w_parts)) / tot
-                    segments_for_mt.append({"start": u["start"], "end": u["end"], "speaker": u["speaker"], "text": text_src, "logprob": logprob})
+                            logprob = (
+                                sum(lp * w for lp, w in zip(lp_parts, w_parts, strict=False)) / tot
+                            )
+                    segments_for_mt.append(
+                        {
+                            "start": u["start"],
+                            "end": u["end"],
+                            "speaker": u["speaker"],
+                            "text": text_src,
+                            "logprob": logprob,
+                        }
+                    )
             else:
                 for seg in cues:
                     try:
@@ -629,9 +702,16 @@ class JobQueue:
                             lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
                             if len(lines) < 2 or "-->" not in lines[1]:
                                 continue
-                            start_s, end_s = [p.strip() for p in lines[1].split("-->", 1)]
+                            start_s, end_s = (p.strip() for p in lines[1].split("-->", 1))
                             seg_text = " ".join(lines[2:]).strip() if len(lines) > 2 else ""
-                            segments.append({"start": parse_ts(start_s), "end": parse_ts(end_s), "speaker": "SPEAKER_01", "text": seg_text})
+                            segments.append(
+                                {
+                                    "start": parse_ts(start_s),
+                                    "end": parse_ts(end_s),
+                                    "speaker": "SPEAKER_01",
+                                    "text": seg_text,
+                                }
+                            )
 
                     if not segments:
                         return None
@@ -640,7 +720,9 @@ class JobQueue:
                     for i, s in enumerate(segments, 1):
                         ov = seg_over.get(str(i), {})
                         if isinstance(ov, dict):
-                            tgt_text = str(ov.get("tgt_text") if "tgt_text" in ov else (s.get("text") or ""))
+                            tgt_text = str(
+                                ov.get("tgt_text") if "tgt_text" in ov else (s.get("text") or "")
+                            )
                             approved = bool(ov.get("approved"))
                         else:
                             tgt_text = str(s.get("text") or "")
@@ -652,12 +734,27 @@ class JobQueue:
                         out_segments.append(ss)
 
                     out_json = work_dir / "translated.edited.json"
-                    write_json(out_json, {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "segments": out_segments})
+                    write_json(
+                        out_json,
+                        {
+                            "src_lang": job.src_lang,
+                            "tgt_lang": job.tgt_lang,
+                            "segments": out_segments,
+                        },
+                    )
                     # also write an edited SRT for review
                     try:
                         out_srt = base_dir / f"{video_path.stem}.translated.edited.srt"
                         _write_srt(
-                            [{"start": float(s["start"]), "end": float(s["end"]), "speaker_id": str(s.get("speaker") or "SPEAKER_01"), "text": str(s.get("text") or "")} for s in out_segments],
+                            [
+                                {
+                                    "start": float(s["start"]),
+                                    "end": float(s["end"]),
+                                    "speaker_id": str(s.get("speaker") or "SPEAKER_01"),
+                                    "text": str(s.get("text") or ""),
+                                }
+                                for s in out_segments
+                            ],
                             out_srt,
                         )
                         # prefer edited subtitles for mux when resynth is requested
@@ -671,7 +768,9 @@ class JobQueue:
 
             if do_translate:
                 self.store.update(job_id, progress=0.62, message="Translating subtitles")
-                self.store.append_log(job_id, f"[{now_utc()}] translate src={job.src_lang} tgt={job.tgt_lang}")
+                self.store.append_log(
+                    job_id, f"[{now_utc()}] translate src={job.src_lang} tgt={job.tgt_lang}"
+                )
                 try:
                     from anime_v2.utils.io import write_json
 
@@ -685,15 +784,34 @@ class JobQueue:
                         audio_path=str(wav),
                         device=device,
                     )
-                    translated_segments = translate_segments(segments_for_mt, src_lang=job.src_lang, tgt_lang=job.tgt_lang, cfg=cfg)
-                    write_json(translated_json, {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "segments": translated_segments})
-                    srt_lines = [{"start": s["start"], "end": s["end"], "speaker_id": s["speaker"], "text": s["text"]} for s in translated_segments]
+                    translated_segments = translate_segments(
+                        segments_for_mt, src_lang=job.src_lang, tgt_lang=job.tgt_lang, cfg=cfg
+                    )
+                    write_json(
+                        translated_json,
+                        {
+                            "src_lang": job.src_lang,
+                            "tgt_lang": job.tgt_lang,
+                            "segments": translated_segments,
+                        },
+                    )
+                    srt_lines = [
+                        {
+                            "start": s["start"],
+                            "end": s["end"],
+                            "speaker_id": s["speaker"],
+                            "text": s["text"],
+                        }
+                        for s in translated_segments
+                    ]
                     _write_srt(srt_lines, translated_srt)
                     subs_srt_path = translated_srt
                     self.store.update(job_id, progress=0.75, message="Translation done")
                 except Exception as ex:
                     self.store.append_log(job_id, f"[{now_utc()}] translate failed: {ex}")
-                    self.store.update(job_id, progress=0.75, message="Translation failed (using original text)")
+                    self.store.update(
+                        job_id, progress=0.75, message="Translation failed (using original text)"
+                    )
             else:
                 self.store.update(job_id, progress=0.75, message="Translation skipped")
 
@@ -711,7 +829,9 @@ class JobQueue:
             def on_tts_progress(done: int, total: int) -> None:
                 # map [0..1] => [0.76..0.95]
                 frac = 0.0 if total <= 0 else float(done) / float(total)
-                self.store.update(job_id, progress=0.76 + 0.19 * frac, message=f"TTS {done}/{total}")
+                self.store.update(
+                    job_id, progress=0.76 + 0.19 * frac, message=f"TTS {done}/{total}"
+                )
 
             def cancel_cb() -> bool:
                 return job_id in self._cancel
@@ -776,56 +896,68 @@ class JobQueue:
                         tts_wav.exists()
                         and tts_manifest.exists()
                         and stage_is_done(ckpt, "tts")
-                        and not (isinstance(resynth, dict) and str(resynth.get("type") or "") == "approved")
+                        and not (
+                            isinstance(resynth, dict)
+                            and str(resynth.get("type") or "") == "approved"
+                        )
                     ):
                         self.store.append_log(job_id, f"[{now_utc()}] tts (checkpoint hit)")
                     else:
                         # Force rerun on resynth.
-                        if isinstance(resynth, dict) and str(resynth.get("type") or "") == "approved":
-                            try:
+                        if (
+                            isinstance(resynth, dict)
+                            and str(resynth.get("type") or "") == "approved"
+                        ):
+                            with suppress(Exception):
                                 tts_wav.unlink(missing_ok=True)
-                            except Exception:
-                                pass
-                            try:
+                            with suppress(Exception):
                                 tts_manifest.unlink(missing_ok=True)
-                            except Exception:
-                                pass
                         if sched is None:
                             run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
                         else:
                             with sched.phase("tts"):
-                                run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
-                        try:
-                            rt = dict((self.store.get(job_id).runtime or {}) if self.store.get(job_id) else runtime)
+                                run_with_timeout(
+                                    "tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase
+                                )
+                        with suppress(Exception):
+                            rt = dict(
+                                (self.store.get(job_id).runtime or {})
+                                if self.store.get(job_id)
+                                else runtime
+                            )
                             rt.setdefault("breaker_state", {})
                             rt["breaker_state"]["tts"] = Circuit.get("tts").snapshot().state
                             rt.setdefault("attempts", {})
                             rt["attempts"]["tts"] = int(rt["attempts"].get("tts", 0)) + 1
                             self.store.update(job_id, runtime=rt)
-                        except Exception:
-                            pass
-                        try:
-                            write_ckpt(job_id, "tts", {"tts_wav": tts_wav, "manifest": tts_manifest}, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path)
+                        with suppress(Exception):
+                            write_ckpt(
+                                job_id,
+                                "tts",
+                                {"tts_wav": tts_wav, "manifest": tts_manifest},
+                                {"work_dir": str(work_dir)},
+                                ckpt_path=ckpt_path,
+                            )
                             ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
-                        except Exception:
-                            pass
                     tts_seconds.observe(max(0.0, time.perf_counter() - t_tts0))
                     dt = elapsed()
                     if dt > float(settings.budget_tts_sec):
                         _mark_degraded("budget_tts_exceeded")
             except tts.TTSCanceled:
                 job_errors.labels(stage="tts").inc()
-                raise JobCanceled()
+                raise JobCanceled() from None
             except PhaseTimeout as ex:
                 job_errors.labels(stage="tts_timeout").inc()
                 self.store.append_log(job_id, f"[{now_utc()}] tts watchdog timeout: {ex}")
-                raise RuntimeError(str(ex))
+                raise RuntimeError(str(ex)) from ex
             except JobCanceled:
                 job_errors.labels(stage="tts").inc()
                 raise
             except Exception as ex:
                 job_errors.labels(stage="tts").inc()
-                self.store.append_log(job_id, f"[{now_utc()}] tts failed: {ex} (continuing with silence)")
+                self.store.append_log(
+                    job_id, f"[{now_utc()}] tts failed: {ex} (continuing with silence)"
+                )
                 # Silence track is already best-effort within tts.run; ensure file exists.
                 if not tts_wav.exists():
                     from anime_v2.stages.tts import _write_silence_wav  # type: ignore
@@ -858,7 +990,9 @@ class JobQueue:
                     else:
                         cfg_mix = MixConfig(
                             profile=os.environ.get("MIX_PROFILE", "streaming"),
-                            separate_vocals=bool(int(os.environ.get("SEPARATE_VOCALS", "0") or "0")),
+                            separate_vocals=bool(
+                                int(os.environ.get("SEPARATE_VOCALS", "0") or "0")
+                            ),
                             emit=tuple(
                                 sorted(
                                     {
@@ -866,7 +1000,11 @@ class JobQueue:
                                         "mp4",
                                         *[
                                             p.strip().lower()
-                                            for p in (os.environ.get("EMIT_FORMATS") or os.environ.get("EMIT") or "mkv,mp4").split(",")
+                                            for p in (
+                                                os.environ.get("EMIT_FORMATS")
+                                                or os.environ.get("EMIT")
+                                                or "mkv,mp4"
+                                            ).split(",")
                                             if p.strip()
                                         ],
                                     }
@@ -874,27 +1012,55 @@ class JobQueue:
                             ),
                         )
                         if sched is None:
-                            outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=work_dir, cfg=cfg_mix)
+                            outs = mix(
+                                video_in=video_path,
+                                tts_wav=tts_wav,
+                                srt=subs_srt_path,
+                                out_dir=work_dir,
+                                cfg=cfg_mix,
+                            )
                         else:
                             with sched.phase("mux"):
-                                outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=work_dir, cfg=cfg_mix)
+                                outs = mix(
+                                    video_in=video_path,
+                                    tts_wav=tts_wav,
+                                    srt=subs_srt_path,
+                                    out_dir=work_dir,
+                                    cfg=cfg_mix,
+                                )
                         out_mkv = outs.get("mkv", out_mkv)
                         out_mp4 = outs.get("mp4", out_mp4)
                         try:
                             art = {"mkv": out_mkv}
                             if out_mp4 and Path(out_mp4).exists():
                                 art["mp4"] = out_mp4
-                            write_ckpt(job_id, "mix", art, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path)
+                            write_ckpt(
+                                job_id, "mix", art, {"work_dir": str(work_dir)}, ckpt_path=ckpt_path
+                            )
                             ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
                         except Exception:
                             pass
                 except Exception as ex:
-                    self.store.append_log(job_id, f"[{now_utc()}] mix failed: {ex} (falling back to mux)")
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] mix failed: {ex} (falling back to mux)"
+                    )
                     if sched is None:
-                        mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv, job_id=job_id)
+                        mkv_export.mux(
+                            src_video=video_path,
+                            dub_wav=tts_wav,
+                            srt_path=subs_srt_path,
+                            out_mkv=out_mkv,
+                            job_id=job_id,
+                        )
                     else:
                         with sched.phase("mux"):
-                            mkv_export.mux(src_video=video_path, dub_wav=tts_wav, srt_path=subs_srt_path, out_mkv=out_mkv, job_id=job_id)
+                            mkv_export.mux(
+                                src_video=video_path,
+                                dub_wav=tts_wav,
+                                srt_path=subs_srt_path,
+                                out_mkv=out_mkv,
+                                job_id=job_id,
+                            )
                 finally:
                     dt = elapsed_mux()
                     if dt > float(settings.budget_mux_sec):
@@ -935,21 +1101,17 @@ class JobQueue:
                 work_dir=str(base_dir),
             )
             # Clear resynth flag after completion.
-            try:
+            with suppress(Exception):
                 curj = self.store.get(job_id)
                 rt2 = dict((curj.runtime or {}) if curj else runtime)
                 if "resynth" in rt2:
                     rt2.pop("resynth", None)
                     self.store.update(job_id, runtime=rt2)
-            except Exception:
-                pass
             jobs_finished.labels(state="DONE").inc()
             self.store.append_log(job_id, f"[{now_utc()}] done in {time.perf_counter()-t0:.2f}s")
             # Cleanup temp workdir (keep logs + checkpoint + final outputs in Output/<stem>/).
-            try:
+            with suppress(Exception):
                 shutil.rmtree(work_dir, ignore_errors=True)
-            except Exception:
-                pass
         except JobCanceled:
             self.store.append_log(job_id, f"[{now_utc()}] canceled")
             self.store.update(job_id, state=JobState.CANCELED, message="Canceled", error=None)
@@ -962,10 +1124,12 @@ class JobQueue:
             pipeline_job_failed_total.inc()
         finally:
             dt = time.perf_counter() - t0
-            logger.info("job %s finished state=%s in %.2fs", job_id, (self.store.get(job_id).state if self.store.get(job_id) else "unknown"), dt)
-            try:
+            logger.info(
+                "job %s finished state=%s in %.2fs",
+                job_id,
+                (self.store.get(job_id).state if self.store.get(job_id) else "unknown"),
+                dt,
+            )
+            with suppress(Exception):
                 if sched is not None:
                     sched.on_job_done(job_id)
-            except Exception:
-                pass
-

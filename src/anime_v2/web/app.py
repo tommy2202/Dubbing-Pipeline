@@ -5,9 +5,9 @@ import mimetypes
 import os
 import re
 import time
+from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Iterator
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +23,7 @@ from anime_v2.web.routes_webrtc import router as webrtc_router
 
 OUTPUT_ROOT = Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,7 +46,9 @@ app.add_middleware(
 )
 
 JOB_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
-UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
@@ -168,7 +171,9 @@ def _range_to_slice(range_header: str, file_size: int) -> tuple[int, int]:
     return start, end
 
 
-def _file_iterator(path: Path, start: int, end_inclusive: int, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+def _file_iterator(
+    path: Path, start: int, end_inclusive: int, chunk_size: int = 1024 * 1024
+) -> Iterator[bytes]:
     with path.open("rb") as f:
         f.seek(start)
         remaining = end_inclusive - start + 1
@@ -225,12 +230,16 @@ def video(job: str, request: Request, _auth: None = Depends(verify_api_key)) -> 
     headers = {"Accept-Ranges": "bytes"}
 
     if not range_header:
-        return StreamingResponse(_file_iterator(target, 0, file_size - 1), media_type=content_type, headers=headers)
+        return StreamingResponse(
+            _file_iterator(target, 0, file_size - 1), media_type=content_type, headers=headers
+        )
 
     try:
         start, end = _range_to_slice(range_header, file_size)
     except Exception:
-        raise HTTPException(status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE, detail="Invalid Range")
+        raise HTTPException(
+            status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE, detail="Invalid Range"
+        ) from None
 
     headers.update(
         {
@@ -244,4 +253,3 @@ def video(job: str, request: Request, _auth: None = Depends(verify_api_key)) -> 
         media_type=content_type,
         headers=headers,
     )
-

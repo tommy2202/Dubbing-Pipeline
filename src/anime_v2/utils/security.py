@@ -4,8 +4,7 @@ import hmac
 import time
 from dataclasses import dataclass
 
-from fastapi import HTTPException, Request, status
-from fastapi import WebSocket
+from fastapi import HTTPException, Request, WebSocket, status
 
 from anime_v2.utils.config import get_settings
 from anime_v2.utils.log import logger
@@ -86,7 +85,9 @@ def verify_api_key(request: Request) -> None:
     # Rate limit failures
     if not _allow_failure(ip):
         logger.warning("rate_limit auth_fail ip=%s", ip)
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many auth failures")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many auth failures"
+        )
 
     # Never log the token value.
     logger.info("auth_fail ip=%s path=%s", ip, request.url.path)
@@ -117,8 +118,9 @@ def verify_api_key_ws(websocket: WebSocket) -> None:
 
     if not _allow_failure(ip):
         logger.warning("rate_limit auth_fail ip=%s", ip)
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many auth failures")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many auth failures"
+        )
 
     logger.info("auth_fail ip=%s path=%s", ip, websocket.url.path)
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-

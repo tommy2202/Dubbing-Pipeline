@@ -42,4 +42,3 @@ def write_json(path: Path, data: object, *, indent: int = 2) -> None:
     tmp.write_text(json.dumps(data, indent=indent, sort_keys=True), encoding="utf-8")
     tmp.replace(path)
     logger.debug("Wrote JSON → %s", path)
-

@@ -36,7 +36,9 @@ def test_job_submit_503_when_draining(tmp_path: Path) -> None:
     get_settings.cache_clear()
 
     with TestClient(app) as c:
-        r = c.post("/auth/login", json={"username": "admin", "password": "adminpass", "session": True})
+        r = c.post(
+            "/auth/login", json={"username": "admin", "password": "adminpass", "session": True}
+        )
         token = r.json()["access_token"]
         csrf = r.json()["csrf_token"]
         lifecycle.begin_draining(timeout_sec=5)
@@ -47,4 +49,3 @@ def test_job_submit_503_when_draining(tmp_path: Path) -> None:
         )
         assert r2.status_code == 503
     lifecycle.end_draining()
-

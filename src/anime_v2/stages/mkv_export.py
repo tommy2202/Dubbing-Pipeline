@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+from contextlib import suppress
 from pathlib import Path
 
-from anime_v2.utils.log import logger
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from anime_v2.utils.log import logger
 
 
 def _ffprobe_duration_s(path: Path) -> float | None:
@@ -32,7 +33,14 @@ def _ffprobe_duration_s(path: Path) -> float | None:
         return None
 
 
-def mux(src_video: Path, dub_wav: Path, srt_path: Path | None, out_mkv: Path, *, job_id: str | None = None) -> Path:
+def mux(
+    src_video: Path,
+    dub_wav: Path,
+    srt_path: Path | None,
+    out_mkv: Path,
+    *,
+    job_id: str | None = None,
+) -> Path:
     """
     Mux:
       - video copied (no re-encode)
@@ -121,10 +129,10 @@ def mux(src_video: Path, dub_wav: Path, srt_path: Path | None, out_mkv: Path, *,
     # - atrim to cap at video duration (even if loudnorm stretches slightly)
     # - asetpts resets timestamps to start at 0
     if vid_dur is not None:
-        loud_filter = (
-            f"loudnorm=I=-16:LRA=11:TP=-1.5:linear=true,apad,atrim=0:{vid_dur:.3f},aresample=async=1:first_pts=0,asetpts=N/SR/TB"
+        loud_filter = f"loudnorm=I=-16:LRA=11:TP=-1.5:linear=true,apad,atrim=0:{vid_dur:.3f},aresample=async=1:first_pts=0,asetpts=N/SR/TB"
+        vol_filter = (
+            f"volume=1.0,apad,atrim=0:{vid_dur:.3f},aresample=async=1:first_pts=0,asetpts=N/SR/TB"
         )
-        vol_filter = f"volume=1.0,apad,atrim=0:{vid_dur:.3f},aresample=async=1:first_pts=0,asetpts=N/SR/TB"
     else:
         loud_filter = "loudnorm=I=-16:LRA=11:TP=-1.5:linear=true,apad,aresample=async=1:first_pts=0,asetpts=N/SR/TB"
         vol_filter = "volume=1.0,apad,aresample=async=1:first_pts=0,asetpts=N/SR/TB"
@@ -136,16 +144,18 @@ def mux(src_video: Path, dub_wav: Path, srt_path: Path | None, out_mkv: Path, *,
         _run(vol_filter)
 
     if job_id:
-        try:
+        with suppress(Exception):
             write_ckpt(
                 job_id,
                 "mux",
                 {"mkv": out_mkv},
-                {"work_dir": str(out_mkv.parent), "src_video": str(src_video), "dub_wav": str(dub_wav)},
+                {
+                    "work_dir": str(out_mkv.parent),
+                    "src_video": str(src_video),
+                    "dub_wav": str(dub_wav),
+                },
                 ckpt_path=ckpt_path,
             )
-        except Exception:
-            pass
 
     logger.info("[v2] mux complete → %s", out_mkv)
     return out_mkv
@@ -166,4 +176,3 @@ def run(
     if dubbed_audio is None:
         raise ValueError("dubbed_audio is required for mux")
     return mux(src_video=video, dub_wav=dubbed_audio, srt_path=srt_path, out_mkv=out)
-

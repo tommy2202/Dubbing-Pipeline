@@ -6,29 +6,36 @@ import io
 import os
 import re
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.responses import PlainTextResponse
 from sse_starlette.sse import EventSourceResponse  # type: ignore
 
-from anime_v2.jobs.models import Job, JobState, new_id, now_utc
 from anime_v2.api.deps import Identity, require_role, require_scope
-from anime_v2.api.models import Role
-from anime_v2.api.models import AuthStore
+from anime_v2.api.models import AuthStore, Role
 from anime_v2.api.security import decode_token
 from anime_v2.config import get_settings
 from anime_v2.jobs.limits import concurrent_jobs_for_user, get_limits, used_minutes_today
-from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_duration_seconds
+from anime_v2.jobs.models import Job, JobState, new_id, now_utc
 from anime_v2.ops.metrics import jobs_queued, pipeline_job_total
 from anime_v2.ops.storage import ensure_free_space
-from anime_v2.utils.log import request_id_var
-from anime_v2.utils.crypto import verify_secret
-from anime_v2.utils.ratelimit import RateLimiter
-from anime_v2.runtime.scheduler import JobRecord, Scheduler
 from anime_v2.runtime import lifecycle
-
+from anime_v2.runtime.scheduler import JobRecord, Scheduler
+from anime_v2.utils.crypto import verify_secret
+from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_duration_seconds
+from anime_v2.utils.log import request_id_var
+from anime_v2.utils.ratelimit import RateLimiter
 
 router = APIRouter()
 
@@ -72,14 +79,18 @@ def _sanitize_video_path(p: str) -> Path:
         try:
             resolved.relative_to(root)
         except Exception:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="video_path must be under APP_ROOT")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="video_path must be under APP_ROOT"
+            ) from None
         return resolved
 
     resolved = (root / raw).resolve()
     try:
         resolved.relative_to(root)
     except Exception:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="video_path must be under APP_ROOT")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="video_path must be under APP_ROOT"
+        ) from None
     return resolved
 
 
@@ -151,7 +162,7 @@ def _parse_srt(path: Path) -> list[dict[str, Any]]:
         if len(lines) < 2 or "-->" not in lines[1]:
             continue
         try:
-            start_s, end_s = [p.strip() for p in lines[1].split("-->", 1)]
+            start_s, end_s = (p.strip() for p in lines[1].split("-->", 1))
             start = float(parse_ts(start_s))
             end = float(parse_ts(end_s))
             txt = "\n".join(lines[2:]).strip() if len(lines) > 2 else ""
@@ -174,18 +185,18 @@ def _write_srt_segments(path: Path, segments: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         for i, s in enumerate(segments, 1):
-            f.write(f"{i}\n{_fmt_ts_srt(float(s['start']))} --> {_fmt_ts_srt(float(s['end']))}\n{str(s.get('text') or '').strip()}\n\n")
+            f.write(
+                f"{i}\n{_fmt_ts_srt(float(s['start']))} --> {_fmt_ts_srt(float(s['end']))}\n{str(s.get('text') or '').strip()}\n\n"
+            )
 
 
 def _job_base_dir(job: Job) -> Path:
     # Prefer parent of output_mkv (stable Output/<stem>/), else use Output/<video_stem>.
     if job.output_mkv:
-        try:
+        with suppress(Exception):
             p = Path(str(job.output_mkv))
             if p.parent.exists():
                 return p.parent.resolve()
-        except Exception:
-            pass
     try:
         stem = Path(str(job.video_path)).stem
     except Exception:
@@ -201,7 +212,7 @@ def _load_transcript_store(base_dir: Path) -> dict[str, Any]:
     store_path, _ = _transcript_store_paths(base_dir)
     if not store_path.exists():
         return {"version": 0, "segments": {}}
-    try:
+    with suppress(Exception):
         import json as _json
 
         data = _json.loads(store_path.read_text(encoding="utf-8", errors="replace"))
@@ -211,8 +222,6 @@ def _load_transcript_store(base_dir: Path) -> dict[str, Any]:
             if not isinstance(data["segments"], dict):
                 data["segments"] = {}
             return data
-    except Exception:
-        pass
     return {"version": 0, "segments": {}}
 
 
@@ -236,13 +245,19 @@ def _append_transcript_version(base_dir: Path, entry: dict[str, Any]) -> None:
 
 
 @router.post("/api/jobs")
-async def create_job(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, str]:
+async def create_job(
+    request: Request, ident: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, str]:
     # Idempotency-Key: return existing job when present and not expired.
     # Supports header or multipart form field `idempotency_key` (for HTML forms).
     idem_key = (request.headers.get("idempotency-key") or "").strip()
     parsed_form = None
     ctype0 = (request.headers.get("content-type") or "").lower()
-    if not idem_key and "application/json" not in ctype0 and ("multipart/form-data" in ctype0 or "application/x-www-form-urlencoded" in ctype0):
+    if (
+        not idem_key
+        and "application/json" not in ctype0
+        and ("multipart/form-data" in ctype0 or "application/x-www-form-urlencoded" in ctype0)
+    ):
         try:
             parsed_form = await request.form()
             idem_key = str(parsed_form.get("idempotency_key") or "").strip()
@@ -257,14 +272,17 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
         hit = store.get_idempotency(idem_key)
         if hit:
             jid, ts = hit
-            if (time.time() - ts) <= ttl:
-                if store.get(jid) is not None:
-                    return {"id": jid}
+            if (time.time() - ts) <= ttl and store.get(jid) is not None:
+                return {"id": jid}
 
     # Draining: do not accept new jobs (but idempotency hits above still return).
     if lifecycle.is_draining():
         ra = str(lifecycle.retry_after_seconds(60))
-        raise HTTPException(status_code=503, detail="Server is draining; try again later", headers={"Retry-After": ra})
+        raise HTTPException(
+            status_code=503,
+            detail="Server is draining; try again later",
+            headers={"Retry-After": ra},
+        )
 
     # Rate limit: 10/min per identity (fallback to IP)
     rl: RateLimiter | None = getattr(request.app.state, "rate_limiter", None)
@@ -277,7 +295,11 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
 
     # Disk guard: refuse new jobs when storage is low.
     s = get_settings()
-    out_root = Path(str(getattr(store, "db_path", Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output"))))).resolve().parent
+    out_root = (
+        Path(str(getattr(store, "db_path", Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output")))))
+        .resolve()
+        .parent
+    )
     out_root.mkdir(parents=True, exist_ok=True)
     ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
 
@@ -332,7 +354,9 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
             upload = file  # starlette.datastructures.UploadFile
             ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()
             if ctype_u and ctype_u not in _ALLOWED_UPLOAD_MIME:
-                raise HTTPException(status_code=400, detail=f"Unsupported upload content-type: {ctype_u}")
+                raise HTTPException(
+                    status_code=400, detail=f"Unsupported upload content-type: {ctype_u}"
+                )
             root = _app_root()
             up_dir = (root / "Input" / "uploads").resolve()
             up_dir.mkdir(parents=True, exist_ok=True)
@@ -352,13 +376,14 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
                             break
                         written += len(chunk)
                         if written > max_bytes:
-                            raise HTTPException(status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)")
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Upload too large (>{limits.max_upload_mb}MB)",
+                            )
                         f.write(chunk)
             except HTTPException:
-                try:
+                with suppress(Exception):
                     dest.unlink(missing_ok=True)
-                except Exception:
-                    pass
                 raise
             video_path = dest
 
@@ -367,11 +392,15 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     try:
         duration_s = float(ffprobe_duration_seconds(video_path))
     except FFmpegError as ex:
-        raise HTTPException(status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
+        ) from ex
     if duration_s <= 0.5:
         raise HTTPException(status_code=400, detail="Video duration is too short or unreadable")
     if duration_s > float(limits.max_video_min) * 60.0:
-        raise HTTPException(status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)")
+        raise HTTPException(
+            status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)"
+        )
 
     jid = new_id()
     created = now_utc()
@@ -380,7 +409,10 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     all_jobs = store.list(limit=1000)
     conc = concurrent_jobs_for_user(all_jobs, user_id=ident.user.id)
     if conc >= limits.max_concurrent_per_user:
-        raise HTTPException(status_code=429, detail=f"Too many concurrent jobs (limit={limits.max_concurrent_per_user})")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many concurrent jobs (limit={limits.max_concurrent_per_user})",
+        )
     used_min = used_minutes_today(all_jobs, user_id=ident.user.id, now_iso=created)
     req_min = duration_s / 60.0
     if (used_min + req_min) > float(limits.daily_processing_minutes):
@@ -426,7 +458,11 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     except RuntimeError as ex:
         if "draining" in str(ex).lower():
             ra = str(lifecycle.retry_after_seconds(60))
-            raise HTTPException(status_code=503, detail="Server is draining; try again later", headers={"Retry-After": ra})
+            raise HTTPException(
+                status_code=503,
+                detail="Server is draining; try again later",
+                headers={"Retry-After": ra},
+            ) from ex
         raise
     jobs_queued.inc()
     pipeline_job_total.inc()
@@ -434,7 +470,9 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
 
 
 @router.post("/api/jobs/batch")
-async def create_jobs_batch(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def create_jobs_batch(
+    request: Request, ident: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
     """
     Batch submit jobs.
 
@@ -451,22 +489,39 @@ async def create_jobs_batch(request: Request, ident: Identity = Depends(require_
 
     # Disk guard once per batch
     s = get_settings()
-    out_root = Path(str(getattr(store, "db_path", Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output"))))).resolve().parent
+    out_root = (
+        Path(str(getattr(store, "db_path", Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output")))))
+        .resolve()
+        .parent
+    )
     out_root.mkdir(parents=True, exist_ok=True)
     ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
 
     created_ids: list[str] = []
 
-    async def _submit_one(*, video_path: Path, mode: str, device: str, src_lang: str, tgt_lang: str, preset: dict[str, Any] | None, project: dict[str, Any] | None) -> str:
+    async def _submit_one(
+        *,
+        video_path: Path,
+        mode: str,
+        device: str,
+        src_lang: str,
+        tgt_lang: str,
+        preset: dict[str, Any] | None,
+        project: dict[str, Any] | None,
+    ) -> str:
         # duration validation
         try:
             duration_s = float(ffprobe_duration_seconds(video_path))
         except FFmpegError as ex:
-            raise HTTPException(status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}")
+            raise HTTPException(
+                status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
+            ) from ex
         if duration_s <= 0.5:
             raise HTTPException(status_code=400, detail="Video duration is too short or unreadable")
         if duration_s > float(limits.max_video_min) * 60.0:
-            raise HTTPException(status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)")
+            raise HTTPException(
+                status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)"
+            )
 
         jid = new_id()
         created = now_utc()
@@ -508,10 +563,16 @@ async def create_jobs_batch(request: Request, ident: Identity = Depends(require_
         job.runtime = rt
         store.put(job)
         try:
-            scheduler.submit(JobRecord(job_id=jid, mode=mode, device_pref=device, created_at=time.time(), priority=100))
+            scheduler.submit(
+                JobRecord(
+                    job_id=jid, mode=mode, device_pref=device, created_at=time.time(), priority=100
+                )
+            )
         except RuntimeError as ex:
             if "draining" in str(ex).lower():
-                raise HTTPException(status_code=503, detail="Server is draining; try again later")
+                raise HTTPException(
+                    status_code=503, detail="Server is draining; try again later"
+                ) from ex
             raise
         jobs_queued.inc()
         pipeline_job_total.inc()
@@ -545,8 +606,20 @@ async def create_jobs_batch(request: Request, ident: Identity = Depends(require_
             tgt_lang = str(it.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
             # project output folder stored in runtime; validated here
             if project and project.get("output_subdir"):
-                project["output_subdir"] = _sanitize_output_subdir(str(project.get("output_subdir") or ""))
-            created_ids.append(await _submit_one(video_path=video_path, mode=mode, device=device, src_lang=src_lang, tgt_lang=tgt_lang, preset=preset, project=project))
+                project["output_subdir"] = _sanitize_output_subdir(
+                    str(project.get("output_subdir") or "")
+                )
+            created_ids.append(
+                await _submit_one(
+                    video_path=video_path,
+                    mode=mode,
+                    device=device,
+                    src_lang=src_lang,
+                    tgt_lang=tgt_lang,
+                    preset=preset,
+                    project=project,
+                )
+            )
     else:
         form = await request.form()
         preset_id = str(form.get("preset_id") or "").strip()
@@ -554,7 +627,9 @@ async def create_jobs_batch(request: Request, ident: Identity = Depends(require_
         preset = store.get_preset(preset_id) if preset_id else None
         project = store.get_project(project_id) if project_id else None
         if project and project.get("output_subdir"):
-            project["output_subdir"] = _sanitize_output_subdir(str(project.get("output_subdir") or ""))
+            project["output_subdir"] = _sanitize_output_subdir(
+                str(project.get("output_subdir") or "")
+            )
         mode = str(form.get("mode") or (preset.get("mode") if preset else "medium"))
         device = str(form.get("device") or (preset.get("device") if preset else "auto"))
         src_lang = str(form.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
@@ -570,7 +645,9 @@ async def create_jobs_batch(request: Request, ident: Identity = Depends(require_
         for upload in files:
             ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()
             if ctype_u and ctype_u not in _ALLOWED_UPLOAD_MIME:
-                raise HTTPException(status_code=400, detail=f"Unsupported upload content-type: {ctype_u}")
+                raise HTTPException(
+                    status_code=400, detail=f"Unsupported upload content-type: {ctype_u}"
+                )
             ext = ".mp4"
             name = getattr(upload, "filename", "") or ""
             if "." in name:
@@ -586,13 +663,23 @@ async def create_jobs_batch(request: Request, ident: Identity = Depends(require_
                         break
                     written += len(chunk)
                     if written > max_bytes:
-                        try:
+                        with suppress(Exception):
                             dest.unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                        raise HTTPException(status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)")
+                        raise HTTPException(
+                            status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)"
+                        )
                     f.write(chunk)
-            created_ids.append(await _submit_one(video_path=dest, mode=mode, device=device, src_lang=src_lang, tgt_lang=tgt_lang, preset=preset, project=project))
+            created_ids.append(
+                await _submit_one(
+                    video_path=dest,
+                    mode=mode,
+                    device=device,
+                    src_lang=src_lang,
+                    tgt_lang=tgt_lang,
+                    preset=preset,
+                    project=project,
+                )
+            )
 
     return {"ids": created_ids}
 
@@ -615,7 +702,9 @@ async def list_jobs(
     if q:
         qq = str(q).lower().strip()
         if qq:
-            jobs_all = [j for j in jobs_all if (qq in j.id.lower()) or (qq in (j.video_path or "").lower())]
+            jobs_all = [
+                j for j in jobs_all if (qq in j.id.lower()) or (qq in (j.video_path or "").lower())
+            ]
     total = len(jobs_all)
     jobs = jobs_all[offset_i : offset_i + limit_i]
     out = []
@@ -638,18 +727,26 @@ async def list_jobs(
             }
         )
     next_offset = offset_i + limit_i
-    return {"items": out, "limit": limit_i, "offset": offset_i, "total": total, "next_offset": (next_offset if next_offset < total else None)}
+    return {
+        "items": out,
+        "limit": limit_i,
+        "offset": offset_i,
+        "total": total,
+        "next_offset": (next_offset if next_offset < total else None),
+    }
 
 
 @router.get("/api/jobs/{id}")
-async def get_job(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
+async def get_job(
+    request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(id)
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
     d = job.to_dict()
     # Attach checkpoint (best-effort) for stage breakdown.
-    try:
+    with suppress(Exception):
         from anime_v2.jobs.checkpoint import read_ckpt
 
         base_dir = Path(job.work_dir) if job.work_dir else None
@@ -658,22 +755,20 @@ async def get_job(request: Request, id: str, _: Identity = Depends(require_scope
             ck = read_ckpt(id, ckpt_path=ckpt_path)
             if ck:
                 d["checkpoint"] = ck
-    except Exception:
-        pass
     # Provide player id for existing output files (if under OUTPUT_ROOT).
-    try:
+    with suppress(Exception):
         omkv = Path(str(job.output_mkv)) if job.output_mkv else None
         if omkv and omkv.exists():
             pj = _player_job_for_path(omkv)
             if pj:
                 d["player_job"] = pj
-    except Exception:
-        pass
     return d
 
 
 @router.post("/api/jobs/{id}/cancel")
-async def cancel_job(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def cancel_job(
+    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     queue = _get_queue(request)
     await queue.cancel(id)
@@ -684,7 +779,9 @@ async def cancel_job(request: Request, id: str, _: Identity = Depends(require_sc
 
 
 @router.post("/api/jobs/{id}/pause")
-async def pause_job(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def pause_job(
+    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     queue = _get_queue(request)
     job = store.get(id)
@@ -699,7 +796,9 @@ async def pause_job(request: Request, id: str, _: Identity = Depends(require_sco
 
 
 @router.post("/api/jobs/{id}/resume")
-async def resume_job(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def resume_job(
+    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     queue = _get_queue(request)
     scheduler = _get_scheduler(request)
@@ -712,10 +811,12 @@ async def resume_job(request: Request, id: str, _: Identity = Depends(require_sc
     if j2 is None:
         raise HTTPException(status_code=404, detail="Not found")
     # re-submit to scheduler (best-effort)
-    try:
-        scheduler.submit(JobRecord(job_id=id, mode=j2.mode, device_pref=j2.device, created_at=time.time(), priority=100))
-    except Exception:
-        pass
+    with suppress(Exception):
+        scheduler.submit(
+            JobRecord(
+                job_id=id, mode=j2.mode, device_pref=j2.device, created_at=time.time(), priority=100
+            )
+        )
     return j2.to_dict()
 
 
@@ -756,7 +857,9 @@ async def jobs_events(request: Request, _: Identity = Depends(require_scope("rea
 
 # --- presets ---
 @router.get("/api/presets")
-async def list_presets(request: Request, ident: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
+async def list_presets(
+    request: Request, ident: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     owner = None if ident.user.role == Role.admin else ident.user.id
     items = store.list_presets(owner_id=owner)
@@ -764,7 +867,9 @@ async def list_presets(request: Request, ident: Identity = Depends(require_scope
 
 
 @router.post("/api/presets")
-async def create_preset(request: Request, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
+async def create_preset(
+    request: Request, ident: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
     store = _get_store(request)
     body = await request.json()
     if not isinstance(body, dict):
@@ -789,7 +894,9 @@ async def create_preset(request: Request, ident: Identity = Depends(require_role
 
 
 @router.delete("/api/presets/{id}")
-async def delete_preset(request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
+async def delete_preset(
+    request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
     store = _get_store(request)
     p = store.get_preset(id)
     if p is None:
@@ -800,7 +907,9 @@ async def delete_preset(request: Request, id: str, ident: Identity = Depends(req
 
 # --- projects ---
 @router.get("/api/projects")
-async def list_projects(request: Request, ident: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
+async def list_projects(
+    request: Request, ident: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     owner = None if ident.user.role == Role.admin else ident.user.id
     items = store.list_projects(owner_id=owner)
@@ -808,7 +917,9 @@ async def list_projects(request: Request, ident: Identity = Depends(require_scop
 
 
 @router.post("/api/projects")
-async def create_project(request: Request, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
+async def create_project(
+    request: Request, ident: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
     store = _get_store(request)
     body = await request.json()
     if not isinstance(body, dict):
@@ -830,7 +941,9 @@ async def create_project(request: Request, ident: Identity = Depends(require_rol
 
 
 @router.delete("/api/projects/{id}")
-async def delete_project(request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
+async def delete_project(
+    request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
     store = _get_store(request)
     p = store.get_project(id)
     if p is None:
@@ -840,7 +953,9 @@ async def delete_project(request: Request, id: str, ident: Identity = Depends(re
 
 
 @router.get("/api/jobs/{id}/logs/tail")
-async def tail_logs(request: Request, id: str, n: int = 200, _: Identity = Depends(require_scope("read:job"))) -> PlainTextResponse:
+async def tail_logs(
+    request: Request, id: str, n: int = 200, _: Identity = Depends(require_scope("read:job"))
+) -> PlainTextResponse:
     store = _get_store(request)
     return PlainTextResponse(store.tail_log(id, n=n))
 
@@ -860,18 +975,16 @@ async def stream_logs(request: Request, id: str, _: Identity = Depends(require_s
     async def gen():
         pos = 0
         # initial tail
-        try:
+        with suppress(Exception):
             txt = store.tail_log(id, n=200)
             for ln in txt.splitlines():
                 yield {"event": "message", "data": f"<div>{ln}</div>"}
-        except Exception:
-            pass
         if once:
             return
         while True:
             if await request.is_disconnected():
                 return
-            try:
+            with suppress(Exception):
                 if log_path.exists() and log_path.is_file():
                     with log_path.open("r", encoding="utf-8", errors="replace") as f:
                         f.seek(pos)
@@ -880,15 +993,15 @@ async def stream_logs(request: Request, id: str, _: Identity = Depends(require_s
                     if chunk:
                         for ln in chunk.splitlines():
                             yield {"event": "message", "data": f"<div>{ln}</div>"}
-            except Exception:
-                pass
             await asyncio.sleep(0.5)
 
     return EventSourceResponse(gen())
 
 
 @router.get("/api/jobs/{id}/characters")
-async def get_job_characters(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
+async def get_job_characters(
+    request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(id)
     if job is None:
@@ -901,7 +1014,9 @@ async def get_job_characters(request: Request, id: str, _: Identity = Depends(re
 
 
 @router.put("/api/jobs/{id}/characters")
-async def put_job_characters(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def put_job_characters(
+    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(id)
     if job is None:
@@ -939,7 +1054,9 @@ async def put_job_characters(request: Request, id: str, _: Identity = Depends(re
     if wav_upload:
         cid, upload = wav_upload
         try:
-            base_dir = Path(job.work_dir).resolve() if job.work_dir else (_output_root() / id).resolve()
+            base_dir = (
+                Path(job.work_dir).resolve() if job.work_dir else (_output_root() / id).resolve()
+            )
             voices_dir = (base_dir / "voices").resolve()
             voices_dir.mkdir(parents=True, exist_ok=True)
             dest = voices_dir / f"{cid}.wav"
@@ -962,7 +1079,7 @@ async def put_job_characters(request: Request, id: str, _: Identity = Depends(re
         except HTTPException:
             raise
         except Exception:
-            pass
+            ...
 
     rt = dict(job.runtime or {})
     rt["voice_map"] = items
@@ -1003,10 +1120,22 @@ async def get_job_transcript(
     version = int(st.get("version") or 0)
 
     for i in range(n):
-        s0 = src[i] if i < len(src) else (tgt[i] if i < len(tgt) else {"start": 0.0, "end": 0.0, "text": ""})
-        t0 = tgt[i] if i < len(tgt) else (src[i] if i < len(src) else {"start": 0.0, "end": 0.0, "text": ""})
+        s0 = (
+            src[i]
+            if i < len(src)
+            else (tgt[i] if i < len(tgt) else {"start": 0.0, "end": 0.0, "text": ""})
+        )
+        t0 = (
+            tgt[i]
+            if i < len(tgt)
+            else (src[i] if i < len(src) else {"start": 0.0, "end": 0.0, "text": ""})
+        )
         ov = seg_over.get(str(i + 1), {}) if isinstance(seg_over, dict) else {}
-        tgt_text = str(ov.get("tgt_text") if isinstance(ov, dict) and "tgt_text" in ov else t0.get("text") or "")
+        tgt_text = str(
+            ov.get("tgt_text")
+            if isinstance(ov, dict) and "tgt_text" in ov
+            else t0.get("text") or ""
+        )
         approved = bool(ov.get("approved")) if isinstance(ov, dict) else False
         flags = ov.get("flags") if isinstance(ov, dict) else []
         if not isinstance(flags, list):
@@ -1032,7 +1161,9 @@ async def get_job_transcript(
 
 
 @router.put("/api/jobs/{id}/transcript")
-async def put_job_transcript(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def put_job_transcript(
+    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(id)
     if job is None:
@@ -1072,12 +1203,21 @@ async def put_job_transcript(request: Request, id: str, _: Identity = Depends(re
             if isinstance(flags, list):
                 rec["flags"] = [str(x) for x in flags]
         segs[str(idx)] = rec
-        applied.append({"index": idx, "tgt_text": rec.get("tgt_text"), "approved": rec.get("approved"), "flags": rec.get("flags", [])})
+        applied.append(
+            {
+                "index": idx,
+                "tgt_text": rec.get("tgt_text"),
+                "approved": rec.get("approved"),
+                "flags": rec.get("flags", []),
+            }
+        )
 
     st["version"] = int(st.get("version") or 0) + 1
     st["updated_at"] = now_utc()
     _save_transcript_store(base_dir, st)
-    _append_transcript_version(base_dir, {"version": st["version"], "updated_at": st["updated_at"], "updates": applied})
+    _append_transcript_version(
+        base_dir, {"version": st["version"], "updated_at": st["updated_at"], "updates": applied}
+    )
 
     # Persist version on job runtime for visibility.
     rt = dict(job.runtime or {})
@@ -1087,7 +1227,9 @@ async def put_job_transcript(request: Request, id: str, _: Identity = Depends(re
 
 
 @router.post("/api/jobs/{id}/transcript/synthesize")
-async def synthesize_from_approved(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
+async def synthesize_from_approved(
+    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     scheduler = _get_scheduler(request)
     job = store.get(id)
@@ -1097,17 +1239,35 @@ async def synthesize_from_approved(request: Request, id: str, _: Identity = Depe
     st = _load_transcript_store(base_dir)
     # Mark job to re-synthesize only approved segments.
     rt = dict(job.runtime or {})
-    rt["resynth"] = {"type": "approved", "requested_at": now_utc(), "transcript_version": int(st.get("version") or 0)}
-    job2 = store.update(id, state=JobState.QUEUED, progress=0.0, message="Resynth requested (approved only)", runtime=rt)
-    try:
-        scheduler.submit(JobRecord(job_id=id, mode=(job2.mode if job2 else job.mode), device_pref=(job2.device if job2 else job.device), created_at=time.time(), priority=50))
-    except Exception:
-        pass
+    rt["resynth"] = {
+        "type": "approved",
+        "requested_at": now_utc(),
+        "transcript_version": int(st.get("version") or 0),
+    }
+    job2 = store.update(
+        id,
+        state=JobState.QUEUED,
+        progress=0.0,
+        message="Resynth requested (approved only)",
+        runtime=rt,
+    )
+    with suppress(Exception):
+        scheduler.submit(
+            JobRecord(
+                job_id=id,
+                mode=(job2.mode if job2 else job.mode),
+                device_pref=(job2.device if job2 else job.device),
+                created_at=time.time(),
+                priority=50,
+            )
+        )
     return {"ok": True}
 
 
 @router.get("/api/jobs/{id}/files")
-async def job_files(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
+async def job_files(
+    request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(id)
     if job is None:
@@ -1120,11 +1280,19 @@ async def job_files(request: Request, id: str, _: Identity = Depends(require_sco
     mkv = None
     hls = None
 
-    for cand in [base_dir / f"{stem}.dub.mp4", base_dir / "dub.mp4", *list(base_dir.glob("*.dub.mp4"))]:
+    for cand in [
+        base_dir / f"{stem}.dub.mp4",
+        base_dir / "dub.mp4",
+        *list(base_dir.glob("*.dub.mp4")),
+    ]:
         if cand.exists():
             mp4 = cand
             break
-    for cand in [base_dir / f"{stem}.dub.mkv", base_dir / "dub.mkv", *list(base_dir.glob("*.dub.mkv"))]:
+    for cand in [
+        base_dir / f"{stem}.dub.mkv",
+        base_dir / "dub.mkv",
+        *list(base_dir.glob("*.dub.mkv")),
+    ]:
         if cand.exists():
             mkv = cand
             break
@@ -1185,7 +1353,7 @@ async def job_qrcode(request: Request, id: str, _: Identity = Depends(require_sc
     try:
         import qrcode  # type: ignore
     except Exception as ex:  # pragma: no cover
-        raise HTTPException(status_code=500, detail=f"qrcode unavailable: {ex}")
+        raise HTTPException(status_code=500, detail=f"qrcode unavailable: {ex}") from ex
     img = qrcode.make(url)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -1298,4 +1466,3 @@ async def sse_job(request: Request, id: str, _: Identity = Depends(require_scope
     import json
 
     return EventSourceResponse(gen())
-

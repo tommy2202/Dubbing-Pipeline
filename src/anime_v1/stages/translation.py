@@ -1,10 +1,10 @@
-import pathlib
 import json
-from typing import Optional
-from anime_v1.utils import logger, checkpoints
+import pathlib
+
+from anime_v1.utils import checkpoints, logger
 
 
-def _try_load_mt(src_lang: Optional[str], tgt_lang: str):
+def _try_load_mt(src_lang: str | None, tgt_lang: str):
     """Best-effort load of a translation pipeline.
 
     Priority:
@@ -14,13 +14,14 @@ def _try_load_mt(src_lang: Optional[str], tgt_lang: str):
     """
     try:
         from transformers import M2M100ForConditionalGeneration, M2M100Tokenizer
+
         model_name = "facebook/m2m100_418M"
         tok = M2M100Tokenizer.from_pretrained(model_name)
         mdl = M2M100ForConditionalGeneration.from_pretrained(model_name)
 
         def _prep(texts: list[str]):
             # Set forced target language
-            tok.src_lang = (src_lang or "auto")
+            tok.src_lang = src_lang or "auto"
             return tok(texts, return_tensors="pt", padding=True)
 
         return (tok, mdl, _prep)
@@ -30,6 +31,7 @@ def _try_load_mt(src_lang: Optional[str], tgt_lang: str):
     # MarianMT fallback: try pair-specific model if tgt is English
     try:
         from transformers import MarianMTModel, MarianTokenizer
+
         pair = None
         if tgt_lang == "en" and src_lang:
             pair = f"Helsinki-NLP/opus-mt-{src_lang}-en"
@@ -48,7 +50,7 @@ def _try_load_mt(src_lang: Optional[str], tgt_lang: str):
         return (None, None, None)
 
 
-def _translate_texts(texts: list[str], src_lang: Optional[str], tgt_lang: str) -> list[str]:
+def _translate_texts(texts: list[str], src_lang: str | None, tgt_lang: str) -> list[str]:
     tok, mdl, prep = _try_load_mt(src_lang, tgt_lang)
     if tok is None:
         # No model: return source texts unchanged
@@ -70,7 +72,14 @@ def _translate_texts(texts: list[str], src_lang: Optional[str], tgt_lang: str) -
         return texts
 
 
-def run(transcript_json: pathlib.Path, ckpt_dir: pathlib.Path, *, src_lang: Optional[str], tgt_lang: str, enabled: bool) -> pathlib.Path:
+def run(
+    transcript_json: pathlib.Path,
+    ckpt_dir: pathlib.Path,
+    *,
+    src_lang: str | None,
+    tgt_lang: str,
+    enabled: bool,
+) -> pathlib.Path:
     """Translate transcript segments from src_lang → tgt_lang.
 
     If enabled is False, returns the input unchanged.
@@ -91,7 +100,7 @@ def run(transcript_json: pathlib.Path, ckpt_dir: pathlib.Path, *, src_lang: Opti
         return transcript_json
 
     tgt_texts = _translate_texts(src_texts, src_lang, tgt_lang)
-    for seg, new_txt in zip(segments, tgt_texts):
+    for seg, new_txt in zip(segments, tgt_texts, strict=False):
         seg["text"] = new_txt
 
     out = ckpt_dir / "transcript.translated.json"

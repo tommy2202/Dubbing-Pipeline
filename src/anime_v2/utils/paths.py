@@ -48,4 +48,3 @@ def voices_embeddings_dir(work_dir: Path | None = None) -> Path:
 
 def segments_dir(out_dir: Path) -> Path:
     return out_dir / "segments"
-

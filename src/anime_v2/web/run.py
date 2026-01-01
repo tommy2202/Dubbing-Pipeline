@@ -12,4 +12,3 @@ def main() -> None:
         port=int(os.environ.get("PORT", "8000")),
         reload=False,
     )
-

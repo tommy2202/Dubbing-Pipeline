@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import base64
-import os
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -48,7 +48,7 @@ class CharacterStore:
         self._next_n = 1
 
     @classmethod
-    def default(cls) -> "CharacterStore":
+    def default(cls) -> CharacterStore:
         return cls(Path("data") / "characters.json")
 
     def _get_key(self) -> bytes:
@@ -117,7 +117,11 @@ class CharacterStore:
             return data
         # Future-proof: best-effort migration by keeping known fields.
         logger.warning("CharacterStore schema version mismatch", found=v, expected=1)
-        out = {"version": 1, "next_n": int(data.get("next_n", 1)), "characters": data.get("characters", {})}
+        out = {
+            "version": 1,
+            "next_n": int(data.get("next_n", 1)),
+            "characters": data.get("characters", {}),
+        }
         return out
 
     def load(self) -> None:
@@ -195,12 +199,20 @@ class CharacterStore:
 
         if best_id is not None and best_sim >= sim_thresh:
             self.update(best_id, emb)
-            self.characters[best_id].shows[show_id] = int(self.characters[best_id].shows.get(show_id, 0)) + 1
+            self.characters[best_id].shows[show_id] = (
+                int(self.characters[best_id].shows.get(show_id, 0)) + 1
+            )
             logger.info("CharacterStore match %s sim=%.3f show=%s", best_id, best_sim, show_id)
             return best_id
 
         cid = self._new_id()
-        self.characters[cid] = Character(id=cid, embedding=emb.astype(float).tolist(), count=1, shows={show_id: 1}, speaker_wavs=[])
+        self.characters[cid] = Character(
+            id=cid,
+            embedding=emb.astype(float).tolist(),
+            count=1,
+            shows={show_id: 1},
+            speaker_wavs=[],
+        )
         logger.info("CharacterStore new %s show=%s", cid, show_id)
         return cid
 

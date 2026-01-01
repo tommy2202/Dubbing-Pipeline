@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import time
-from contextlib import contextmanager
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 
 from prometheus_client import CollectorRegistry, Counter, Histogram
 
@@ -36,11 +36,17 @@ jobs_finished = Counter(
     labelnames=("state",),
     registry=REGISTRY,
 )
-job_errors = Counter("anime_v2_job_errors_total", "Job stage errors", labelnames=("stage",), registry=REGISTRY)
+job_errors = Counter(
+    "anime_v2_job_errors_total", "Job stage errors", labelnames=("stage",), registry=REGISTRY
+)
 
 # Stage durations
-tts_seconds = Histogram("anime_v2_tts_seconds", "TTS stage seconds", registry=REGISTRY, buckets=PIPELINE_BUCKETS)
-whisper_seconds = Histogram("anime_v2_whisper_seconds", "Whisper stage seconds", registry=REGISTRY, buckets=PIPELINE_BUCKETS)
+tts_seconds = Histogram(
+    "anime_v2_tts_seconds", "TTS stage seconds", registry=REGISTRY, buckets=PIPELINE_BUCKETS
+)
+whisper_seconds = Histogram(
+    "anime_v2_whisper_seconds", "Whisper stage seconds", registry=REGISTRY, buckets=PIPELINE_BUCKETS
+)
 
 # Requested pipeline metrics (explicit names for dashboards)
 pipeline_transcribe_seconds = Histogram(
@@ -63,8 +69,12 @@ pipeline_mux_seconds = Histogram(
 )
 
 pipeline_job_total = Counter("pipeline_job_total", "Pipeline jobs created", registry=REGISTRY)
-pipeline_job_failed_total = Counter("pipeline_job_failed_total", "Pipeline jobs failed", registry=REGISTRY)
-pipeline_job_degraded_total = Counter("pipeline_job_degraded_total", "Pipeline jobs marked degraded", registry=REGISTRY)
+pipeline_job_failed_total = Counter(
+    "pipeline_job_failed_total", "Pipeline jobs failed", registry=REGISTRY
+)
+pipeline_job_degraded_total = Counter(
+    "pipeline_job_degraded_total", "Pipeline jobs marked degraded", registry=REGISTRY
+)
 
 
 @contextmanager
@@ -86,8 +96,5 @@ def time_hist(h: Histogram) -> Iterator[Callable[[], float]]:
         yield elapsed
     finally:
         dt = max(0.0, time.perf_counter() - t0)
-        try:
+        with suppress(Exception):
             h.observe(dt)
-        except Exception:
-            pass
-

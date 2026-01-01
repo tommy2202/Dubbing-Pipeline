@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from anime_v2.config import get_settings
 from anime_v2.utils.log import logger
@@ -72,4 +71,3 @@ class RateLimiter:
             return False
         b.tokens -= 1.0
         return True
-

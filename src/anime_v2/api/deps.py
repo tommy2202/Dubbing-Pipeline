@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request
 
-from anime_v2.api.models import ApiKey, AuthStore, Role, User
+from anime_v2.api.models import AuthStore, Role, User
 from anime_v2.api.security import decode_token, extract_api_key, extract_bearer, verify_csrf
 from anime_v2.config import get_settings
 from anime_v2.utils.crypto import verify_secret
@@ -61,7 +59,9 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     # 2) Bearer access token (header or ?token=... for <video> tags)
-    token = extract_bearer(request) or (request.query_params.get("token") if hasattr(request, "query_params") else None)
+    token = extract_bearer(request) or (
+        request.query_params.get("token") if hasattr(request, "query_params") else None
+    )
     if token:
         data = decode_token(token, expected_typ="access")
         sub = str(data.get("sub") or "")
@@ -94,7 +94,7 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
             verify_csrf(request)
             return Identity(kind="user", user=user, scopes=scopes)
         except BadSignature:
-            raise HTTPException(status_code=401, detail="Invalid session")
+            raise HTTPException(status_code=401, detail="Invalid session") from None
 
     raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -142,7 +142,9 @@ def require_scope(scope: str):
 
 
 def rate_limit(*, bucket: str, limit: int, per_seconds: int):
-    def dep(request: Request, rl: RateLimiter = Depends(get_limiter), ident: Identity | None = None):
+    def dep(
+        request: Request, rl: RateLimiter = Depends(get_limiter), ident: Identity | None = None
+    ):
         ip = _client_ip(request)
         who = ip
         try:
@@ -157,4 +159,3 @@ def rate_limit(*, bucket: str, limit: int, per_seconds: int):
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     return dep
-

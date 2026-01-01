@@ -1,5 +1,6 @@
 import pathlib
 import subprocess
+
 from anime_v1.utils import logger
 
 
@@ -27,10 +28,14 @@ def run(video: pathlib.Path, audio: pathlib.Path, ckpt_dir: pathlib.Path):
         cmd = [
             "python",
             str(repo / "infer.py"),
-            "--checkpoint_path", str(ckpt),
-            "--face", str(video),
-            "--audio", str(audio),
-            "--outfile", str(out),
+            "--checkpoint_path",
+            str(ckpt),
+            "--face",
+            str(video),
+            "--audio",
+            str(audio),
+            "--outfile",
+            str(out),
         ]
         subprocess.run(cmd, check=True)
         if out.exists():

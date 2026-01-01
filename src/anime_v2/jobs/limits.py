@@ -55,7 +55,9 @@ def _same_utc_day(a_iso: str, b_iso: str) -> bool:
 
 
 def concurrent_jobs_for_user(jobs: list[Job], *, user_id: str) -> int:
-    return sum(1 for j in jobs if j.owner_id == user_id and j.state in {JobState.QUEUED, JobState.RUNNING})
+    return sum(
+        1 for j in jobs if j.owner_id == user_id and j.state in {JobState.QUEUED, JobState.RUNNING}
+    )
 
 
 def used_minutes_today(jobs: list[Job], *, user_id: str, now_iso: str) -> float:
@@ -67,4 +69,3 @@ def used_minutes_today(jobs: list[Job], *, user_id: str, now_iso: str) -> float:
             continue
         total_s += float(j.duration_s or 0.0)
     return total_s / 60.0
-

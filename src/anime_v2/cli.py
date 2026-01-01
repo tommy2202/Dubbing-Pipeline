@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -9,19 +10,17 @@ import click
 from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.align import AlignConfig, realign_srt
 from anime_v2.stages.character_store import CharacterStore
-from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
+from anime_v2.stages.diarization import DiarizeConfig
+from anime_v2.stages.diarization import diarize as diarize_v2
 from anime_v2.stages.mixing import MixConfig, mix
-from anime_v2.stages.translation import TranslationConfig, translate_segments
 from anime_v2.stages.transcription import transcribe
+from anime_v2.stages.translation import TranslationConfig, translate_segments
+from anime_v2.utils.embeds import ecapa_embedding
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
+from anime_v2.utils.net import install_egress_policy
 from anime_v2.utils.paths import output_dir_for
 from anime_v2.utils.time import format_srt_timestamp
-import subprocess
-
-from anime_v2.utils.embeds import ecapa_embedding
-from anime_v2.utils.net import install_egress_policy
-
 
 MODE_TO_MODEL: dict[str, str] = {
     "high": "large-v3",
@@ -64,7 +63,7 @@ def _parse_srt_to_cues(srt_path: Path) -> list[dict]:
         lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
         if len(lines) < 2 or "-->" not in lines[1]:
             continue
-        start_s, end_s = [p.strip() for p in lines[1].split("-->", 1)]
+        start_s, end_s = (p.strip() for p in lines[1].split("-->", 1))
         start = parse_ts(start_s)
         end = parse_ts(end_s)
         cue_text = " ".join(lines[2:]).strip() if len(lines) > 2 else ""
@@ -87,7 +86,14 @@ def _assign_speakers(cues: list[dict], diar_segments: list[dict] | None) -> list
                     break
             except Exception:
                 continue
-        out.append({"start": start, "end": end, "speaker_id": speaker_id, "text": str(c.get("text", "") or "")})
+        out.append(
+            {
+                "start": start,
+                "end": end,
+                "speaker_id": speaker_id,
+                "text": str(c.get("text", "") or ""),
+            }
+        )
     return out
 
 
@@ -115,14 +121,44 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
     default="medium",
     show_default=True,
 )
-@click.option("--src-lang", default="auto", show_default=True, help="Source language code, or 'auto'")
-@click.option("--tgt-lang", default="en", show_default=True, help="Target language code (translate pathway outputs English)")
-@click.option("--no-translate", is_flag=True, default=False, help="Disable translate; do plain transcription")
-@click.option("--no-subs", is_flag=True, default=False, help="Do not mux subtitles into output container")
-@click.option("--diarizer", type=click.Choice(["auto", "pyannote", "speechbrain", "heuristic"], case_sensitive=False), default="auto", show_default=True)
-@click.option("--show-id", default=None, help="Show id used for persistent character IDs (default: input basename)")
-@click.option("--char-sim-thresh", type=float, default=float(os.environ.get("CHAR_SIM_THRESH", "0.72")), show_default=True)
-@click.option("--mt-engine", type=click.Choice(["auto", "whisper", "marian", "nllb"], case_sensitive=False), default="auto", show_default=True)
+@click.option(
+    "--src-lang", default="auto", show_default=True, help="Source language code, or 'auto'"
+)
+@click.option(
+    "--tgt-lang",
+    default="en",
+    show_default=True,
+    help="Target language code (translate pathway outputs English)",
+)
+@click.option(
+    "--no-translate", is_flag=True, default=False, help="Disable translate; do plain transcription"
+)
+@click.option(
+    "--no-subs", is_flag=True, default=False, help="Do not mux subtitles into output container"
+)
+@click.option(
+    "--diarizer",
+    type=click.Choice(["auto", "pyannote", "speechbrain", "heuristic"], case_sensitive=False),
+    default="auto",
+    show_default=True,
+)
+@click.option(
+    "--show-id",
+    default=None,
+    help="Show id used for persistent character IDs (default: input basename)",
+)
+@click.option(
+    "--char-sim-thresh",
+    type=float,
+    default=float(os.environ.get("CHAR_SIM_THRESH", "0.72")),
+    show_default=True,
+)
+@click.option(
+    "--mt-engine",
+    type=click.Choice(["auto", "whisper", "marian", "nllb"], case_sensitive=False),
+    default="auto",
+    show_default=True,
+)
 @click.option(
     "--mt-lowconf-thresh",
     type=float,
@@ -132,8 +168,19 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
 )
 @click.option("--glossary", default=None, help="Glossary TSV path or directory")
 @click.option("--style", default=None, help="Style YAML path or directory")
-@click.option("--aligner", type=click.Choice(["auto", "aeneas", "heuristic"], case_sensitive=False), default="auto", show_default=True)
-@click.option("--max-stretch", type=float, default=0.15, show_default=True, help="Max +/- time-stretch applied to TTS clips")
+@click.option(
+    "--aligner",
+    type=click.Choice(["auto", "aeneas", "heuristic"], case_sensitive=False),
+    default="auto",
+    show_default=True,
+)
+@click.option(
+    "--max-stretch",
+    type=float,
+    default=0.15,
+    show_default=True,
+    help="Max +/- time-stretch applied to TTS clips",
+)
 @click.option(
     "--mix-profile",
     type=click.Choice(["streaming", "broadcast", "simple"], case_sensitive=False),
@@ -184,9 +231,6 @@ def cli(
     chosen_model = MODE_TO_MODEL[mode]
     chosen_device = _select_device(device)
 
-    # Whisper should only do ASR; translation is handled by stages.translate to support any src→tgt.
-    task = "transcribe"
-
     # Output layout requirement:
     # Output/<video_stem>/{wav,srt,tts.wav,dub.mkv}
     stem = video.stem
@@ -200,10 +244,20 @@ def cli(
     translated_json = out_dir / "translated.json"
     tts_wav = out_dir / f"{stem}.tts.wav"
     dub_mkv = out_dir / "dub.mkv"
-    dub_mp4 = out_dir / "dub.mp4"
 
-    logger.info("[v2] Starting dub: video=%s mode=%s model=%s device=%s", video, mode, chosen_model, chosen_device)
-    logger.info("[v2] Languages: src_lang=%s tgt_lang=%s translate=%s", src_lang, tgt_lang, (not no_translate))
+    logger.info(
+        "[v2] Starting dub: video=%s mode=%s model=%s device=%s",
+        video,
+        mode,
+        chosen_model,
+        chosen_device,
+    )
+    logger.info(
+        "[v2] Languages: src_lang=%s tgt_lang=%s translate=%s",
+        src_lang,
+        tgt_lang,
+        (not no_translate),
+    )
 
     t0 = time.perf_counter()
 
@@ -212,7 +266,9 @@ def cli(
     t_stage = time.perf_counter()
     try:
         extracted = audio_extractor.extract(video=video, out_dir=out_dir, wav_out=wav_path)
-        logger.info("[v2] audio_extractor: ok path=%s (%.2fs)", extracted, time.perf_counter() - t_stage)
+        logger.info(
+            "[v2] audio_extractor: ok path=%s (%.2fs)", extracted, time.perf_counter() - t_stage
+        )
     except Exception as ex:
         logger.exception("[v2] audio_extractor failed: %s", ex)
         logger.error("[v2] Done. Output: (failed early)")
@@ -238,7 +294,21 @@ def cli(
             seg_wav = seg_dir / f"{i:04d}_{lab}.wav"
             try:
                 subprocess.run(
-                    ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-to", f"{e:.3f}", "-i", str(extracted), "-ac", "1", "-ar", "16000", str(seg_wav)],
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-ss",
+                        f"{s:.3f}",
+                        "-to",
+                        f"{e:.3f}",
+                        "-i",
+                        str(extracted),
+                        "-ac",
+                        "1",
+                        "-ar",
+                        "16000",
+                        str(seg_wav),
+                    ],
                     check=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -288,7 +358,9 @@ def cli(
                         "diar_label": lab,
                         "speaker_id": lab_to_char.get(lab, lab),
                         "wav_path": str(wav_p),
-                        "conf": float(next((u["conf"] for u in utts if str(u["speaker"]) == lab), 0.0)),
+                        "conf": float(
+                            next((u["conf"] for u in utts if str(u["speaker"]) == lab), 0.0)
+                        ),
                     }
                 )
 
@@ -300,7 +372,12 @@ def cli(
                 "speaker_embeddings": speaker_embeddings,
             },
         )
-        logger.info("[v2] diarize: diar_segments=%s stable_speakers=%s (%.2fs)", len(diar_segments), len(set(s.get("speaker_id") for s in diar_segments)), time.perf_counter() - t_stage)
+        logger.info(
+            "[v2] diarize: diar_segments=%s stable_speakers=%s (%.2fs)",
+            len(diar_segments),
+            len(set(s.get("speaker_id") for s in diar_segments)),
+            time.perf_counter() - t_stage,
+        )
     except Exception as ex:
         logger.exception("[v2] diarize failed (continuing): %s", ex)
 
@@ -324,7 +401,12 @@ def cli(
             meta = {}
         segs_detail = meta.get("segments_detail", []) if isinstance(meta, dict) else []
         cues = segs_detail if isinstance(segs_detail, list) else []
-        logger.info("[v2] transcription: segments=%s (%.2fs) → %s", len(cues), time.perf_counter() - t_stage, srt_out)
+        logger.info(
+            "[v2] transcription: segments=%s (%.2fs) → %s",
+            len(cues),
+            time.perf_counter() - t_stage,
+            srt_out,
+        )
     except Exception as ex:
         logger.exception("[v2] transcription failed (continuing): %s", ex)
         cues = []
@@ -332,7 +414,14 @@ def cli(
     # Build speaker-timed segments.
     # Prefer diarization utterances (preserve diarization timing) and assign text/logprob from transcription overlaps.
     diar_utts = sorted(
-        [{"start": float(s["start"]), "end": float(s["end"]), "speaker": str(s.get("speaker_id") or "SPEAKER_01")} for s in diar_segments],
+        [
+            {
+                "start": float(s["start"]),
+                "end": float(s["end"]),
+                "speaker": str(s.get("speaker_id") or "SPEAKER_01"),
+            }
+            for s in diar_segments
+        ],
         key=lambda x: (x["start"], x["end"]),
     )
 
@@ -369,8 +458,16 @@ def cli(
             if lp_parts and w_parts and len(lp_parts) == len(w_parts):
                 tot = sum(w_parts)
                 if tot > 0:
-                    logprob = sum(lp * w for lp, w in zip(lp_parts, w_parts)) / tot
-            segments_for_mt.append({"start": u["start"], "end": u["end"], "speaker": u["speaker"], "text": text_src, "logprob": logprob})
+                    logprob = sum(lp * w for lp, w in zip(lp_parts, w_parts, strict=False)) / tot
+            segments_for_mt.append(
+                {
+                    "start": u["start"],
+                    "end": u["end"],
+                    "speaker": u["speaker"],
+                    "text": text_src,
+                    "logprob": logprob,
+                }
+            )
     else:
         # Fall back to transcription segments (speaker assignment best-effort)
         segments_for_mt = []
@@ -403,21 +500,41 @@ def cli(
                     segs_for_align.append(s2)
                 aligned = realign_srt(extracted, segs_for_align, a_cfg)
                 segments_for_mt = [
-                    {**orig, "start": float(al.get("start", orig.get("start", 0.0))), "end": float(al.get("end", orig.get("end", 0.0))), "aligned_by": al.get("aligned_by")}
-                    for orig, al in zip(segments_for_mt, aligned)
+                    {
+                        **orig,
+                        "start": float(al.get("start", orig.get("start", 0.0))),
+                        "end": float(al.get("end", orig.get("end", 0.0))),
+                        "aligned_by": al.get("aligned_by"),
+                    }
+                    for orig, al in zip(segments_for_mt, aligned, strict=False)
                 ]
                 aligned_srt = out_dir / f"{stem}.aligned.srt"
                 _write_srt_from_lines(
-                    [{"start": s["start"], "end": s["end"], "speaker_id": s.get("speaker", "SPEAKER_01"), "text": s.get("text", "")} for s in segments_for_mt],
+                    [
+                        {
+                            "start": s["start"],
+                            "end": s["end"],
+                            "speaker_id": s.get("speaker", "SPEAKER_01"),
+                            "text": s.get("text", ""),
+                        }
+                        for s in segments_for_mt
+                    ],
                     aligned_srt,
                 )
                 subs_srt_path = aligned_srt
-                logger.info("[v2] align: ok (no-translate) segments=%s aligner=%s", len(segments_for_mt), aligner)
+                logger.info(
+                    "[v2] align: ok (no-translate) segments=%s aligner=%s",
+                    len(segments_for_mt),
+                    aligner,
+                )
             except Exception as ex:
                 logger.warning("[v2] align: skipped/failed (no-translate) (%s)", ex)
 
             # Keep segments for downstream (TTS windowing)
-            write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": segments_for_mt})
+            write_json(
+                translated_json,
+                {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": segments_for_mt},
+            )
         except Exception:
             pass
     else:
@@ -433,7 +550,9 @@ def cli(
                 audio_path=str(extracted),
                 device=chosen_device,
             )
-            translated_segments = translate_segments(segments_for_mt, src_lang=src_lang, tgt_lang=tgt_lang, cfg=cfg)
+            translated_segments = translate_segments(
+                segments_for_mt, src_lang=src_lang, tgt_lang=tgt_lang, cfg=cfg
+            )
 
             # Optional forced alignment to original audio (improves subtitle and TTS windowing).
             try:
@@ -449,34 +568,70 @@ def cli(
                     segs_for_align.append(s2)
                 aligned = realign_srt(extracted, segs_for_align, a_cfg)
                 # Update timings on translated segments
-                by_key = {(float(s.get("start", 0.0)), float(s.get("end", 0.0)), str(s.get("speaker", ""))): s for s in translated_segments}
                 # Since aeneas may re-time drastically, just take aligned list ordering
                 translated_segments = [
-                    {**orig, "start": float(al.get("start", orig.get("start", 0.0))), "end": float(al.get("end", orig.get("end", 0.0))), "aligned_by": al.get("aligned_by")}
-                    for orig, al in zip(translated_segments, aligned)
+                    {
+                        **orig,
+                        "start": float(al.get("start", orig.get("start", 0.0))),
+                        "end": float(al.get("end", orig.get("end", 0.0))),
+                        "aligned_by": al.get("aligned_by"),
+                    }
+                    for orig, al in zip(translated_segments, aligned, strict=False)
                 ]
-                logger.info("[v2] align: ok segments=%s aligner=%s", len(translated_segments), aligner)
+                logger.info(
+                    "[v2] align: ok segments=%s aligner=%s", len(translated_segments), aligner
+                )
             except Exception as ex:
                 logger.warning("[v2] align: skipped/failed (%s)", ex)
 
-            write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": translated_segments})
+            write_json(
+                translated_json,
+                {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": translated_segments},
+            )
 
             # Convert to SRT lines (speaker preserved; text from translated)
-            srt_lines = [{"start": s["start"], "end": s["end"], "speaker_id": s["speaker"], "text": s["text"]} for s in translated_segments]
+            srt_lines = [
+                {
+                    "start": s["start"],
+                    "end": s["end"],
+                    "speaker_id": s["speaker"],
+                    "text": s["text"],
+                }
+                for s in translated_segments
+            ]
             _write_srt_from_lines(srt_lines, translated_srt)
             subs_srt_path = translated_srt
-            logger.info("[v2] translate: segments=%s (%.2fs) → %s", len(translated_segments), time.perf_counter() - t_stage, translated_json)
+            logger.info(
+                "[v2] translate: segments=%s (%.2fs) → %s",
+                len(translated_segments),
+                time.perf_counter() - t_stage,
+                translated_json,
+            )
         except Exception as ex:
             logger.exception("[v2] translate failed (continuing with original text): %s", ex)
-            try:
-                write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": segments_for_mt, "error": str(ex)})
-            except Exception:
-                pass
+            from contextlib import suppress
+
+            with suppress(Exception):
+                write_json(
+                    translated_json,
+                    {
+                        "src_lang": src_lang,
+                        "tgt_lang": tgt_lang,
+                        "segments": segments_for_mt,
+                        "error": str(ex),
+                    },
+                )
 
     # 5) tts.synthesize (line-aligned)
     t_stage = time.perf_counter()
     try:
-        tts.run(out_dir=out_dir, translated_json=translated_json, diarization_json=diar_json, wav_out=tts_wav, max_stretch=float(max_stretch))
+        tts.run(
+            out_dir=out_dir,
+            translated_json=translated_json,
+            diarization_json=diar_json,
+            wav_out=tts_wav,
+            max_stretch=float(max_stretch),
+        )
         logger.info("[v2] tts: ok (%.2fs) → %s", time.perf_counter() - t_stage, tts_wav)
     except Exception as ex:
         logger.exception("[v2] tts failed (continuing with silence track): %s", ex)
@@ -496,7 +651,9 @@ def cli(
         requested = {p.strip().lower() for p in (emit or "").split(",") if p.strip()}
         requested |= {"mkv", "mp4"}
         emit_set = tuple(sorted(requested))
-        cfg_mix = MixConfig(profile=mix_profile.lower(), separate_vocals=bool(separate_vocals), emit=emit_set)
+        cfg_mix = MixConfig(
+            profile=mix_profile.lower(), separate_vocals=bool(separate_vocals), emit=emit_set
+        )
         outs = mix(
             video_in=video,
             tts_wav=tts_wav,
@@ -507,8 +664,12 @@ def cli(
         if "mkv" in outs:
             dub_mkv = outs["mkv"]
         if "mp4" in outs:
-            dub_mp4 = outs["mp4"]
-        logger.info("[v2] mix: ok (%.2fs) → %s", time.perf_counter() - t_stage, ", ".join(str(p) for p in outs.values()))
+            _ = outs["mp4"]
+        logger.info(
+            "[v2] mix: ok (%.2fs) → %s",
+            time.perf_counter() - t_stage,
+            ", ".join(str(p) for p in outs.values()),
+        )
     except Exception as ex:
         logger.exception("[v2] mix failed; falling back to simple mux: %s", ex)
         try:

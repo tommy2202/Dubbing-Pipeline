@@ -36,7 +36,16 @@ def export_mkv(video_in: Path, dub_wav: Path, srt: Path | None, out_path: Path) 
 
     cmd += ["-map", "0:v:0", "-map", "1:a:0"]
     if srt is not None:
-        cmd += ["-map", "2:s:0", "-c:s", "srt", "-disposition:s:0", "default", "-metadata:s:s:0", "language=eng"]
+        cmd += [
+            "-map",
+            "2:s:0",
+            "-c:s",
+            "srt",
+            "-disposition:s:0",
+            "default",
+            "-metadata:s:s:0",
+            "language=eng",
+        ]
 
     cmd += [
         "-c:v",
@@ -56,7 +65,9 @@ def export_mkv(video_in: Path, dub_wav: Path, srt: Path | None, out_path: Path) 
     return out_path
 
 
-def export_mp4(video_in: Path, dub_wav: Path, srt: Path | None, out_path: Path, *, fragmented: bool = False) -> Path:
+def export_mp4(
+    video_in: Path, dub_wav: Path, srt: Path | None, out_path: Path, *, fragmented: bool = False
+) -> Path:
     """
     Browser-safe MP4:
       - video re-encoded to H.264 (libx264), yuv420p
@@ -96,7 +107,14 @@ def export_mp4(video_in: Path, dub_wav: Path, srt: Path | None, out_path: Path, 
     ]
 
     if srt is not None:
-        cmd += ["-c:s", "mov_text", "-disposition:s:0", "default", "-metadata:s:s:0", "language=eng"]
+        cmd += [
+            "-c:s",
+            "mov_text",
+            "-disposition:s:0",
+            "default",
+            "-metadata:s:s:0",
+            "language=eng",
+        ]
 
     movflags = ["+faststart"]
     if fragmented:
@@ -172,7 +190,7 @@ def export_hls(video_in: Path, dub_wav: Path, srt: Path | None, out_dir: Path) -
             [
                 "#EXTM3U",
                 "#EXT-X-VERSION:3",
-                "#EXT-X-STREAM-INF:BANDWIDTH=1600000,RESOLUTION=854x480,CODECS=\"avc1.42c01e,mp4a.40.2\"",
+                '#EXT-X-STREAM-INF:BANDWIDTH=1600000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"',
                 "stream.m3u8",
                 "",
             ]
@@ -184,4 +202,3 @@ def export_hls(video_in: Path, dub_wav: Path, srt: Path | None, out_dir: Path) -
         logger.info("[v2] export hls: subtitle kept as %s", srt)
     logger.info("[v2] export hls → %s", master)
     return master
-

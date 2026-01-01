@@ -5,7 +5,6 @@ from typing import Any
 from anime_v2.utils.config import get_settings
 from anime_v2.utils.log import logger
 
-
 _TERMINAL_PUNCT = set(".!?…。！？")
 
 
@@ -81,7 +80,9 @@ def _translate_with_nllb(texts: list[str], src: str, tgt: str, *, cache_dir=None
     return [o.get("translation_text", "") for o in outs]
 
 
-def translate_lines(lines: list[dict[str, Any]], src_lang: str, tgt_lang: str) -> list[dict[str, Any]]:
+def translate_lines(
+    lines: list[dict[str, Any]], src_lang: str, tgt_lang: str
+) -> list[dict[str, Any]]:
     """
     Translate `lines` while preserving segmentation.
 
@@ -94,7 +95,14 @@ def translate_lines(lines: list[dict[str, Any]], src_lang: str, tgt_lang: str) -
     # Detect source lang if needed
     effective_src = src_lang
     if src_lang.lower() == "auto":
-        probe = next((str(l.get("text", "")).strip() for l in lines if str(l.get("text", "")).strip()), "")
+        probe = next(
+            (
+                str(line.get("text", "")).strip()
+                for line in lines
+                if str(line.get("text", "")).strip()
+            ),
+            "",
+        )
         detected = _detect_lang(probe) if probe else None
         effective_src = detected or "auto"
         logger.info("[v2] translate: detected src_lang=%s", effective_src)
@@ -107,7 +115,7 @@ def translate_lines(lines: list[dict[str, Any]], src_lang: str, tgt_lang: str) -
     cache_dir = str(settings.transformers_cache) if settings.transformers_cache else None
 
     # Collect texts and translate in batches
-    texts = [str(l.get("text", "") or "") for l in lines]
+    texts = [str(line.get("text", "") or "") for line in lines]
 
     model_override = settings.translation_model
     if model_override:
@@ -116,12 +124,16 @@ def translate_lines(lines: list[dict[str, Any]], src_lang: str, tgt_lang: str) -
             pipe = _try_make_pipeline(model_override, cache_dir=cache_dir)
             out_texts = [o.get("translation_text", "") for o in pipe(texts)]
         except Exception as ex:
-            logger.warning("[v2] translate: model override failed (%s); returning original text", ex)
+            logger.warning(
+                "[v2] translate: model override failed (%s); returning original text", ex
+            )
             return lines
     else:
         # Try Marian first
         if effective_src.lower() == "auto":
-            logger.warning("[v2] translate: src_lang=auto but detection failed; returning original text")
+            logger.warning(
+                "[v2] translate: src_lang=auto but detection failed; returning original text"
+            )
             return lines
 
         marian = f"Helsinki-NLP/opus-mt-{effective_src}-{tgt_lang}"
@@ -132,7 +144,9 @@ def translate_lines(lines: list[dict[str, Any]], src_lang: str, tgt_lang: str) -
         except Exception as ex:
             logger.warning("[v2] translate: Marian unavailable (%s). Falling back to NLLB.", ex)
             try:
-                out_texts = _translate_with_nllb(texts, effective_src, tgt_lang, cache_dir=cache_dir)
+                out_texts = _translate_with_nllb(
+                    texts, effective_src, tgt_lang, cache_dir=cache_dir
+                )
             except Exception as ex2:
                 logger.warning("[v2] translate: NLLB failed (%s); returning original text", ex2)
                 return lines
@@ -140,8 +154,8 @@ def translate_lines(lines: list[dict[str, Any]], src_lang: str, tgt_lang: str) -
     # Preserve terminal punctuation if dropped; if a line translation fails/empties,
     # fall back to original line text.
     new_lines: list[dict[str, Any]] = []
-    for l, t_src, t_out in zip(lines, texts, out_texts):
-        new_l = dict(l)
+    for line, t_src, t_out in zip(lines, texts, out_texts, strict=False):
+        new_l = dict(line)
         out = (t_out or "").strip()
         if t_src.strip() and not out:
             out = t_src

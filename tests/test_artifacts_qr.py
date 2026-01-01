@@ -69,4 +69,3 @@ def test_job_files_and_qrcode(tmp_path: Path) -> None:
         qr = c.get("/api/jobs/j_art_1/qrcode", headers=headers)
         assert qr.status_code == 200
         assert qr.headers.get("content-type") == "image/png"
-

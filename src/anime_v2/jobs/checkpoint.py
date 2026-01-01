@@ -40,7 +40,9 @@ def _ckpt_path_from(meta: dict[str, Any] | None, *, ckpt_path: Path | None = Non
     raise RuntimeError("checkpoint path not provided (pass ckpt_path=... or meta['work_dir'])")
 
 
-def read_ckpt(job_id: str, *, ckpt_path: Path | None = None, meta: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def read_ckpt(
+    job_id: str, *, ckpt_path: Path | None = None, meta: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     path = _ckpt_path_from(meta, ckpt_path=ckpt_path)
     if not path.exists():
         return None
@@ -135,4 +137,3 @@ def advance_stage(
     ckpt_path: Path | None = None,
 ) -> Path:
     return write_ckpt(job_id, next_stage, artifacts, meta, ckpt_path=ckpt_path)
-

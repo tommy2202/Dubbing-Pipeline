@@ -21,11 +21,22 @@ def test_idempotency_key_returns_same_job_id(tmp_path: Path) -> None:
     with TestClient(app) as c:
         r = c.post("/auth/login", json={"username": "admin", "password": "adminpass"})
         token = r.json()["access_token"]
-        headers = {"Authorization": f"Bearer {token}", "X-CSRF-Token": r.json()["csrf_token"], "Idempotency-Key": "abc123"}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-CSRF-Token": r.json()["csrf_token"],
+            "Idempotency-Key": "abc123",
+        }
 
-        r1 = c.post("/api/jobs", headers=headers, json={"video_path": "/workspace/Input/Test.mp4", "device": "cpu", "mode": "low"})
-        r2 = c.post("/api/jobs", headers=headers, json={"video_path": "/workspace/Input/Test.mp4", "device": "cpu", "mode": "low"})
+        r1 = c.post(
+            "/api/jobs",
+            headers=headers,
+            json={"video_path": "/workspace/Input/Test.mp4", "device": "cpu", "mode": "low"},
+        )
+        r2 = c.post(
+            "/api/jobs",
+            headers=headers,
+            json={"video_path": "/workspace/Input/Test.mp4", "device": "cpu", "mode": "low"},
+        )
         assert r1.status_code == 200
         assert r2.status_code == 200
         assert r1.json()["id"] == r2.json()["id"]
-

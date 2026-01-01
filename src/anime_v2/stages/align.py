@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,7 +109,9 @@ def retime_tts(wav_in: Path, *, target_duration_s: float, max_stretch: float = 0
         return wav_in
 
 
-def _aeneas_align(audio_path: Path, fragments: list[str], *, lang: str) -> list[tuple[float, float] | None]:
+def _aeneas_align(
+    audio_path: Path, fragments: list[str], *, lang: str
+) -> list[tuple[float, float] | None]:
     """
     Returns list of (start,end) for each fragment index, or None if alignment failed for that fragment.
     """
@@ -159,7 +160,9 @@ def _aeneas_align(audio_path: Path, fragments: list[str], *, lang: str) -> list[
         return aligned[: len(fragments)]
 
 
-def realign_srt(audio_path: Path, segments: list[dict[str, Any]], cfg: AlignConfig) -> list[dict[str, Any]]:
+def realign_srt(
+    audio_path: Path, segments: list[dict[str, Any]], cfg: AlignConfig
+) -> list[dict[str, Any]]:
     """
     Adjust segment start/end to match speech in audio_path.
     Preserves all segment fields; updates start/end and adds alignment metadata.
@@ -197,7 +200,7 @@ def realign_srt(audio_path: Path, segments: list[dict[str, Any]], cfg: AlignConf
         lang = "jpn" if langs.count("jpn") >= langs.count("eng") else "eng"
         try:
             times = _aeneas_align(audio_path, fragments, lang=lang)
-            for s, te in zip(segs, times):
+            for s, te in zip(segs, times, strict=False):
                 if te is None:
                     continue
                 s["start"] = float(te[0])
@@ -238,7 +241,11 @@ def realign_srt(audio_path: Path, segments: list[dict[str, Any]], cfg: AlignConf
 
         # Ensure minimum positive duration
         if en2 <= st2:
-            en2 = min(st2 + 0.3, float(segs[i + 1].get("start", st2 + 0.3)) - 0.01) if i + 1 < len(segs) else st2 + 0.3
+            en2 = (
+                min(st2 + 0.3, float(segs[i + 1].get("start", st2 + 0.3)) - 0.01)
+                if i + 1 < len(segs)
+                else st2 + 0.3
+            )
 
         s["start"] = max(0.0, float(st2))
         s["end"] = max(float(s["start"]) + 0.05, float(en2))
@@ -258,4 +265,3 @@ def realign_srt(audio_path: Path, segments: list[dict[str, Any]], cfg: AlignConf
         prev_end = s["end"]
 
     return segs
-

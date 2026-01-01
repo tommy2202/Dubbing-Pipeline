@@ -1,11 +1,12 @@
-import pathlib
 import json
-import tempfile
+import pathlib
 import subprocess
-from typing import Optional, List
-from anime_v1.utils import logger, checkpoints
+import tempfile
+
 from pydub import AudioSegment
-import importlib
+
+from anime_v1.utils import logger
+
 try:
     import torch  # type: ignore
 except Exception:  # pragma: no cover
@@ -40,7 +41,9 @@ def _load_coqui(model_name: str = "tts_models/en/vctk/vits"):
         return None
 
 
-def _speak_with_coqui(tts, text: str, outfile: pathlib.Path, *, speaker_wav: Optional[pathlib.Path] = None) -> bool:
+def _speak_with_coqui(
+    tts, text: str, outfile: pathlib.Path, *, speaker_wav: pathlib.Path | None = None
+) -> bool:
     try:
         kwargs = {"text": text, "file_path": str(outfile)}
         # Speaker (if model supports multi-speaker)
@@ -56,14 +59,17 @@ def _speak_with_coqui(tts, text: str, outfile: pathlib.Path, *, speaker_wav: Opt
         return False
 
 
-def _speak_with_espeak(text: str, outfile: pathlib.Path, lang: str = "en", speed_wpm: int = 175) -> bool:
+def _speak_with_espeak(
+    text: str, outfile: pathlib.Path, lang: str = "en", speed_wpm: int = 175
+) -> bool:
     try:
         # espeak-ng writes WAV via -w
         cmd = [
             "espeak-ng",
             f"-v{lang}",
             f"-s{speed_wpm}",
-            "-w", str(outfile),
+            "-w",
+            str(outfile),
             text,
         ]
         subprocess.run(cmd, check=True)
@@ -73,14 +79,16 @@ def _speak_with_espeak(text: str, outfile: pathlib.Path, lang: str = "en", speed
         return False
 
 
-def _speak_with_tortoise(text: str, outfile: pathlib.Path, *, speaker_wav: Optional[pathlib.Path] = None) -> bool:
+def _speak_with_tortoise(
+    text: str, outfile: pathlib.Path, *, speaker_wav: pathlib.Path | None = None
+) -> bool:
     """Try to synthesize using Tortoise-TTS if installed.
 
     This supports optional cloning via a single reference WAV when provided.
     """
     try:
-        from tortoise.api import TextToSpeech  # type: ignore
         import torchaudio  # type: ignore
+        from tortoise.api import TextToSpeech  # type: ignore
     except Exception as ex:  # pragma: no cover
         logger.warning("Tortoise-TTS not available (%s)", ex)
         return False
@@ -113,7 +121,7 @@ def _time_stretch_with_ffmpeg(in_wav: pathlib.Path, out_wav: pathlib.Path, tempo
     """Time-stretch using ffmpeg atempo (chain if out of range)."""
     try:
         # Build a chain of atempo filters within [0.5, 2.0]
-        factors: List[float] = []
+        factors: list[float] = []
         remaining = tempo
         while remaining > 2.0:
             factors.append(2.0)
@@ -125,8 +133,12 @@ def _time_stretch_with_ffmpeg(in_wav: pathlib.Path, out_wav: pathlib.Path, tempo
             factors.append(remaining)
         filt = ",".join(f"atempo={f:.5f}" for f in factors)
         cmd = [
-            "ffmpeg", "-y", "-i", str(in_wav),
-            "-filter:a", filt,
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(in_wav),
+            "-filter:a",
+            filt,
             str(out_wav),
         ]
         subprocess.run(cmd, check=True)
@@ -152,7 +164,9 @@ def _align_to_duration(seg_wav: pathlib.Path, target_ms: int) -> AudioSegment:
             tmp_out.unlink(missing_ok=True)
     # Fallback: pad or trim without time-stretch
     if current_ms < target_ms:
-        return audio + AudioSegment.silent(duration=(target_ms - current_ms), frame_rate=audio.frame_rate)
+        return audio + AudioSegment.silent(
+            duration=(target_ms - current_ms), frame_rate=audio.frame_rate
+        )
     return audio[:target_ms]
 
 
@@ -162,7 +176,7 @@ def run(
     *,
     tgt_lang: str = "en",
     preference: str = "default",
-    source_audio: Optional[pathlib.Path] = None,
+    source_audio: pathlib.Path | None = None,
     **_,
 ):
     out = ckpt_dir / "dubbed.wav"

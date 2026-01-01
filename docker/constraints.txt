@@ -66,3 +66,10 @@ pyloudnorm==0.1.1
 
 # optional music/vocals separation
 demucs==4.0.1
+
+# dev tooling
+black==24.10.0
+ruff==0.6.9
+mypy==1.13.0
+pytest==8.3.3
+types-requests==2.32.0.20241016

@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import suppress
 from pathlib import Path
 
-from anime_v2.utils.log import logger
-from anime_v2.utils.time import format_srt_timestamp
-from anime_v2.utils.net import egress_guard
-from anime_v2.runtime.model_manager import ModelManager
-from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
-from anime_v2.utils.circuit import Circuit
-from anime_v2.utils.retry import retry_call
-from anime_v2.config import get_settings
 from anime_v2.cache.store import cache_get, cache_put, make_key
+from anime_v2.config import get_settings
+from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from anime_v2.runtime.model_manager import ModelManager
+from anime_v2.utils.circuit import Circuit
+from anime_v2.utils.log import logger
+from anime_v2.utils.net import egress_guard
+from anime_v2.utils.retry import retry_call
+from anime_v2.utils.time import format_srt_timestamp
 
 
 def _write_srt(segments: list[dict], srt_path: Path) -> None:
@@ -49,13 +50,11 @@ def transcribe(
         raise ValueError(f"task must be translate|transcribe, got {task!r}")
 
     if task == "translate" and tgt_lang.lower() != "en":
-        raise ValueError("Whisper 'translate' pathway outputs English only; set --tgt-lang en or use --no-translate.")
+        raise ValueError(
+            "Whisper 'translate' pathway outputs English only; set --tgt-lang en or use --no-translate."
+        )
 
-    lang_opt: str | None
-    if src_lang.lower() == "auto":
-        lang_opt = None
-    else:
-        lang_opt = src_lang
+    lang_opt: str | None = None if src_lang.lower() == "auto" else src_lang
 
     logger.info(
         "[v2] Whisper transcribe: model=%s device=%s task=%s src_lang=%s tgt_lang=%s",
@@ -88,7 +87,7 @@ def transcribe(
             return srt_out
 
     try:
-        import whisper  # type: ignore
+        pass  # type: ignore
     except Exception as ex:  # pragma: no cover
         # Degraded mode: still produce an empty SRT + metadata so the pipeline can
         # persist artifacts even when Whisper isn't installed in the environment.
@@ -113,16 +112,19 @@ def transcribe(
         meta_path = srt_out.with_suffix(".json")
         meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
         if job_id:
-            try:
+            with suppress(Exception):
                 write_ckpt(
                     job_id,
                     "transcribe",
                     {"srt": srt_out, "meta": meta_path},
-                    {"work_dir": str(srt_out.parent), "model": model_name, "device": device, "task": task},
+                    {
+                        "work_dir": str(srt_out.parent),
+                        "model": model_name,
+                        "device": device,
+                        "task": task,
+                    },
                     ckpt_path=ckpt_path,
                 )
-            except Exception:
-                pass
         return srt_out
 
     attempts: list[dict] = []
@@ -134,12 +136,18 @@ def transcribe(
     if audio_hash:
         key = make_key(
             "transcribe",
-            {"audio": audio_hash, "model": model_name, "task": task, "src": src_lang, "tgt": tgt_lang},
+            {
+                "audio": audio_hash,
+                "model": model_name,
+                "task": task,
+                "src": src_lang,
+                "tgt": tgt_lang,
+            },
         )
         hit = cache_get(key)
         if hit:
             paths = hit.get("paths", {})
-            try:
+            with suppress(Exception):
                 src_srt = Path(str(paths.get("srt")))
                 src_meta = Path(str(paths.get("meta")))
                 if src_srt.exists() and src_meta.exists():
@@ -148,8 +156,6 @@ def transcribe(
                     srt_out.with_suffix(".json").write_bytes(src_meta.read_bytes())
                     logger.info("[v2] transcribe cache hit", key=key)
                     return srt_out
-            except Exception:
-                pass
 
     for cand_model in _fallback_chain(model_name):
         # circuit open => degrade to CPU for this attempt (and skip if even CPU is blocked by circuit)
@@ -161,10 +167,17 @@ def transcribe(
                 cand_device = "cpu"
             else:
                 # already cpu and breaker open => try next model (or ultimately fail)
-                attempts.append({"model": cand_model, "device": cand_device, "skipped": True, "reason": f"breaker_{breaker_state}"})
+                attempts.append(
+                    {
+                        "model": cand_model,
+                        "device": cand_device,
+                        "skipped": True,
+                        "reason": f"breaker_{breaker_state}",
+                    }
+                )
                 continue
 
-        def _do_once():
+        def _do_once(*, cand_model=cand_model, cand_device=cand_device):
             with egress_guard():
                 mm = ModelManager.instance()
                 with mm.acquire_whisper(cand_model, cand_device) as model:
@@ -177,21 +190,45 @@ def transcribe(
 
         tries = {"n": 0}
 
-        def _on_retry(n, delay, ex):
+        def _on_retry(n, delay, ex, *, tries=tries, cand_model=cand_model, cand_device=cand_device):
             tries["n"] = n
-            logger.warning("whisper_retry", model=cand_model, device=cand_device, attempt=n, delay_s=delay, error=str(ex))
+            logger.warning(
+                "whisper_retry",
+                model=cand_model,
+                device=cand_device,
+                attempt=n,
+                delay_s=delay,
+                error=str(ex),
+            )
 
         try:
-            result = retry_call(_do_once, retries=s.retry_max, base=s.retry_base_sec, cap=s.retry_cap_sec, jitter=True, on_retry=_on_retry)
+            result = retry_call(
+                _do_once,
+                retries=s.retry_max,
+                base=s.retry_base_sec,
+                cap=s.retry_cap_sec,
+                jitter=True,
+                on_retry=_on_retry,
+            )
             cb.mark_success()
             chosen_model = cand_model
             chosen_device = cand_device
-            attempts.append({"model": cand_model, "device": cand_device, "ok": True, "retries": tries["n"]})
+            attempts.append(
+                {"model": cand_model, "device": cand_device, "ok": True, "retries": tries["n"]}
+            )
             break
         except Exception as ex:
             cb.mark_failure()
-            attempts.append({"model": cand_model, "device": cand_device, "ok": False, "error": str(ex)})
-            logger.warning("whisper_failed", model=cand_model, device=cand_device, error=str(ex), breaker=cb.snapshot().state)
+            attempts.append(
+                {"model": cand_model, "device": cand_device, "ok": False, "error": str(ex)}
+            )
+            logger.warning(
+                "whisper_failed",
+                model=cand_model,
+                device=cand_device,
+                error=str(ex),
+                breaker=cb.snapshot().state,
+            )
             continue
 
     if chosen_model is None:
@@ -243,26 +280,33 @@ def transcribe(
     meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
 
     if audio_hash:
-        try:
+        with suppress(Exception):
             key = make_key(
                 "transcribe",
-                {"audio": audio_hash, "model": chosen_model or model_name, "task": task, "src": src_lang, "tgt": tgt_lang},
+                {
+                    "audio": audio_hash,
+                    "model": chosen_model or model_name,
+                    "task": task,
+                    "src": src_lang,
+                    "tgt": tgt_lang,
+                },
             )
             cache_put(key, {"srt": srt_out, "meta": meta_path}, meta={"created_at": time.time()})
-        except Exception:
-            pass
 
     if job_id:
-        try:
+        with suppress(Exception):
             write_ckpt(
                 job_id,
                 "transcribe",
                 {"srt": srt_out, "meta": meta_path},
-                {"work_dir": str(srt_out.parent), "model": model_name, "device": device, "task": task},
+                {
+                    "work_dir": str(srt_out.parent),
+                    "model": model_name,
+                    "device": device,
+                    "task": task,
+                },
                 ckpt_path=ckpt_path,
             )
-        except Exception:
-            pass
 
     logger.info("[v2] Wrote SRT → %s", srt_out)
     logger.info("[v2] Wrote metadata → %s", meta_path)
@@ -273,4 +317,3 @@ def transcribe(
 def run(wav: Path, ckpt_dir: Path, **kwargs) -> Path:  # pragma: no cover
     srt_out = ckpt_dir / f"{wav.stem}.srt"
     return transcribe(audio_path=wav, srt_out=srt_out, **kwargs)
-

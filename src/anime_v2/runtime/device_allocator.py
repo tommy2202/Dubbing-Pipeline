@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass
 from typing import Literal
@@ -102,7 +101,12 @@ def pick_device(prefer: Literal["auto", "cuda", "cpu"] = "auto") -> str:
         logger.warning("gpu_status_unavailable; falling back to cpu")
         return "cpu"
     if st.util_ratio >= util_max or st.mem_ratio >= mem_max:
-        logger.info("gpu_saturated; using cpu", util=st.util_ratio, mem=st.mem_ratio, util_max=util_max, mem_max=mem_max)
+        logger.info(
+            "gpu_saturated; using cpu",
+            util=st.util_ratio,
+            mem=st.mem_ratio,
+            util_max=util_max,
+            mem_max=mem_max,
+        )
         return "cpu"
     return "cuda"
-

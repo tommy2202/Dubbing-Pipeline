@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -88,11 +89,15 @@ def _read_style(path: str | None, *, show_id: str | None = None) -> dict[str, An
         return out
 
 
-_HONORIFIC_RE = re.compile(r"\b([A-Za-z][A-Za-z']*)[- ]?(san|chan|sama|kun|sensei)\b", re.IGNORECASE)
+_HONORIFIC_RE = re.compile(
+    r"\b([A-Za-z][A-Za-z']*)[- ]?(san|chan|sama|kun|sensei)\b", re.IGNORECASE
+)
 
 
 def _apply_style(text: str, style: dict[str, Any]) -> str:
-    honorific = str(style.get("honorifics", "") or style.get("honorific_policy", "") or "keep").lower()
+    honorific = str(
+        style.get("honorifics", "") or style.get("honorific_policy", "") or "keep"
+    ).lower()
     profanity = str(style.get("profanity", "allow")).lower()
 
     out = text
@@ -116,7 +121,9 @@ def _apply_style(text: str, style: dict[str, Any]) -> str:
     return out
 
 
-def _glossary_required_terms(src_text: str, glossary: list[tuple[str, str]]) -> list[tuple[str, str]]:
+def _glossary_required_terms(
+    src_text: str, glossary: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
     req = []
     for src, tgt in glossary:
         if src and src in src_text:
@@ -126,13 +133,12 @@ def _glossary_required_terms(src_text: str, glossary: list[tuple[str, str]]) -> 
 
 def _glossary_respected(tgt_text: str, required: list[tuple[str, str]]) -> bool:
     low = tgt_text.lower()
-    for _, tgt in required:
-        if tgt.lower() not in low:
-            return False
-    return True
+    return all(tgt.lower() in low for _, tgt in required)
 
 
-def _glossary_inject(src_text: str, required: list[tuple[str, str]]) -> tuple[str, list[dict[str, Any]]]:
+def _glossary_inject(
+    src_text: str, required: list[tuple[str, str]]
+) -> tuple[str, list[dict[str, Any]]]:
     """
     Force glossary terms into MT input by substituting src term with desired tgt term.
     Returns modified src_text and annotations.
@@ -170,11 +176,13 @@ def _translate_nllb(text: str, src_lang: str, tgt_lang: str) -> str:
     return str(out or "")
 
 
-def _whisper_translate(audio_path: str, *, device: str, model_name: str, src_lang: str) -> list[dict]:
+def _whisper_translate(
+    audio_path: str, *, device: str, model_name: str, src_lang: str
+) -> list[dict]:
     try:
         import whisper  # type: ignore
     except Exception as ex:
-        raise RuntimeError(f"whisper not installed: {ex}")
+        raise RuntimeError(f"whisper not installed: {ex}") from ex
     lang_opt = None if src_lang.lower() == "auto" else src_lang
     with egress_guard():
         model = whisper.load_model(model_name, device=device)
@@ -226,7 +234,9 @@ def translate_segments(
         try:
             if not cfg.audio_path:
                 raise RuntimeError("audio_path not provided for whisper translate")
-            whisper_segs = _whisper_translate(cfg.audio_path, device=cfg.device, model_name=cfg.whisper_model, src_lang=src_lang)
+            whisper_segs = _whisper_translate(
+                cfg.audio_path, device=cfg.device, model_name=cfg.whisper_model, src_lang=src_lang
+            )
             whisper_ok = True
         except Exception:
             whisper_ok = False
@@ -266,10 +276,8 @@ def translate_segments(
                 ov = _overlap(start, end, float(w["start"]), float(w["end"]))
                 if ov > 0.0:
                     chunks.append(str(w.get("text") or ""))
-                    try:
+                    with suppress(Exception):
                         confs.append(float(w.get("avg_logprob")))
-                    except Exception:
-                        pass
             base_text = " ".join([c.strip() for c in chunks if c.strip()]).strip()
             base_conf = (sum(confs) / len(confs)) if confs else base_conf
         else:
@@ -292,11 +300,11 @@ def translate_segments(
         fallback_used = False
 
         # Fallback for low confidence or glossary mismatch: use Marian/NLLB line-by-line.
-        if (engine == "auto" and (not final_text or lowconf or not glossary_ok)) or engine in {"marian", "nllb"}:
-            if engine == "auto":
-                preferred = "marian"
-            else:
-                preferred = engine
+        if (engine == "auto" and (not final_text or lowconf or not glossary_ok)) or engine in {
+            "marian",
+            "nllb",
+        }:
+            preferred = "marian" if engine == "auto" else engine
             injected, glossary_ann2 = _glossary_inject(src_text, required)
             glossary_ann.extend(glossary_ann2)
             try:
@@ -338,4 +346,3 @@ def translate_segments(
         )
 
     return out
-

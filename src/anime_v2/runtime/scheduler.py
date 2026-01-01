@@ -5,15 +5,16 @@ import os
 import random
 import threading
 import time
-from contextlib import contextmanager
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any
 
 from anime_v2.config import get_settings
-from anime_v2.jobs.models import Job, JobState
+from anime_v2.jobs.models import JobState
 from anime_v2.jobs.store import JobStore
-from anime_v2.runtime import lifecycle
 from anime_v2.ops.metrics import pipeline_job_degraded_total
+from anime_v2.runtime import lifecycle
 from anime_v2.utils.log import logger
 
 
@@ -90,7 +91,7 @@ class Scheduler:
     - optional Redis mutex reduces multi-instance scheduling stampede (best-effort)
     """
 
-    _singleton: "Scheduler | None" = None
+    _singleton: Scheduler | None = None
     _singleton_lock = threading.Lock()
 
     def __init__(self, *, store: JobStore, enqueue_cb) -> None:
@@ -121,20 +122,24 @@ class Scheduler:
             "mux": threading.Semaphore(max(1, self._max_global)),
         }
 
-        self._redis_mutex = _RedisMutex(s.redis_url, "anime_v2:scheduler:dispatch") if s.redis_url else None
-        self._thread = threading.Thread(target=self._dispatch_loop, name="anime_v2.scheduler", daemon=True)
+        self._redis_mutex = (
+            _RedisMutex(s.redis_url, "anime_v2:scheduler:dispatch") if s.redis_url else None
+        )
+        self._thread = threading.Thread(
+            target=self._dispatch_loop, name="anime_v2.scheduler", daemon=True
+        )
 
     @classmethod
-    def install(cls, sched: "Scheduler") -> None:
+    def install(cls, sched: Scheduler) -> None:
         with cls._singleton_lock:
             cls._singleton = sched
 
     @classmethod
-    def instance_optional(cls) -> "Scheduler | None":
+    def instance_optional(cls) -> Scheduler | None:
         return cls._singleton
 
     @classmethod
-    def instance(cls) -> "Scheduler":
+    def instance(cls) -> Scheduler:
         s = cls._singleton
         if s is None:
             raise RuntimeError("Scheduler not installed")
@@ -143,7 +148,13 @@ class Scheduler:
     def start(self) -> None:
         if not self._thread.is_alive():
             self._thread.start()
-            logger.info("scheduler_started", max_global=self._max_global, transcribe=self._max_transcribe, tts=self._max_tts, bp_qmax=self._bp_qmax)
+            logger.info(
+                "scheduler_started",
+                max_global=self._max_global,
+                transcribe=self._max_transcribe,
+                tts=self._max_tts,
+                bp_qmax=self._bp_qmax,
+            )
 
     def stop(self) -> None:
         with self._cv:
@@ -168,7 +179,13 @@ class Scheduler:
             if self._bp_qmax >= 0 and qlen > self._bp_qmax:
                 new_mode = _next_lower_mode(mode)
                 if new_mode != mode:
-                    logger.info("scheduler_backpressure_degrade", job_id=job.job_id, from_mode=mode, to_mode=new_mode, qlen=qlen)
+                    logger.info(
+                        "scheduler_backpressure_degrade",
+                        job_id=job.job_id,
+                        from_mode=mode,
+                        to_mode=new_mode,
+                        qlen=qlen,
+                    )
                     mode = new_mode
                     # reflect mode into persisted job
                     try:
@@ -181,26 +198,39 @@ class Scheduler:
                             rt["metadata"].setdefault("degraded_reasons", [])
                             if isinstance(rt["metadata"]["degraded_reasons"], list):
                                 rt["metadata"]["degraded_reasons"].append("backpressure_degraded")
-                        try:
+                        with suppress(Exception):
                             pipeline_job_degraded_total.inc()
-                        except Exception:
-                            pass
-                        self.store.update(job.job_id, mode=mode, message=f"Backpressure: degraded to {mode}", runtime=rt)
+                        self.store.update(
+                            job.job_id,
+                            mode=mode,
+                            message=f"Backpressure: degraded to {mode}",
+                            runtime=rt,
+                        )
                     except Exception:
-                        pass
+                        ...
                 else:
                     # already low => delay with jitter/backoff
-                    delay = min(30.0, 0.5 + (qlen - max(0, self._bp_qmax)) * 0.75 + random.random() * 0.75)
+                    delay = min(
+                        30.0, 0.5 + (qlen - max(0, self._bp_qmax)) * 0.75 + random.random() * 0.75
+                    )
                     available_at += delay
-                    logger.info("scheduler_backpressure_delay", job_id=job.job_id, delay_s=delay, qlen=qlen)
-                    try:
+                    logger.info(
+                        "scheduler_backpressure_delay", job_id=job.job_id, delay_s=delay, qlen=qlen
+                    )
+                    with suppress(Exception):
                         self.store.update(job.job_id, message=f"Backpressure: delayed {delay:.1f}s")
-                    except Exception:
-                        pass
 
-            rec = JobRecord(job_id=job.job_id, mode=mode, device_pref=job.device_pref, created_at=job.created_at, priority=job.priority)
+            rec = JobRecord(
+                job_id=job.job_id,
+                mode=mode,
+                device_pref=job.device_pref,
+                created_at=job.created_at,
+                priority=job.priority,
+            )
             self._seq += 1
-            heapq.heappush(self._heap, (available_at, int(rec.priority), float(rec.created_at), self._seq, rec))
+            heapq.heappush(
+                self._heap, (available_at, int(rec.priority), float(rec.created_at), self._seq, rec)
+            )
             self._cv.notify_all()
 
     def on_job_done(self, job_id: str) -> None:
@@ -280,16 +310,18 @@ class Scheduler:
             if rec.device_pref and rec.device_pref != job.device:
                 job = self.store.update(rec.job_id, device=rec.device_pref) or job
         except Exception:
-            pass
+            ...
 
         try:
             self._enqueue_cb(job)
             logger.info("scheduler_enqueued", job_id=rec.job_id, mode=job.mode, device=job.device)
         except Exception as ex:
             logger.warning("scheduler_enqueue_failed", job_id=rec.job_id, error=str(ex))
-            try:
-                self.store.update(rec.job_id, state=JobState.FAILED, message="Scheduler enqueue failed", error=str(ex))
-            except Exception:
-                pass
+            with suppress(Exception):
+                self.store.update(
+                    rec.job_id,
+                    state=JobState.FAILED,
+                    message="Scheduler enqueue failed",
+                    error=str(ex),
+                )
             self.on_job_done(rec.job_id)
-

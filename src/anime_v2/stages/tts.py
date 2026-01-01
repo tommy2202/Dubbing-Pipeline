@@ -4,17 +4,18 @@ import os
 import subprocess
 import time
 import wave
+from contextlib import suppress
 from pathlib import Path
 
+from anime_v2.cache.store import cache_get, cache_put, make_key
+from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from anime_v2.stages.character_store import CharacterStore
+from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
+from anime_v2.utils.circuit import Circuit
 from anime_v2.utils.config import get_settings
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
-from anime_v2.stages.character_store import CharacterStore
-from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
-from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
-from anime_v2.utils.circuit import Circuit
 from anime_v2.utils.retry import retry_call
-from anime_v2.cache.store import cache_get, cache_put, make_key
 
 
 class TTSCanceled(Exception):
@@ -35,7 +36,7 @@ def _parse_srt(path: Path) -> list[dict]:
         lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
         if len(lines) < 2 or "-->" not in lines[1]:
             continue
-        start_s, end_s = [p.strip() for p in lines[1].split("-->", 1)]
+        start_s, end_s = (p.strip() for p in lines[1].split("-->", 1))
         start = parse_ts(start_s)
         end = parse_ts(end_s)
         cue_text = " ".join(lines[2:]).strip() if len(lines) > 2 else ""
@@ -77,12 +78,19 @@ def _write_silence_wav(path: Path, *, duration_s: float, sr: int = 16000) -> Non
 def _espeak_fallback(text: str, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(["espeak-ng", "-w", str(out_path), text], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["espeak-ng", "-w", str(out_path), text],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     except Exception as ex:
         raise RuntimeError(f"espeak-ng failed: {ex}") from ex
 
 
-def render_aligned_track(lines: list[dict], clip_paths: list[Path], out_wav: Path, *, sr: int = 16000) -> None:
+def render_aligned_track(
+    lines: list[dict], clip_paths: list[Path], out_wav: Path, *, sr: int = 16000
+) -> None:
     """
     Render a single aligned WAV track by padding silence between segments.
     Best-effort: if clips overlap, later clips overwrite earlier samples.
@@ -91,12 +99,12 @@ def render_aligned_track(lines: list[dict], clip_paths: list[Path], out_wav: Pat
         _write_silence_wav(out_wav, duration_s=0.0, sr=sr)
         return
 
-    end_t = max(float(l["end"]) for l in lines)
+    end_t = max(float(line["end"]) for line in lines)
     total_frames = max(1, int(end_t * sr))
     buf = bytearray(b"\x00\x00" * total_frames)
 
-    for l, clip in zip(lines, clip_paths):
-        start = float(l["start"])
+    for line, clip in zip(lines, clip_paths, strict=False):
+        start = float(line["start"])
         start_i = max(0, int(start * sr))
         try:
             with wave.open(str(clip), "rb") as wf:
@@ -153,7 +161,9 @@ def run(
         if voice_map_path:
             vm = read_json(Path(voice_map_path), default={})
             if isinstance(vm, dict):
-                voice_map = {str(k): str(v) for k, v in vm.items() if str(k).strip() and str(v).strip()}
+                voice_map = {
+                    str(k): str(v) for k, v in vm.items() if str(k).strip() and str(v).strip()
+                }
     except Exception:
         voice_map = {}
 
@@ -204,7 +214,9 @@ def run(
                             {
                                 "start": float(s["start"]),
                                 "end": float(s["end"]),
-                                "speaker_id": str(s.get("speaker") or s.get("speaker_id") or "SPEAKER_01"),
+                                "speaker_id": str(
+                                    s.get("speaker") or s.get("speaker_id") or "SPEAKER_01"
+                                ),
                                 "text": str(s.get("text") or ""),
                             }
                         )
@@ -229,10 +241,8 @@ def run(
             emb_map = diar.get("speaker_embeddings", {})
             if isinstance(emb_map, dict):
                 for sid, p in emb_map.items():
-                    try:
+                    with suppress(Exception):
                         speaker_embeddings[str(sid)] = Path(str(p))
-                    except Exception:
-                        pass
             if isinstance(segs, list):
                 best: dict[str, tuple[float, Path]] = {}
                 for s in segs:
@@ -248,10 +258,8 @@ def run(
 
     # CharacterStore speaker_wavs (cross-episode persistence)
     store = CharacterStore.default()
-    try:
+    with suppress(Exception):
         store.load()
-    except Exception:
-        pass
 
     # Engine (lazy-loaded per run)
     engine: CoquiXTTS | None = None
@@ -269,44 +277,44 @@ def run(
 
     total = len(lines)
     if progress_cb is not None:
-        try:
+        with suppress(Exception):
             progress_cb(0, total)
-        except Exception:
-            pass
 
-    for i, l in enumerate(lines):
+    for i, line in enumerate(lines):
+        should_cancel = False
         if cancel_cb is not None:
             try:
-                if bool(cancel_cb()):
-                    raise TTSCanceled()
-            except TTSCanceled:
-                raise
+                should_cancel = bool(cancel_cb())
             except Exception:
                 # ignore cancel callback errors
-                pass
+                should_cancel = False
+        if should_cancel:
+            raise TTSCanceled()
 
-        text = str(l.get("text", "") or "").strip()
-        speaker_id = str(l.get("speaker_id") or settings.tts_speaker or "default")
+        text = str(line.get("text", "") or "").strip()
+        speaker_id = str(line.get("speaker_id") or settings.tts_speaker or "default")
         if not text:
             # keep timing, but skip synthesis (silence clip)
             clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
-            _write_silence_wav(clip, duration_s=max(0.0, float(l["end"]) - float(l["start"])))
+            _write_silence_wav(clip, duration_s=max(0.0, float(line["end"]) - float(line["start"])))
             _ffmpeg_to_pcm16k(clip, clip)
             clip_paths.append(clip)
             if progress_cb is not None:
-                try:
+                with suppress(Exception):
                     progress_cb(i + 1, total)
-                except Exception:
-                    pass
             continue
 
         raw_clip = clips_dir / f"{i:04d}_{speaker_id}.raw.wav"
         clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
 
         # Choose clone speaker wav:
-        speaker_wav = per_speaker_wav_override.get(speaker_id) or settings.tts_speaker_wav or speaker_rep_wav.get(speaker_id)
+        speaker_wav = (
+            per_speaker_wav_override.get(speaker_id)
+            or settings.tts_speaker_wav
+            or speaker_rep_wav.get(speaker_id)
+        )
         if speaker_wav is None:
-            try:
+            with suppress(Exception):
                 c = store.characters.get(speaker_id)
                 if c and c.speaker_wavs:
                     for p in c.speaker_wavs:
@@ -314,17 +322,21 @@ def run(
                         if pp.exists():
                             speaker_wav = pp
                             break
-            except Exception:
-                pass
 
         synthesized = False
-        fallback_used = None
 
         def _retry_wrap(fn_name: str, fn):
             def _on_retry(n, delay, ex):
                 logger.warning("tts_retry", method=fn_name, attempt=n, delay_s=delay, error=str(ex))
 
-            return retry_call(fn, retries=int(os.environ.get("RETRY_MAX", "3")), base=float(os.environ.get("RETRY_BASE_SEC", "0.5")), cap=float(os.environ.get("RETRY_CAP_SEC", "8.0")), jitter=True, on_retry=_on_retry)
+            return retry_call(
+                fn,
+                retries=int(os.environ.get("RETRY_MAX", "3")),
+                base=float(os.environ.get("RETRY_BASE_SEC", "0.5")),
+                cap=float(os.environ.get("RETRY_CAP_SEC", "8.0")),
+                jitter=True,
+                on_retry=_on_retry,
+            )
 
         # If breaker is open, skip XTTS and go straight to fallbacks.
         if engine is not None and cb.allow():
@@ -333,19 +345,30 @@ def run(
                 try:
                     _retry_wrap(
                         "xtts_clone",
-                        lambda: engine.synthesize(text, language=settings.tts_lang, speaker_wav=speaker_wav, out_path=raw_clip),
+                        lambda text=text, speaker_wav=speaker_wav, raw_clip=raw_clip: engine.synthesize(
+                            text,
+                            language=settings.tts_lang,
+                            speaker_wav=speaker_wav,
+                            out_path=raw_clip,
+                        ),
                     )
                     cb.mark_success()
                     synthesized = True
                 except Exception as ex:
                     cb.mark_failure()
-                    logger.warning("tts_xtts_clone_failed", error=str(ex), breaker=cb.snapshot().state)
+                    logger.warning(
+                        "tts_xtts_clone_failed", error=str(ex), breaker=cb.snapshot().state
+                    )
                     synthesized = False
 
             # 2) XTTS preset
             if not synthesized:
                 # Choose best preset if we have speaker embedding; else default preset
-                preset = per_speaker_preset_override.get(speaker_id) or voice_map.get(speaker_id) or (settings.tts_speaker or "default")
+                preset = (
+                    per_speaker_preset_override.get(speaker_id)
+                    or voice_map.get(speaker_id)
+                    or (settings.tts_speaker or "default")
+                )
                 emb_path = speaker_embeddings.get(speaker_id)
                 if emb_path and emb_path.exists():
                     best = choose_similar_voice(
@@ -357,30 +380,46 @@ def run(
                     if best:
                         preset = best
                 try:
-                    _retry_wrap("xtts_preset", lambda: engine.synthesize(text, language=settings.tts_lang, speaker_id=preset, out_path=raw_clip))
+                    _retry_wrap(
+                        "xtts_preset",
+                        lambda text=text, preset=preset, raw_clip=raw_clip: engine.synthesize(
+                            text,
+                            language=settings.tts_lang,
+                            speaker_id=preset,
+                            out_path=raw_clip,
+                        ),
+                    )
                     cb.mark_success()
                     synthesized = True
                 except Exception as ex:
                     cb.mark_failure()
-                    logger.warning("tts_xtts_preset_failed", error=str(ex), breaker=cb.snapshot().state)
+                    logger.warning(
+                        "tts_xtts_preset_failed", error=str(ex), breaker=cb.snapshot().state
+                    )
                     synthesized = False
         else:
-            logger.info("tts_breaker_open_or_engine_missing", breaker=cb.snapshot().state, engine=bool(engine))
+            logger.info(
+                "tts_breaker_open_or_engine_missing",
+                breaker=cb.snapshot().state,
+                engine=bool(engine),
+            )
 
         # 3) Basic English single-speaker (Coqui) (still requires COQUI_TOS_AGREED)
         # Use a common Coqui model as fallback.
         if not synthesized:
             try:
-                from anime_v2.runtime.model_manager import ModelManager
-                from anime_v2.runtime.device_allocator import pick_device
                 from anime_v2.gates.license import require_coqui_tos
+                from anime_v2.runtime.device_allocator import pick_device
+                from anime_v2.runtime.model_manager import ModelManager
 
                 require_coqui_tos()
-                basic_model = os.environ.get("TTS_BASIC_MODEL") or "tts_models/en/ljspeech/tacotron2-DDC"
+                basic_model = (
+                    os.environ.get("TTS_BASIC_MODEL") or "tts_models/en/ljspeech/tacotron2-DDC"
+                )
                 dev = pick_device("auto")
                 tts_basic = ModelManager.instance().get_tts(basic_model, dev)
 
-                def _basic():
+                def _basic(tts_basic=tts_basic, text=text, raw_clip=raw_clip):
                     try:
                         return tts_basic.tts_to_file(text=text, file_path=str(raw_clip))
                     except TypeError:
@@ -388,22 +427,24 @@ def run(
 
                 _retry_wrap("basic_tts", _basic)
                 synthesized = True
-                fallback_used = "basic_tts"
             except Exception as ex:
                 logger.warning("tts_basic_failed", error=str(ex))
 
         # 4) espeak-ng last resort
         if not synthesized:
             try:
-                _retry_wrap("espeak", lambda: _espeak_fallback(text, raw_clip))
+                _retry_wrap(
+                    "espeak", lambda text=text, raw_clip=raw_clip: _espeak_fallback(text, raw_clip)
+                )
                 synthesized = True
-                fallback_used = "espeak"
             except Exception as ex:
                 logger.warning("tts_espeak_failed", error=str(ex))
                 synthesized = False
 
         if not synthesized:
-            _write_silence_wav(raw_clip, duration_s=max(0.0, float(l["end"]) - float(l["start"])))
+            _write_silence_wav(
+                raw_clip, duration_s=max(0.0, float(line["end"]) - float(line["start"]))
+            )
 
         # Normalize to 16kHz mono PCM for alignment
         try:
@@ -412,19 +453,15 @@ def run(
             clip = raw_clip
 
         # Optional: retime clip to fit subtitle window (avoid early/late speech).
-        try:
+        with suppress(Exception):
             from anime_v2.stages.align import retime_tts  # lazy import
 
-            target_dur = max(0.05, float(l["end"]) - float(l["start"]))
+            target_dur = max(0.05, float(line["end"]) - float(line["start"]))
             clip = retime_tts(clip, target_duration_s=target_dur, max_stretch=float(max_stretch))
-        except Exception:
-            pass
         clip_paths.append(clip)
         if progress_cb is not None:
-            try:
+            with suppress(Exception):
                 progress_cb(i + 1, total)
-            except Exception:
-                pass
 
     # Output paths
     if wav_out is None:
@@ -437,8 +474,18 @@ def run(
         if not sig:
             from anime_v2.utils.hashio import speaker_signature
 
-            sig = speaker_signature(settings.tts_lang, settings.tts_speaker, settings.tts_speaker_wav)
-        key = make_key("tts", {"audio": audio_hash, "tts_model": settings.tts_model, "lang": settings.tts_lang, "sig": sig})
+            sig = speaker_signature(
+                settings.tts_lang, settings.tts_speaker, settings.tts_speaker_wav
+            )
+        key = make_key(
+            "tts",
+            {
+                "audio": audio_hash,
+                "tts_model": settings.tts_model,
+                "lang": settings.tts_lang,
+                "sig": sig,
+            },
+        )
         hit = cache_get(key)
         if hit:
             paths = hit.get("paths", {})
@@ -452,7 +499,7 @@ def run(
                     logger.info("[v2] tts cache hit", key=key)
                     return wav_out
             except Exception:
-                pass
+                ...
 
     if job_id:
         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path)
@@ -464,32 +511,45 @@ def run(
     render_aligned_track(lines, clip_paths, wav_out)
 
     # Optional metadata
-    try:
+    with suppress(Exception):
         write_json(
             out_dir / "tts_manifest.json",
             {"clips": [str(p) for p in clip_paths], "wav_out": str(wav_out), "lines": lines},
         )
-    except Exception:
-        pass
 
     if job_id:
-        try:
-            write_ckpt(job_id, "tts", {"tts_wav": wav_out, "manifest": out_dir / "tts_manifest.json"}, {"work_dir": str(out_dir)}, ckpt_path=ckpt_path)
-        except Exception:
-            pass
+        with suppress(Exception):
+            write_ckpt(
+                job_id,
+                "tts",
+                {"tts_wav": wav_out, "manifest": out_dir / "tts_manifest.json"},
+                {"work_dir": str(out_dir)},
+                ckpt_path=ckpt_path,
+            )
 
     if audio_hash:
-        try:
+        with suppress(Exception):
             sig = os.environ.get("SPEAKER_SIGNATURE") or ""
             if not sig:
                 from anime_v2.utils.hashio import speaker_signature
 
-                sig = speaker_signature(settings.tts_lang, settings.tts_speaker, settings.tts_speaker_wav)
-            key = make_key("tts", {"audio": audio_hash, "tts_model": settings.tts_model, "lang": settings.tts_lang, "sig": sig})
-            cache_put(key, {"tts_wav": wav_out, "manifest": out_dir / "tts_manifest.json"}, meta={"created_at": time.time()})
-        except Exception:
-            pass
+                sig = speaker_signature(
+                    settings.tts_lang, settings.tts_speaker, settings.tts_speaker_wav
+                )
+            key = make_key(
+                "tts",
+                {
+                    "audio": audio_hash,
+                    "tts_model": settings.tts_model,
+                    "lang": settings.tts_lang,
+                    "sig": sig,
+                },
+            )
+            cache_put(
+                key,
+                {"tts_wav": wav_out, "manifest": out_dir / "tts_manifest.json"},
+                meta={"created_at": time.time()},
+            )
 
     logger.info("[v2] TTS done → %s", wav_out)
     return wav_out
-

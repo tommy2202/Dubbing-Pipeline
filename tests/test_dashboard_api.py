@@ -98,4 +98,3 @@ def test_pause_resume_endpoints_for_queued_job(tmp_path: Path) -> None:
         r2 = c.post("/api/jobs/j_pause_1/resume", headers=headers)
         assert r2.status_code == 200
         assert r2.json()["state"] == "QUEUED"
-

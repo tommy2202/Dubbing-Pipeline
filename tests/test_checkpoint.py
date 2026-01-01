@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 
 
@@ -24,4 +22,3 @@ def test_checkpoint_roundtrip_and_validation(tmp_path: Path) -> None:
     ckpt2 = read_ckpt("j1", ckpt_path=ckpt_path)
     assert ckpt2 is not None
     assert not stage_is_done(ckpt2, "audio")
-

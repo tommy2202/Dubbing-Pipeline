@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import subprocess
 import wave
+from contextlib import suppress
 from pathlib import Path
 
 from anime_v2.utils.config import get_settings
@@ -55,10 +56,18 @@ def _merge_segments(segments: list[dict], *, tol_s: float = 0.4, min_s: float = 
 
         # Prefer merging into same-label neighbor if close enough
         merged_into_prev = False
-        if prev_seg is not None and prev_seg["diar_label"] == s["diar_label"] and float(s["start"]) - float(prev_seg["end"]) <= tol_s:
+        if (
+            prev_seg is not None
+            and prev_seg["diar_label"] == s["diar_label"]
+            and float(s["start"]) - float(prev_seg["end"]) <= tol_s
+        ):
             prev_seg["end"] = max(float(prev_seg["end"]), float(s["end"]))
             merged_into_prev = True
-        elif next_seg is not None and next_seg["diar_label"] == s["diar_label"] and float(next_seg["start"]) - float(s["end"]) <= tol_s:
+        elif (
+            next_seg is not None
+            and next_seg["diar_label"] == s["diar_label"]
+            and float(next_seg["start"]) - float(s["end"]) <= tol_s
+        ):
             next_seg = dict(next_seg)
             next_seg["start"] = min(float(next_seg["start"]), float(s["start"]))
             merged[i + 1] = next_seg
@@ -152,14 +161,14 @@ def _next_speaker_id(existing: set[str]) -> str:
     max_n = 0
     for sid in existing:
         if sid.startswith("Speaker"):
-            try:
+            with suppress(Exception):
                 max_n = max(max_n, int(sid.replace("Speaker", "")))
-            except Exception:
-                pass
     return f"Speaker{max_n + 1}"
 
 
-def _assign_stable_ids(label_to_embedding: dict[str, "object"], *, threshold: float = 0.75) -> tuple[dict[str, str], dict[str, str]]:
+def _assign_stable_ids(
+    label_to_embedding: dict[str, object], *, threshold: float = 0.75
+) -> tuple[dict[str, str], dict[str, str]]:
     """
     Returns:
       - diar_label -> stable speaker_id
@@ -286,7 +295,9 @@ def run(
             wav_path = str(seg_wav)
         except Exception:
             wav_path = str(audio_path)
-        segments.append({"start": start, "end": end, "diar_label": diar_label, "wav_path": wav_path})
+        segments.append(
+            {"start": start, "end": end, "diar_label": diar_label, "wav_path": wav_path}
+        )
 
     # Build per-diar-label embedding (average across representative chunks)
     label_to_embedding: dict[str, object] = {}
@@ -317,7 +328,9 @@ def run(
     diar_to_sid: dict[str, str]
     sid_to_emb_path: dict[str, str]
     if label_to_embedding:
-        diar_to_sid, sid_to_emb_path = _assign_stable_ids(label_to_embedding, threshold=similarity_threshold)
+        diar_to_sid, sid_to_emb_path = _assign_stable_ids(
+            label_to_embedding, threshold=similarity_threshold
+        )
     else:
         # Fallback: persist a best-effort mapping by diar_label.
         # (This will NOT match across episodes reliably; embeddings are required for that.)
@@ -350,17 +363,25 @@ def run(
         reg["label_map"] = label_map
         reg["speakers"] = speakers
         _save_registry(reg)
-        sid_to_emb_path = {sid: meta["embedding_path"] for sid, meta in speakers.items() if isinstance(meta, dict) and "embedding_path" in meta}
+        sid_to_emb_path = {
+            sid: meta["embedding_path"]
+            for sid, meta in speakers.items()
+            if isinstance(meta, dict) and "embedding_path" in meta
+        }
 
     for s in segments:
         s["speaker_id"] = diar_to_sid.get(s["diar_label"], "Speaker1")
 
     stable_speakers = len(set(s["speaker_id"] for s in segments))
-    logger.info("[v2] Diarization: diar_speakers=%s stable_speakers=%s segments=%s", diar_speakers, stable_speakers, len(segments))
+    logger.info(
+        "[v2] Diarization: diar_speakers=%s stable_speakers=%s segments=%s",
+        diar_speakers,
+        stable_speakers,
+        len(segments),
+    )
     return segments, sid_to_emb_path
 
 
 # Alias for orchestrator naming
 def identify(audio_path: Path, out_dir: Path) -> tuple[list[dict], dict[str, str]]:
     return run(audio_path=audio_path, out_dir=out_dir)
-

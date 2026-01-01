@@ -6,9 +6,6 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
-
-from anime_v2.utils.log import logger
 
 
 class Role(str, Enum):
@@ -197,7 +194,9 @@ class AuthStore:
         con = self._conn()
         try:
             if user_id:
-                rows = con.execute("SELECT * FROM api_keys WHERE user_id=? ORDER BY created_at DESC", (user_id,)).fetchall()
+                rows = con.execute(
+                    "SELECT * FROM api_keys WHERE user_id=? ORDER BY created_at DESC", (user_id,)
+                ).fetchall()
             else:
                 rows = con.execute("SELECT * FROM api_keys ORDER BY created_at DESC").fetchall()
             out = []
@@ -228,7 +227,9 @@ class AuthStore:
     def find_api_keys_by_prefix(self, prefix: str) -> list[ApiKey]:
         con = self._conn()
         try:
-            rows = con.execute("SELECT * FROM api_keys WHERE prefix=? AND revoked=0", (prefix,)).fetchall()
+            rows = con.execute(
+                "SELECT * FROM api_keys WHERE prefix=? AND revoked=0", (prefix,)
+            ).fetchall()
             out = []
             for r in rows:
                 out.append(
@@ -249,4 +250,3 @@ class AuthStore:
 
 def now_ts() -> int:
     return int(time.time())
-

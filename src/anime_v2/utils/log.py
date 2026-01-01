@@ -11,7 +11,6 @@ from typing import Any
 
 import structlog
 
-
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 user_id_var: ContextVar[str | None] = ContextVar("user_id", default=None)
 
@@ -31,7 +30,9 @@ def _log_path() -> Path:
 _JWT_RE = re.compile(r"\beyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\b")
 _API_KEY_RE = re.compile(r"\bdp_[a-z0-9]{6,}_[A-Za-z0-9_\-]{10,}\b", re.IGNORECASE)
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9_\-\.=]+)")
-_KV_RE = re.compile(r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|token|secret|password|api_key)\b\s*=\s*([^\s,;]+)")
+_KV_RE = re.compile(
+    r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|token|secret|password|api_key)\b\s*=\s*([^\s,;]+)"
+)
 
 
 def _redact_str(s: str) -> str:
@@ -76,7 +77,9 @@ def _configure_structlog() -> structlog.stdlib.BoundLogger:
             with log_path.open("rb") as f:
                 first = f.read(1)
             if first and first != b"{":
-                legacy = log_path.with_name(f"app.log.legacy-{__import__('datetime').datetime.utcnow().strftime('%Y%m%d%H%M%S')}")
+                legacy = log_path.with_name(
+                    f"app.log.legacy-{__import__('datetime').datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+                )
                 log_path.replace(legacy)
     except Exception:
         pass
@@ -136,7 +139,7 @@ def _configure_structlog() -> structlog.stdlib.BoundLogger:
         cache_logger_on_first_use=True,
     )
 
-    setattr(root, "_anime_v2_structlog_configured", True)
+    root._anime_v2_structlog_configured = True
     return structlog.get_logger("anime_v2")
 
 
@@ -148,4 +151,3 @@ info = logger.info
 warning = logger.warning
 error = logger.error
 exception = logger.exception
-

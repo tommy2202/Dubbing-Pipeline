@@ -20,8 +20,12 @@ class Settings(BaseSettings):
     # security / auth
     jwt_secret: SecretStr = Field(default=SecretStr("dev-insecure-jwt-secret"), alias="JWT_SECRET")
     jwt_alg: str = Field(default="HS256", alias="JWT_ALG")
-    csrf_secret: SecretStr = Field(default=SecretStr("dev-insecure-csrf-secret"), alias="CSRF_SECRET")
-    session_secret: SecretStr = Field(default=SecretStr("dev-insecure-session-secret"), alias="SESSION_SECRET")
+    csrf_secret: SecretStr = Field(
+        default=SecretStr("dev-insecure-csrf-secret"), alias="CSRF_SECRET"
+    )
+    session_secret: SecretStr = Field(
+        default=SecretStr("dev-insecure-session-secret"), alias="SESSION_SECRET"
+    )
     access_token_minutes: int = Field(default=15, alias="ACCESS_TOKEN_MINUTES")
     refresh_token_days: int = Field(default=7, alias="REFRESH_TOKEN_DAYS")
 
@@ -52,7 +56,9 @@ class Settings(BaseSettings):
     mix_profile: str = Field(default="streaming", alias="MIX_PROFILE")
     emit_formats: str = Field(default="mkv,mp4", alias="EMIT_FORMATS")
 
-    tts_model: str = Field(default="tts_models/multilingual/multi-dataset/xtts_v2", alias="TTS_MODEL")
+    tts_model: str = Field(
+        default="tts_models/multilingual/multi-dataset/xtts_v2", alias="TTS_MODEL"
+    )
     tts_lang: str = Field(default="en", alias="TTS_LANG")
     tts_speaker: str = Field(default="default", alias="TTS_SPEAKER")
     coqui_tos_agreed: bool = Field(default=False, alias="COQUI_TOS_AGREED")
@@ -61,12 +67,16 @@ class Settings(BaseSettings):
     transformers_cache: Path | None = Field(default=None, alias="TRANSFORMERS_CACHE")
 
     tts_speaker_wav: Path | None = Field(default=None, alias="TTS_SPEAKER_WAV")
-    voice_preset_dir: Path = Field(default=Path.cwd() / "voices" / "presets", alias="VOICE_PRESET_DIR")
+    voice_preset_dir: Path = Field(
+        default=Path.cwd() / "voices" / "presets", alias="VOICE_PRESET_DIR"
+    )
     voice_db_path: Path = Field(default=Path.cwd() / "voices" / "presets.json", alias="VOICE_DB")
 
     # character store encryption + ops retention
     char_store_key: SecretStr | None = Field(default=None, alias="CHAR_STORE_KEY")  # 32-byte base64
-    char_store_key_file: Path = Field(default=Path.cwd() / "secrets" / "char_store.key", alias="CHAR_STORE_KEY_FILE")
+    char_store_key_file: Path = Field(
+        default=Path.cwd() / "secrets" / "char_store.key", alias="CHAR_STORE_KEY_FILE"
+    )
     retention_days_input: int = Field(default=7, alias="RETENTION_DAYS_INPUT")
     retention_days_logs: int = Field(default=14, alias="RETENTION_DAYS_LOGS")
 
@@ -106,4 +116,3 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-

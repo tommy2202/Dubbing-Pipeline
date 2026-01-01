@@ -1,5 +1,6 @@
-import pathlib, time
-from anime_v1.utils import logger, checkpoints
+import pathlib
+
+from anime_v1.utils import checkpoints, logger
 
 try:
     from pyannote.audio import Pipeline  # type: ignore
@@ -25,11 +26,13 @@ def run(audio_wav: pathlib.Path, ckpt_dir: pathlib.Path, **_):
         diar = pipeline(str(audio_wav))
         segs = []
         for turn, _, speaker in diar.itertracks(yield_label=True):
-            segs.append({
-                "speaker": str(speaker),
-                "start": float(turn.start),
-                "end": float(turn.end),
-            })
+            segs.append(
+                {
+                    "speaker": str(speaker),
+                    "start": float(turn.start),
+                    "end": float(turn.end),
+                }
+            )
         checkpoints.save({"segments": segs}, out)
         return out
     except Exception as ex:  # pragma: no cover

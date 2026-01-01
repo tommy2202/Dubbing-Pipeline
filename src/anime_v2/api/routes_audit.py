@@ -6,10 +6,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 
 from anime_v2.api.deps import Identity, current_identity
-from anime_v2.ops import audit
 
 
 def _audit_dir() -> Path:
@@ -83,4 +82,3 @@ async def audit_recent(
         )
     items = items[-lim:]
     return {"items": items, "limit": lim}
-

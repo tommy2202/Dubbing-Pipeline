@@ -4,7 +4,6 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from anime_v2.config import get_settings
 
@@ -26,7 +25,7 @@ class Circuit:
     - half_open: allow one trial call; success closes, failure re-opens
     """
 
-    _registry: dict[str, "Circuit"] = {}
+    _registry: dict[str, Circuit] = {}
     _reg_lock = threading.Lock()
 
     def __init__(self, name: str) -> None:
@@ -38,7 +37,7 @@ class Circuit:
         self._half_open_inflight = False
 
     @classmethod
-    def get(cls, name: str) -> "Circuit":
+    def get(cls, name: str) -> Circuit:
         with cls._reg_lock:
             c = cls._registry.get(name)
             if c is None:
@@ -62,7 +61,12 @@ class Circuit:
 
     def snapshot(self) -> CircuitState:
         with self._lock:
-            return CircuitState(self._state, int(self._failures), float(self._opened_at), bool(self._half_open_inflight))
+            return CircuitState(
+                self._state,
+                int(self._failures),
+                float(self._opened_at),
+                bool(self._half_open_inflight),
+            )
 
     def allow(self) -> bool:
         with self._lock:
@@ -107,4 +111,3 @@ class Circuit:
                 # allow continued attempts
                 if self._state == "open":
                     self._state = "closed"
-

@@ -66,7 +66,12 @@ mixing = [
   "demucs>=4.0.1",
 ]
 dev = [
-  "pytest>=8.0.0",
+  "black==24.10.0",
+  "httpx==0.28.1",
+  "mypy==1.13.0",
+  "pytest==8.3.3",
+  "ruff==0.6.9",
+  "types-requests==2.32.0.20241016",
 ]
 
 webrtc = [
@@ -90,3 +95,28 @@ include = ["anime_v1*", "anime_v2*"]
 markers = [
   "smoke: minimal integration smoke tests",
 ]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+fix = true
+target-version = "py310"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+  "E501", # handled by black
+  "B008", # common/intentional in FastAPI dependency injection patterns
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+strict_optional = false
+plugins = []

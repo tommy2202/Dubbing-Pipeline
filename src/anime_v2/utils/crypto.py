@@ -4,8 +4,6 @@ import secrets
 import string
 from dataclasses import dataclass
 
-from anime_v2.utils.log import logger
-
 
 def random_id(prefix: str = "", n: int = 24) -> str:
     # URL-safe token without padding, deterministic length-ish.
@@ -33,7 +31,9 @@ class PasswordHasher:
             from argon2 import PasswordHasher as _PH  # type: ignore
         except Exception as ex:  # pragma: no cover
             raise RuntimeError("argon2-cffi not installed") from ex
-        return _PH(time_cost=self.time_cost, memory_cost=self.memory_cost, parallelism=self.parallelism)
+        return _PH(
+            time_cost=self.time_cost, memory_cost=self.memory_cost, parallelism=self.parallelism
+        )
 
     def hash(self, password: str) -> str:
         return self._impl().hash(password)
@@ -51,4 +51,3 @@ def hash_secret(secret: str) -> str:
 
 def verify_secret(hashed: str, secret: str) -> bool:
     return PasswordHasher().verify(hashed, secret)
-

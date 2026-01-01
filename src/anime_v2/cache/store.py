@@ -15,7 +15,10 @@ _lock = threading.Lock()
 
 def _cache_root() -> Path:
     # Must be writable (container rootfs is read-only); default under Output/
-    base = Path(os.environ.get("ANIME_V2_CACHE_DIR") or (Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output")) / "cache"))
+    base = Path(
+        os.environ.get("ANIME_V2_CACHE_DIR")
+        or (Path(os.environ.get("ANIME_V2_OUTPUT_DIR", "Output")) / "cache")
+    )
     base.mkdir(parents=True, exist_ok=True)
     return base.resolve()
 
@@ -45,7 +48,9 @@ def _write_index(data: dict[str, Any]) -> None:
 
 
 def make_key(namespace: str, parts: dict[str, Any]) -> str:
-    blob = json.dumps({"ns": namespace, "parts": parts}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    blob = json.dumps(
+        {"ns": namespace, "parts": parts}, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
     return f"{namespace}:{hashlib.sha256(blob).hexdigest()}"
 
 
@@ -68,14 +73,19 @@ def cache_get(key: str) -> dict[str, Any] | None:
         return item
 
 
-def cache_put(key: str, paths: dict[str, str | Path], *, meta: dict[str, Any] | None = None) -> None:
+def cache_put(
+    key: str, paths: dict[str, str | Path], *, meta: dict[str, Any] | None = None
+) -> None:
     with _lock:
         idx = _read_index()
         items = idx.setdefault("items", {})
         if not isinstance(items, dict):
             items = {}
             idx["items"] = items
-        items[key] = {"paths": {k: str(v) for k, v in paths.items()}, "meta": meta or {}, "created_at": time.time()}
+        items[key] = {
+            "paths": {k: str(v) for k, v in paths.items()},
+            "meta": meta or {},
+            "created_at": time.time(),
+        }
         _write_index(idx)
         logger.info("cache_put", key=key, paths=list(paths.keys()))
-

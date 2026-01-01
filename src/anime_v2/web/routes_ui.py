@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -11,7 +10,6 @@ from anime_v2.api.deps import current_identity
 from anime_v2.api.routes_settings import UserSettingsStore
 from anime_v2.api.security import issue_csrf_token
 from anime_v2.config import get_settings
-
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
@@ -84,7 +82,9 @@ async def ui_dashboard(request: Request) -> HTMLResponse:
 
 
 @router.get("/partials/jobs_table")
-async def ui_jobs_table(request: Request, status: str | None = None, q: str | None = None, limit: int = 25) -> HTMLResponse:
+async def ui_jobs_table(
+    request: Request, status: str | None = None, q: str | None = None, limit: int = 25
+) -> HTMLResponse:
     user = _current_user_optional(request)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
@@ -169,7 +169,11 @@ async def ui_settings(request: Request) -> HTMLResponse:
         "settings.html",
         {
             "cfg": cfg,
-            "can_edit_settings": (str(user.role.value) in {"operator", "admin"}) if getattr(user, "role", None) else False,
+            "can_edit_settings": (
+                (str(user.role.value) in {"operator", "admin"})
+                if getattr(user, "role", None)
+                else False
+            ),
             "system": {
                 "limits": {
                     "max_concurrency_global": int(s.max_concurrency_global),
@@ -185,4 +189,3 @@ async def ui_settings(request: Request) -> HTMLResponse:
             },
         },
     )
-
