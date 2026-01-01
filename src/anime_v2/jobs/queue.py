@@ -431,7 +431,15 @@ class JobQueue:
                 cfg_mix = MixConfig(
                     profile=os.environ.get("MIX_PROFILE", "streaming"),
                     separate_vocals=bool(int(os.environ.get("SEPARATE_VOCALS", "0") or "0")),
-                    emit=tuple([p.strip().lower() for p in (os.environ.get("EMIT", "mkv,mp4")).split(",") if p.strip()]),
+                    emit=tuple(
+                        sorted(
+                            {
+                                "mkv",
+                                "mp4",
+                                *[p.strip().lower() for p in (os.environ.get("EMIT", "mkv,mp4")).split(",") if p.strip()],
+                            }
+                        )
+                    ),
                 )
                 outs = mix(video_in=video_path, tts_wav=tts_wav, srt=subs_srt_path, out_dir=out_dir, cfg=cfg_mix)
                 out_mkv = outs.get("mkv", out_mkv)

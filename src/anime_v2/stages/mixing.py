@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from anime_v2.utils.log import logger
+from anime_v2.stages.export import export_hls, export_mkv, export_mp4
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,10 +183,11 @@ def mix(
     cfg: MixConfig,
 ) -> dict[str, Path]:
     """
-    Produce broadcast-quality outputs:
-      - MKV: copy video, AAC audio, SRT subs (soft)
-      - MP4: H.264 video, AAC audio, mov_text subs (soft) when possible
-    Returns dict of produced outputs by format.
+    Produce a broadcast-ish mixed audio track, then export:
+      - MKV (always)
+      - MP4 (always)
+      - optional fragmented MP4 (emit contains fmp4)
+      - optional HLS (emit contains hls)
     """
     video_in = Path(video_in)
     tts_wav = Path(tts_wav)
@@ -193,9 +195,9 @@ def mix(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     profile = (cfg.profile or "streaming").lower()
+    # Always produce mkv+mp4, plus whatever is requested in --emit.
     emit = {e.strip().lower() for e in (cfg.emit or ()) if e and str(e).strip()}
-    if not emit:
-        emit = {"mkv", "mp4"}
+    emit |= {"mkv", "mp4"}
 
     srt = _srt_ok(srt)
     vid_dur = _ffprobe_duration_s(video_in)
@@ -234,65 +236,25 @@ def mix(
         except Exception as ex:
             logger.warning("[v2] mixing: demucs path failed (%s); using baseline ducking", ex)
 
-    # Build filtergraph (two-pass loudnorm when enabled)
     outputs: dict[str, Path] = {}
+    stem = video_in.stem
+    mixed_wav = out_dir / f"{stem}.mixed.wav"
 
-    def _run_once(out_path: Path, *, container: str, vcodec: str, acodec: str, scodec: str | None, loudnorm_filter: str | None) -> None:
+    def _mixdown_to_wav(loudnorm_filter: str | None) -> None:
         # Inputs:
-        # 0: video (with audio) OR bg wav (if demucs)
-        # 1: tts wav
-        # 2: srt (optional)
-        cmd = ["ffmpeg", "-y"]
+        #   - if bg_is_wav: [0:a]=bed, [1:a]=tts
+        #   - else: [0:a]=video audio, [1:a]=tts
         if bg_is_wav:
-            # input0: video (for v), input1: bed wav, input2: tts wav
-            cmd += ["-i", str(video_in), "-i", str(bg_input), "-i", str(tts_wav)]
-            bg_label = "1:a:0"
-            tts_label = "2:a:0"
-            video_map = ["-map", "0:v:0"]
+            cmd = ["ffmpeg", "-y", "-i", str(bg_input), "-i", str(tts_wav)]
+            bg_stream = "0:a:0"
+            tts_stream = "1:a:0"
         else:
-            # input0: video (v+a), input1: tts wav
-            cmd += ["-i", str(video_in), "-i", str(tts_wav)]
-            bg_label = "0:a:0"
-            tts_label = "1:a:0"
-            video_map = ["-map", "0:v:0"]
+            cmd = ["ffmpeg", "-y", "-i", str(video_in), "-i", str(tts_wav)]
+            bg_stream = "0:a:0"
+            tts_stream = "1:a:0"
 
-        if srt is not None:
-            cmd += ["-i", str(srt)]
-            srt_idx = 3 if bg_is_wav else 2
-        else:
-            srt_idx = None
-
-        filtergraph, out_bus = _build_filtergraph(
-            bg_stream=bg_label,
-            tts_stream=tts_label,
-            loudnorm=loudnorm_filter,
-            limiter=True,
-            vid_dur=vid_dur,
-        )
-
-        cmd += ["-filter_complex", filtergraph]
-        cmd += video_map
-        cmd += ["-map", f"[{out_bus}]"]
-        if srt_idx is not None:
-            cmd += ["-map", f"{srt_idx}:s:0"]
-
-        # video
-        cmd += ["-c:v", vcodec]
-        if vcodec == "libx264":
-            cmd += ["-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
-
-        # audio
-        cmd += ["-c:a", acodec, "-b:a", "192k", "-metadata:s:a:0", "language=eng"]
-
-        # subs (optional)
-        if srt_idx is not None and scodec is not None:
-            cmd += ["-c:s", scodec, "-disposition:s:0", "default", "-metadata:s:s:0", "language=eng"]
-
-        # duration cap (keeps container sane)
-        if vid_dur is not None:
-            cmd += ["-t", f"{vid_dur:.3f}"]
-
-        cmd += [str(out_path)]
+        fg, out_bus = _build_filtergraph(bg_stream=bg_stream, tts_stream=tts_stream, loudnorm=loudnorm_filter, limiter=True, vid_dur=vid_dur)
+        cmd += ["-filter_complex", fg, "-map", f"[{out_bus}]", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(mixed_wav)]
         subprocess.run(cmd, check=True)
 
     # Loudnorm 2-pass for streaming/broadcast
@@ -302,7 +264,7 @@ def mix(
         try:
             t0 = time.perf_counter()
             loud1 = f"loudnorm=I={loudnorm_target}:LRA=11:TP=-1.0:print_format=json"
-            # Minimal pass: audio-only, no subs/video. Use baseline bed selection.
+            # Minimal pass: audio-only null output.
             if bg_is_wav:
                 cmd = ["ffmpeg", "-y", "-i", str(bg_input), "-i", str(tts_wav), "-filter_complex"]
                 fg, out_bus = _build_filtergraph(bg_stream="0:a:0", tts_stream="1:a:0", loudnorm=loud1, limiter=False, vid_dur=vid_dur)
@@ -326,25 +288,29 @@ def mix(
             logger.warning("[v2] mixing: loudnorm pass1 failed (%s); using single-pass", ex)
             loudnorm_pass2 = f"loudnorm=I={loudnorm_target}:LRA=11:TP=-1.0:linear=true:print_format=summary"
 
-    # Emit outputs
-    if "mkv" in emit:
-        out_mkv = out_dir / "dub.mkv"
-        # MKV: copy video, AAC audio, SRT subs
-        _run_once(out_mkv, container="mkv", vcodec="copy", acodec="aac", scodec="srt", loudnorm_filter=loudnorm_pass2)
-        outputs["mkv"] = out_mkv
+    # 1) Mixdown to WAV
+    mixed_wav.parent.mkdir(parents=True, exist_ok=True)
+    _mixdown_to_wav(loudnorm_pass2)
 
-    if "mp4" in emit:
-        out_mp4 = out_dir / "dub.mp4"
-        # MP4: H.264 + AAC, subtitles as mov_text when present
-        _run_once(
-            out_mp4,
-            container="mp4",
-            vcodec="libx264",
-            acodec="aac",
-            scodec="mov_text",
-            loudnorm_filter=loudnorm_pass2,
-        )
-        outputs["mp4"] = out_mp4
+    # 2) Export containers (always mkv+mp4)
+    out_mkv = out_dir / f"{stem}.dub.mkv"
+    out_mp4 = out_dir / f"{stem}.dub.mp4"
+    export_mkv(video_in, mixed_wav, srt, out_mkv)
+    outputs["mkv"] = out_mkv
+    export_mp4(video_in, mixed_wav, srt, out_mp4, fragmented=False)
+    outputs["mp4"] = out_mp4
+
+    # optional fragmented MP4
+    if "fmp4" in emit or "fragmp4" in emit or "fragmented" in emit:
+        out_fmp4 = out_dir / f"{stem}.dub.frag.mp4"
+        export_mp4(video_in, mixed_wav, srt, out_fmp4, fragmented=True)
+        outputs["fmp4"] = out_fmp4
+
+    # optional HLS
+    if "hls" in emit:
+        hls_dir = out_dir / f"{stem}_hls"
+        master = export_hls(video_in, mixed_wav, srt, hls_dir)
+        outputs["hls"] = master
 
     return outputs
 

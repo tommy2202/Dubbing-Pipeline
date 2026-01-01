@@ -21,8 +21,9 @@ rm -rf "${ROOT}/Output/sample"
 
 python3 -m anime_v2.cli "${SAMPLE_MP4}" --mode low --device cpu --no-translate
 
-test -f "${ROOT}/Output/sample/dub.mkv"
+test -f "${ROOT}/Output/sample/sample.dub.mkv"
+test -f "${ROOT}/Output/sample/sample.dub.mp4"
 test -f "${ROOT}/Output/sample/audio.wav"
 
-echo "smoke ok: Output/sample/dub.mkv"
+echo "smoke ok: Output/sample/sample.dub.mkv + .mp4"
 

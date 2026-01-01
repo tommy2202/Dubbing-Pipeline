@@ -128,7 +128,7 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
 @click.option("--max-stretch", type=float, default=0.15, show_default=True, help="Max +/- time-stretch applied to TTS clips")
 @click.option("--mix-profile", type=click.Choice(["streaming", "broadcast", "simple"], case_sensitive=False), default="streaming", show_default=True)
 @click.option("--separate-vocals/--no-separate-vocals", default=False, show_default=True)
-@click.option("--emit", default="mkv,mp4", show_default=True, help="Comma list: mkv,mp4")
+@click.option("--emit", default="mkv,mp4", show_default=True, help="Comma list (always includes mkv,mp4): mkv,mp4,fmp4,hls")
 def cli(
     video: Path,
     device: str,
@@ -471,7 +471,10 @@ def cli(
     # 6) mix (broadcast-quality) + emit mkv/mp4
     t_stage = time.perf_counter()
     try:
-        emit_set = tuple([p.strip().lower() for p in (emit or "").split(",") if p.strip()])
+        # Always include mkv+mp4, plus requested.
+        requested = {p.strip().lower() for p in (emit or "").split(",") if p.strip()}
+        requested |= {"mkv", "mp4"}
+        emit_set = tuple(sorted(requested))
         cfg_mix = MixConfig(profile=mix_profile.lower(), separate_vocals=bool(separate_vocals), emit=emit_set)
         outs = mix(
             video_in=video,
