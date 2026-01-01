@@ -9,3 +9,7 @@
 {"logger": "anime_v2", "ts": "2026-01-01T02:19:45.227630Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
 {"ip": "testclient", "method": "GET", "path": "/metrics", "status": 200, "duration_ms": 0.9212240111082792, "logger": "anime_v2", "ts": "2026-01-01T02:19:46.029031Z", "level": "info", "request_id": "ce087da930484365924d7209deaeabdd", "msg": "http_done"}
 {"ts": "2026-01-01T02:19:46.030994Z", "level": "info", "msg": "HTTP Request: GET http://testserver/metrics \"HTTP/1.1 200 OK\""}
+{"logger": "anime_v2", "ts": "2026-01-01T02:46:01.245775Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T02:46:01.246568Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T02:46:35.560892Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en"}
+{"logger": "anime_v2", "ts": "2026-01-01T02:46:35.561662Z", "level": "info", "msg": "[v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en"}

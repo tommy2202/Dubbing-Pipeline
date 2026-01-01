@@ -81,3 +81,8 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["anime_v1*", "anime_v2*"]
+
+[tool.pytest.ini_options]
+markers = [
+  "smoke: minimal integration smoke tests",
+]
