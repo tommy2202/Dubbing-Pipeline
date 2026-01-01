@@ -1,95 +1,89 @@
-Anime Dub Alpha:
+## Anime dubbing pipeline (v2)
 
-This version is very basic, however it is completely working and running how it is expected to. The abilities of this version is:
-Transcribes a Japanese video into English
+This repo contains an **offline dubbing pipeline** (CLI) and a **lightweight web player** for watching completed episodes from a phone on your LAN.
 
-Creates accurate subtitles
-
-Can be used with either CLI or GUI
-
-
-------------------------------------------------------------------------------------------------------------------------------------------
-
-
-Version One Changelog:
-
-
-| Area                   | Alpha (demo Flask)                                    | Version 1 (this build)                                                 |
-| ---------------------- | ------------------------------------------------------|----------------------------------------------------
-
-
-| **Build**              | Unpinned `requirements.txt`; non-deterministic Docker | **Deterministic build** – `docker/constraints.txt`, hash-pinned wheels |
-
-
-| **Models**             | Whisper‐small JP→JP, Coqui VCTK TTS, no diarisation   | Whisper‐small **translate**, pyannote diarisation stub, real Coqui TTS |
-
-
-| **Pipeline structure** | Monolithic `pipeline.py`                              | Modular `src/anime_v1/stages/*` with JSON checkpoints                  
-
-
-|
-| **CLI**                | Bash wrapper only                                     | `anime-v1` Click CLI: `run` sub-command, checkpoints, profiles         |
-
-
-| **GUI**                | Minimal Flask demo                                    | PyQt single-window                       
-|
-
-
-| **Output folders**     | `Input/`, `Output/` hard-coded                        | Same layout, now produced by `mkv_export.py` (soft-sub MKV)            |
-
-
-| **Logging**            | Print statements                                      | Central logger + Prometheus metrics endpoint                           |
-
-
-| **Tests / CI**         | none                                                  | Pytest scaffold & GitHub Action                         |
-
-
-| **Licensing**          | MIT code, but builds weren’t repeatable               | MIT/Apache/CC-BY only, deterministic and audit-ready                   |
-
-
-Commands:
+- **CLI**: `anime-v2`
+- **Web player**: `anime-v2-web` (FastAPI + Range streaming)
+- **Outputs**: `Output/<video_stem>/...` (intermediate artifacts + final `dub.mkv`)
 
 ---
 
-## Coqui TTS note (required)
+## Quickstart (local)
 
-If you use the Coqui TTS engine (XTTS), you must explicitly acknowledge the Coqui Terms of Service by setting:
+### Prereqs
 
-- `COQUI_TOS_AGREED=1`
+- Python **3.10+**
+- `ffmpeg` available on PATH
 
-This repo’s `anime_v2` TTS layer will refuse to synthesize without it.
+### Install
 
+```bash
+python3 -m pip install -e .
+```
 
-Task: Shows where the folder is
+Optional extras (recommended on a real machine with enough disk/RAM):
 
-Command: cd (The directory where the root folder is)
+```bash
+python3 -m pip install -e ".[translation,diarization,tts,dev]"
+```
 
+### Run a dub job
 
-Task: Build Image
+```bash
+anime-v2 Input/Test.mp4 --mode medium --device auto
+```
 
-Command: docker build -f docker\Dockerfile -t (What version your using) .
+Artifacts will land in:
 
-
-Task: Run Dubbing CLI
-Command: 
-
-docker run --rm ^
-   -v "%cd%\Input":/data/in ^
-   -v "%cd%\Output":/data/out ^
-   -v "%cd%":/app ^
-   anime-v1 /data/in/Talking.mp4
+- `Output/Test/audio.wav`
+- `Output/Test/diarization.json`
+- `Output/Test/Test.srt` (ASR)
+- `Output/Test/translated.json` + `Output/Test/Test.translated.srt` (when translation enabled)
+- `Output/Test/Test.tts.wav`
+- `Output/Test/dub.mkv`
 
 ---
 
-## Windows (PowerShell / CMD) – anime-v2 examples
+## Quickstart (Docker, GPU)
 
-### Build (GPU image)
+### Build
+
+```bash
+docker build -f docker/Dockerfile -t anime-v2-gpu .
+```
+
+### Run (CLI)
+
+```bash
+docker run --rm --gpus all \
+  -v "$(pwd)":/app \
+  -v "$(pwd)/Input":/app/Input \
+  -v "$(pwd)/Output":/app/Output \
+  anime-v2-gpu /app/Input/Test.mp4 --mode high --device cuda
+```
+
+### Run (web player)
+
+```bash
+docker run --rm --gpus all -p 8000:8000 \
+  -e API_TOKEN=change-me \
+  -v "$(pwd)/Output":/app/Output \
+  anime-v2-gpu anime-v2-web
+```
+
+---
+
+## Windows examples
+
+### CMD
+
+**Build**
 
 ```bat
 docker build -f docker\Dockerfile -t anime-v2-gpu .
 ```
 
-### Run dubbing (GPU)
+**Run (CLI, GPU)**
 
 ```bat
 docker run --rm --gpus all ^
@@ -99,39 +93,136 @@ docker run --rm --gpus all ^
   anime-v2-gpu /app/Input/Test.mp4 --mode high --device cuda
 ```
 
-### Run web player (GPU)
+**Run (web player, GPU)**
 
 ```bat
 docker run --rm --gpus all -p 8000:8000 ^
   -e API_TOKEN=change-me ^
-  -v "%cd%":/app ^
   -v "%cd%\Output":/app/Output ^
   anime-v2-gpu anime-v2-web
 ```
 
+### PowerShell
 
-Task: Run Web GUI (Alpha only)
+```powershell
+docker run --rm --gpus all `
+  -v "${PWD}:/app" `
+  -v "${PWD}/Input:/app/Input" `
+  -v "${PWD}/Output:/app/Output" `
+  anime-v2-gpu /app/Input/Test.mp4 --mode high --device cuda
+```
 
-Command:
+---
 
-docker run --rm -p 5000:5000 ^
-  -v "%cd%:/app" ^
-  -v "%cd%\Input:/app/Input" ^
-  -v "%cd%\Output:/app/Output" ^
-  anime-dubbing-alpha python -m anime_dubbing_alpha.webgui
+## Modes
 
+The `--mode` flag selects a Whisper ASR model:
 
+| Mode | Whisper model | Expected quality | Expected runtime |
+|------|---------------|------------------|------------------|
+| high | `large-v3`    | best             | slowest          |
+| medium | `medium`    | good default     | medium           |
+| low  | `small`       | acceptable       | fastest          |
 
-Task: Run Web GUI (Version Two onwards)
+Device selection:
 
-Command: 
+- `--device auto`: uses CUDA if available, else CPU
+- `--device cuda` / `--device cpu`: force
 
-docker run --rm -p 5000:5000 ^
-  -v "%cd%":/app ^
-  anime-v1 gui
+---
 
+## `.env` setup + API token (web UI)
 
+Copy and edit:
 
-Task: 
+```bash
+cp .env.example .env
+```
 
-Command: 
+Set at least:
+
+- `API_TOKEN` (use a long random value)
+
+Start the web player:
+
+```bash
+anime-v2-web
+```
+
+Login from your phone browser:
+
+- `http://<your-laptop-ip>:8000/login?token=<API_TOKEN>`
+
+After login, the token is stored in an **HTTP-only cookie** and the player page lists available files and streams them with **Range requests** (seeking works).
+
+---
+
+## Voice cloning + presets (fallback behavior)
+
+### Cloning (best quality when available)
+
+If `TTS_SPEAKER_WAV` is set (or if diarization produced a representative wav for a speaker), the TTS stage will attempt **zero-shot cloning**.
+
+If cloning fails, it logs:
+
+- `clone failed; using preset <name>`
+
+### Presets (when cloning isn’t available)
+
+Place sample WAVs here:
+
+- `voices/presets/alice/*.wav`
+- `voices/presets/bob/*.wav`
+
+Build embeddings:
+
+```bash
+python tools/build_voice_db.py
+```
+
+This creates:
+
+- `voices/presets.json`
+- `voices/embeddings/<preset>.npy`
+
+When speaker embeddings exist, the pipeline chooses the closest preset via cosine similarity. If no match info is available, it falls back to `TTS_SPEAKER` (default `"default"`).
+
+---
+
+## Security notes
+
+- **Don’t expose this service publicly without HTTPS.**
+- If you need internet access, use a tunnel that provides HTTPS (e.g. ngrok / Cloudflare Tunnel) and set a strong `API_TOKEN`.
+- The server **does not log tokens** (request logs omit query strings), and auth failures are rate-limited per IP.
+- Logs are written to `logs/app.log` with rotation.
+
+---
+
+## Troubleshooting
+
+### CUDA / GPU not detected
+
+- Docker: ensure you run with `--gpus all` and have NVIDIA drivers + container toolkit installed.
+- Local: try `--device cpu` to confirm the pipeline works, then revisit CUDA setup.
+
+### Model downloads are slow / fail
+
+- First run downloads large models (Whisper + XTTS). Ensure disk space and a stable connection.
+- Use `HF_HOME`, `TORCH_HOME`, and `TTS_HOME` to relocate caches.
+
+### Coqui TTS Terms of Service (required)
+
+The Coqui XTTS engine requires explicit acknowledgement:
+
+- `COQUI_TOS_AGREED=1`
+
+Without it, the TTS layer refuses to synthesize.
+
+### Docker `numpy==1.22.0` pin rationale
+
+The Docker constraints pin `numpy==1.22.0` to satisfy **wheel compatibility for `TTS==0.22.0` on Python 3.10** in a reproducible way.
+
+### No subtitles in output
+
+- If ASR produces an empty SRT (e.g. Whisper not installed/downloaded), muxing skips subtitles to avoid ffmpeg errors on empty SRT.
+- If you want to skip subs intentionally, pass `--no-subs`.
