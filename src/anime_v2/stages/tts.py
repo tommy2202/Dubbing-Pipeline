@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import wave
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from anime_v2.utils.config import get_settings
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
+from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.tts_engine import CoquiXTTS, choose_similar_voice
 
 
@@ -127,6 +129,18 @@ def run(
     settings = get_settings()
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Optional per-speaker preset mapping (voice bank map):
+    #   {"SPEAKER_01": "alice", "SPEAKER_02": "bob"}
+    voice_map: dict[str, str] = {}
+    try:
+        voice_map_path = os.environ.get("VOICE_BANK_MAP") or os.environ.get("VOICE_MAP")
+        if voice_map_path:
+            vm = read_json(Path(voice_map_path), default={})
+            if isinstance(vm, dict):
+                voice_map = {str(k): str(v) for k, v in vm.items() if str(k).strip() and str(v).strip()}
+    except Exception:
+        voice_map = {}
+
     # Determine lines to synthesize
     lines: list[dict]
     if translated_json and translated_json.exists():
@@ -186,6 +200,13 @@ def run(
                         continue
                 speaker_rep_wav = {sid: p for sid, (_, p) in best.items()}
 
+    # CharacterStore speaker_wavs (cross-episode persistence)
+    store = CharacterStore.default()
+    try:
+        store.load()
+    except Exception:
+        pass
+
     # Engine (lazy-loaded per run)
     engine: CoquiXTTS | None = None
     try:
@@ -237,6 +258,17 @@ def run(
 
         # Choose clone speaker wav:
         speaker_wav = settings.tts_speaker_wav or speaker_rep_wav.get(speaker_id)
+        if speaker_wav is None:
+            try:
+                c = store.characters.get(speaker_id)
+                if c and c.speaker_wavs:
+                    for p in c.speaker_wavs:
+                        pp = Path(str(p))
+                        if pp.exists():
+                            speaker_wav = pp
+                            break
+            except Exception:
+                pass
 
         synthesized = False
         if engine is not None and speaker_wav is not None and speaker_wav.exists():
@@ -254,7 +286,7 @@ def run(
 
         if not synthesized and engine is not None:
             # Choose best preset if we have speaker embedding; else default preset
-            preset = settings.tts_speaker or "default"
+            preset = voice_map.get(speaker_id) or (settings.tts_speaker or "default")
             emb_path = speaker_embeddings.get(speaker_id)
             if emb_path and emb_path.exists():
                 best = choose_similar_voice(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -119,16 +120,32 @@ def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
 @click.option("--no-subs", is_flag=True, default=False, help="Do not mux subtitles into output container")
 @click.option("--diarizer", type=click.Choice(["auto", "pyannote", "speechbrain", "heuristic"], case_sensitive=False), default="auto", show_default=True)
 @click.option("--show-id", default=None, help="Show id used for persistent character IDs (default: input basename)")
-@click.option("--char-sim-thresh", type=float, default=0.72, show_default=True)
+@click.option("--char-sim-thresh", type=float, default=float(os.environ.get("CHAR_SIM_THRESH", "0.72")), show_default=True)
 @click.option("--mt-engine", type=click.Choice(["auto", "whisper", "marian", "nllb"], case_sensitive=False), default="auto", show_default=True)
-@click.option("--mt-lowconf-thresh", type=float, default=-0.45, show_default=True, help="Avg logprob threshold for Whisper translate fallback")
+@click.option(
+    "--mt-lowconf-thresh",
+    type=float,
+    default=float(os.environ.get("MT_LOWCONF_THRESH", "-0.45")),
+    show_default=True,
+    help="Avg logprob threshold for Whisper translate fallback",
+)
 @click.option("--glossary", default=None, help="Glossary TSV path or directory")
 @click.option("--style", default=None, help="Style YAML path or directory")
 @click.option("--aligner", type=click.Choice(["auto", "aeneas", "heuristic"], case_sensitive=False), default="auto", show_default=True)
 @click.option("--max-stretch", type=float, default=0.15, show_default=True, help="Max +/- time-stretch applied to TTS clips")
-@click.option("--mix-profile", type=click.Choice(["streaming", "broadcast", "simple"], case_sensitive=False), default="streaming", show_default=True)
+@click.option(
+    "--mix-profile",
+    type=click.Choice(["streaming", "broadcast", "simple"], case_sensitive=False),
+    default=os.environ.get("MIX_PROFILE", "streaming"),
+    show_default=True,
+)
 @click.option("--separate-vocals/--no-separate-vocals", default=False, show_default=True)
-@click.option("--emit", default="mkv,mp4", show_default=True, help="Comma list (always includes mkv,mp4): mkv,mp4,fmp4,hls")
+@click.option(
+    "--emit",
+    default=os.environ.get("EMIT_FORMATS", "mkv,mp4"),
+    show_default=True,
+    help="Comma list (always includes mkv,mp4): mkv,mp4,fmp4,hls",
+)
 def cli(
     video: Path,
     device: str,

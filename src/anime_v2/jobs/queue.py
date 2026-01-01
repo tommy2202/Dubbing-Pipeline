@@ -436,7 +436,11 @@ class JobQueue:
                             {
                                 "mkv",
                                 "mp4",
-                                *[p.strip().lower() for p in (os.environ.get("EMIT", "mkv,mp4")).split(",") if p.strip()],
+                                *[
+                                    p.strip().lower()
+                                    for p in (os.environ.get("EMIT_FORMATS") or os.environ.get("EMIT") or "mkv,mp4").split(",")
+                                    if p.strip()
+                                ],
                             }
                         )
                     ),
