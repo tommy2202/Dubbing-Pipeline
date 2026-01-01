@@ -18,14 +18,26 @@
   <body>
     <h2>Anime v2</h2>
     <div class="muted">
-      Web player + job queue. Authenticate via cookie (<code>/login?token=...</code>) or enter a token below.
+      Web player + job queue. Sign in to get a session cookie (recommended).
     </div>
 
     <div class="row" style="margin-top: 12px;">
       <div class="panel">
-        <h3 style="margin: 0 0 8px 0;">Create Job</h3>
-        <div class="muted">API token (optional if logged in):</div>
-        <input id="token" type="password" placeholder="API_TOKEN" style="width:100%; padding:10px; font-size:16px; margin:6px 0;" />
+        <h3 style="margin: 0 0 8px 0;">Sign in</h3>
+        <div class="row" style="gap:8px;">
+          <input id="username" type="text" placeholder="username" style="flex:1; padding:10px; font-size:16px;" />
+          <input id="password" type="password" placeholder="password" style="flex:1; padding:10px; font-size:16px;" />
+        </div>
+        <div class="row" style="gap:8px; margin-top:8px;">
+          <input id="totp" type="text" placeholder="TOTP (if enabled)" style="flex:1; padding:10px; font-size:16px;" />
+          <label class="muted" style="display:flex; align-items:center; gap:6px;">
+            <input id="useSession" type="checkbox" checked />
+            session cookie
+          </label>
+        </div>
+        <button id="login" style="margin-top:10px; padding:10px; width:100%; font-size:16px;">Login</button>
+
+        <h3 style="margin: 16px 0 8px 0;">Create Job</h3>
 
         <div class="muted" style="margin-top:10px;">Server file path (inside /app), or upload:</div>
         <input id="video_path" type="text" placeholder="/app/Input/Test.mp4" style="width:100%; padding:10px; font-size:16px; margin:6px 0;" />
@@ -90,17 +102,17 @@
     </div>
 
     <script>
-      const tokenEl = document.getElementById("token");
-      tokenEl.value = localStorage.getItem("apiToken") || "";
-      tokenEl.addEventListener("change", () => localStorage.setItem("apiToken", tokenEl.value || ""));
+      let accessToken = localStorage.getItem("accessToken") || "";
 
-      function tokenQuery() {
-        const t = localStorage.getItem("apiToken") || "";
-        return t ? `?token=${encodeURIComponent(t)}` : "";
+      function getCsrf() {
+        const m = document.cookie.match(/(?:^|;\\s*)csrf=([^;]+)/);
+        return m ? decodeURIComponent(m[1]) : "";
       }
-      function tokenQueryWs() {
-        const t = localStorage.getItem("apiToken") || "";
-        return t ? `?token=${encodeURIComponent(t)}` : "";
+
+      function authHeaders(extra = {}) {
+        const h = { ...extra };
+        if (accessToken) h["Authorization"] = `Bearer ${accessToken}`;
+        return h;
       }
 
       const jobSel = document.getElementById("job");
@@ -108,7 +120,7 @@
       const player = document.getElementById("player");
 
       function setSource(job) {
-        const url = `/video/${encodeURIComponent(job)}${tokenQuery()}`;
+        const url = accessToken ? `/video/${encodeURIComponent(job)}?token=${encodeURIComponent(accessToken)}` : `/video/${encodeURIComponent(job)}`;
         srcEl.src = url;
         player.load();
       }
@@ -127,7 +139,7 @@
       }
 
       async function refreshJobs() {
-        const res = await fetch(`/api/jobs${tokenQuery()}`);
+        const res = await fetch(`/api/jobs`, { headers: authHeaders() });
         if (!res.ok) return;
         const jobs = await res.json();
         jobsTbody.innerHTML = "";
@@ -140,7 +152,7 @@
             <td style="padding:6px;">
               ${(j.state === "RUNNING" || j.state === "QUEUED") ? `<button data-cancel="${j.id}">Cancel</button>` : ""}
               ${(j.state === "DONE" && j.output_mkv) ? `<button data-play="${j.id}">Play</button>` : ""}
-              <a href="/api/jobs/${j.id}/logs/tail${tokenQuery()}" target="_blank" rel="noreferrer">logs</a>
+              <a href="/api/jobs/${j.id}/logs/tail" target="_blank" rel="noreferrer">logs</a>
             </td>
           `;
           jobsTbody.appendChild(tr);
@@ -150,7 +162,7 @@
       jobsTbody.addEventListener("click", async (ev) => {
         const btn = ev.target;
         if (btn.dataset && btn.dataset.cancel) {
-          await fetch(`/api/jobs/${btn.dataset.cancel}/cancel${tokenQuery()}`, { method: "POST" });
+          await fetch(`/api/jobs/${btn.dataset.cancel}/cancel`, { method: "POST", headers: authHeaders({ "X-CSRF-Token": getCsrf() }) });
           await refreshJobs();
         }
         if (btn.dataset && btn.dataset.play) {
@@ -162,7 +174,8 @@
       function subscribe(jobId) {
         try { if (ws) ws.close(); } catch(e) {}
         const proto = location.protocol === "https:" ? "wss" : "ws";
-        ws = new WebSocket(`${proto}://${location.host}/ws/jobs/${encodeURIComponent(jobId)}${tokenQueryWs()}`);
+        const qs = accessToken ? `?token=${encodeURIComponent(accessToken)}` : "";
+        ws = new WebSocket(`${proto}://${location.host}/ws/jobs/${encodeURIComponent(jobId)}${qs}`);
         ws.onmessage = (ev) => {
           try {
             const data = JSON.parse(ev.data);
@@ -175,6 +188,7 @@
       }
 
       document.getElementById("submit").addEventListener("click", async () => {
+        const csrf = getCsrf();
         const mode = document.getElementById("mode").value;
         const device = document.getElementById("device").value;
         const src_lang = document.getElementById("src_lang").value;
@@ -190,11 +204,11 @@
           fd.append("device", device);
           fd.append("src_lang", src_lang);
           fd.append("tgt_lang", tgt_lang);
-          res = await fetch(`/api/jobs${tokenQuery()}`, { method: "POST", body: fd });
+          res = await fetch(`/api/jobs`, { method: "POST", body: fd, headers: authHeaders({ "X-CSRF-Token": csrf }) });
         } else {
-          res = await fetch(`/api/jobs${tokenQuery()}`, {
+          res = await fetch(`/api/jobs`, {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: authHeaders({ "content-type": "application/json", "X-CSRF-Token": csrf }),
             body: JSON.stringify({ video_path: vp, mode, device, src_lang, tgt_lang }),
           });
         }
@@ -215,10 +229,31 @@
       const webrtcLink = document.getElementById("webrtcLink");
       if (webrtcLink) {
         webrtcLink.addEventListener("click", (ev) => {
-          const t = localStorage.getItem("apiToken") || "";
-          if (t) webrtcLink.href = `/webrtc/demo?token=${encodeURIComponent(t)}`;
+          if (accessToken) webrtcLink.href = `/webrtc/demo?token=${encodeURIComponent(accessToken)}`;
         });
       }
+
+      document.getElementById("login").addEventListener("click", async () => {
+        const username = document.getElementById("username").value.trim();
+        const password = document.getElementById("password").value;
+        const totp = document.getElementById("totp").value.trim();
+        const session = document.getElementById("useSession").checked;
+        const res = await fetch("/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ username, password, totp: totp || undefined, session }),
+        });
+        if (!res.ok) {
+          setProgress(0, `login failed (${res.status})`);
+          return;
+        }
+        const data = await res.json();
+        accessToken = data.access_token || "";
+        localStorage.setItem("accessToken", accessToken);
+        setProgress(0, `logged in (${data.role || "user"})`);
+        refreshJobs();
+        if (jobSel.value) setSource(jobSel.value);
+      });
     </script>
   </body>
 </html>

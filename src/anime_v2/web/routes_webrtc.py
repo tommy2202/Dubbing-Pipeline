@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 
 from anime_v2.jobs.models import JobState
 from anime_v2.utils.log import logger
-from anime_v2.utils.security import verify_api_key
+from anime_v2.api.deps import require_scope
 
 router = APIRouter()
 
@@ -106,7 +106,8 @@ async def _idle_watch(token: str) -> None:
 
 @router.post("/webrtc/offer")
 async def webrtc_offer(request: Request) -> dict:
-    verify_api_key(request)
+    # read-only access required
+    require_scope("read:job")(request)  # type: ignore[misc]
 
     # Lazy import so local installs don't break if aiortc/av aren't installed.
     try:
@@ -203,7 +204,7 @@ async def webrtc_offer(request: Request) -> dict:
 
 @router.get("/webrtc/demo", response_class=HTMLResponse)
 async def webrtc_demo(request: Request) -> HTMLResponse:
-    verify_api_key(request)
+    require_scope("read:job")(request)  # type: ignore[misc]
     store = _get_store(request)
     jobs = [j for j in store.list(limit=100) if j.state == JobState.DONE and j.output_mkv]
     # Minimal page; token is supplied as query param by the user.

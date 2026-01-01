@@ -6,12 +6,16 @@ import re
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import PlainTextResponse
 from sse_starlette.sse import EventSourceResponse  # type: ignore
 
 from anime_v2.jobs.models import Job, JobState, new_id, now_utc
-from anime_v2.utils.security import verify_api_key, verify_api_key_ws
+from anime_v2.api.deps import Identity, require_scope
+from anime_v2.api.models import AuthStore
+from anime_v2.api.security import decode_token
+from anime_v2.utils.crypto import verify_secret
+from anime_v2.utils.ratelimit import RateLimiter
 
 
 router = APIRouter()
@@ -65,8 +69,15 @@ def _get_queue(request: Request):
 
 
 @router.post("/api/jobs")
-async def create_job(request: Request) -> dict[str, str]:
-    verify_api_key(request)
+async def create_job(request: Request, ident: Identity = Depends(require_scope("submit:job"))) -> dict[str, str]:
+    # Rate limit: 10/min per identity (fallback to IP)
+    rl: RateLimiter | None = getattr(request.app.state, "rate_limiter", None)
+    if rl is None:
+        rl = RateLimiter()
+        request.app.state.rate_limiter = rl
+    who = ident.user.id if ident.kind == "user" else (ident.api_key_prefix or "unknown")
+    if not rl.allow(f"jobs:submit:{who}", limit=10, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
     store = _get_store(request)
     queue = _get_queue(request)
 
@@ -156,8 +167,7 @@ async def create_job(request: Request) -> dict[str, str]:
 
 
 @router.get("/api/jobs")
-async def list_jobs(request: Request, state: str | None = None) -> list[dict[str, Any]]:
-    verify_api_key(request)
+async def list_jobs(request: Request, state: str | None = None, _: Identity = Depends(require_scope("read:job"))) -> list[dict[str, Any]]:
     store = _get_store(request)
     jobs = store.list(limit=100, state=state)
     out = []
@@ -178,8 +188,7 @@ async def list_jobs(request: Request, state: str | None = None) -> list[dict[str
 
 
 @router.get("/api/jobs/{id}")
-async def get_job(request: Request, id: str) -> dict[str, Any]:
-    verify_api_key(request)
+async def get_job(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(id)
     if job is None:
@@ -188,8 +197,7 @@ async def get_job(request: Request, id: str) -> dict[str, Any]:
 
 
 @router.post("/api/jobs/{id}/cancel")
-async def cancel_job(request: Request, id: str) -> dict[str, Any]:
-    verify_api_key(request)
+async def cancel_job(request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))) -> dict[str, Any]:
     store = _get_store(request)
     queue = _get_queue(request)
     await queue.cancel(id)
@@ -200,8 +208,7 @@ async def cancel_job(request: Request, id: str) -> dict[str, Any]:
 
 
 @router.get("/api/jobs/{id}/logs/tail")
-async def tail_logs(request: Request, id: str, n: int = 200) -> PlainTextResponse:
-    verify_api_key(request)
+async def tail_logs(request: Request, id: str, n: int = 200, _: Identity = Depends(require_scope("read:job"))) -> PlainTextResponse:
     store = _get_store(request)
     return PlainTextResponse(store.tail_log(id, n=n))
 
@@ -209,12 +216,42 @@ async def tail_logs(request: Request, id: str, n: int = 200) -> PlainTextRespons
 @router.websocket("/ws/jobs/{id}")
 async def ws_job(websocket: WebSocket, id: str):
     await websocket.accept()
-    try:
-        verify_api_key_ws(websocket)
-    except HTTPException as ex:
-        # 1008: policy violation
+    token = websocket.query_params.get("token") or ""
+    if not token:
         await websocket.close(code=1008)
         return
+
+    # Authenticate: JWT access token OR dp_ API key in token param.
+    auth_store: AuthStore | None = getattr(websocket.app.state, "auth_store", None)
+    if auth_store is None:
+        await websocket.close(code=1011)
+        return
+    ok = False
+    try:
+        if token.startswith("dp_"):
+            parts = token.split("_", 2)
+            if len(parts) == 3:
+                _, prefix, _ = parts
+                for k in auth_store.find_api_keys_by_prefix(prefix):
+                    if verify_secret(k.key_hash, token):
+                        # require read scope
+                        scopes = set(k.scopes or [])
+                        if "admin:*" in scopes or "read:job" in scopes:
+                            ok = True
+                        break
+        else:
+            data = decode_token(token, expected_typ="access")
+            scopes = data.get("scopes") if isinstance(data.get("scopes"), list) else []
+            scopes = {str(s) for s in scopes}
+            if "admin:*" in scopes or "read:job" in scopes:
+                ok = True
+    except Exception:
+        ok = False
+
+    if not ok:
+        await websocket.close(code=1008)
+        return
+
     store = getattr(websocket.app.state, "job_store", None)
     if store is None:
         await websocket.close(code=1011)
@@ -251,8 +288,7 @@ async def ws_job(websocket: WebSocket, id: str):
 
 
 @router.get("/events/jobs/{id}")
-async def sse_job(request: Request, id: str):
-    verify_api_key(request)
+async def sse_job(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
 
     async def gen():

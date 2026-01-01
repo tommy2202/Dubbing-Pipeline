@@ -7,7 +7,7 @@ import uvicorn
 
 def main() -> None:
     uvicorn.run(
-        "anime_v2.web.app:app",
+        "anime_v2.server:app",
         host=os.environ.get("HOST", "0.0.0.0"),
         port=int(os.environ.get("PORT", "8000")),
         reload=False,
