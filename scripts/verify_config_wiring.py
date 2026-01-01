@@ -33,6 +33,7 @@ def _assert_no_env_reads_outside_config_and_tests() -> None:
         REPO_ROOT / "scripts" / "verify_audio_pipeline.py",
         REPO_ROOT / "scripts" / "verify_timing_fit.py",
         REPO_ROOT / "scripts" / "smoke_segment_pacing.py",
+        REPO_ROOT / "scripts" / "verify_voice_memory.py",
     }
 
     offenders: list[Path] = []

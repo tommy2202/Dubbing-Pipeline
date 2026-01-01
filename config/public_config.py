@@ -192,6 +192,16 @@ class PublicConfig(BaseSettings):
         alias="VOICE_STORE",
     )
 
+    # Tier-2 A: Character Voice Memory (opt-in; defaults preserve current behavior)
+    voice_memory: bool = Field(default=False, alias="VOICE_MEMORY")  # off by default
+    voice_memory_dir: Path = Field(
+        default_factory=lambda: (Path.cwd() / "data" / "voice_memory").resolve(),
+        alias="VOICE_MEMORY_DIR",
+    )
+    voice_match_threshold: float = Field(default=0.75, alias="VOICE_MATCH_THRESHOLD")
+    voice_auto_enroll: bool = Field(default=True, alias="VOICE_AUTO_ENROLL")
+    voice_character_map: Path | None = Field(default=None, alias="VOICE_CHARACTER_MAP")
+
     # Provider selection (F9)
     tts_provider: str = Field(default="auto", alias="TTS_PROVIDER")  # auto|xtts|basic|espeak
 

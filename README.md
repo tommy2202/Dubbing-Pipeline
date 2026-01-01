@@ -196,6 +196,28 @@ This writes:
 
 - `Output/<stem>/segments/0000.json` (start/end, pre-fit/fitted text, pacing actions)
 
+### Character Voice Memory (Tier‑2 A)
+
+Opt-in feature to keep **stable character identities across episodes** by persisting per-character reference WAVs + embeddings under `data/voice_memory/`.
+
+Enable:
+
+```bash
+anime-v2 Input/Test.mp4 --voice-memory on --voice-match-threshold 0.75 --voice-auto-enroll
+```
+
+Management:
+
+```bash
+anime-v2 --list-characters
+anime-v2 --rename-character SPEAKER_01 "Zoro"
+anime-v2 --set-character-voice-mode SPEAKER_01 clone
+anime-v2 --set-character-preset SPEAKER_01 alice
+```
+
+Reset:
+- Delete `data/voice_memory/` to rebuild from scratch.
+
 ### Pseudo-streaming (chunk mode)
 
 ```bash

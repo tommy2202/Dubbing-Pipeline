@@ -30,6 +30,8 @@ def main() -> int:
             "anime_v2.audio.mix",
             "anime_v2.timing.fit_text",
             "anime_v2.timing.pacing",
+            "anime_v2.voice_memory.store",
+            "anime_v2.voice_memory.embeddings",
             "anime_v2.jobs.queue",
             "anime_v2.realtime",
             "anime_v2.server",

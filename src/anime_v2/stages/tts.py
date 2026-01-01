@@ -247,6 +247,11 @@ def run(
     voice_mode: str | None = None,
     voice_ref_dir: Path | None = None,
     voice_store_dir: Path | None = None,
+    voice_memory: bool | None = None,
+    voice_memory_dir: Path | None = None,
+    voice_match_threshold: float | None = None,
+    voice_auto_enroll: bool | None = None,
+    voice_character_map: Path | None = None,
     tts_provider: str | None = None,
     emotion_mode: str | None = None,
     speech_rate: float | None = None,
@@ -283,6 +288,22 @@ def run(
         eff_voice_mode = "clone"
     eff_voice_ref_dir = voice_ref_dir or settings.voice_ref_dir
     eff_voice_store_dir = Path(voice_store_dir or settings.voice_store_dir).resolve()
+    eff_voice_memory = (
+        bool(voice_memory) if voice_memory is not None else bool(settings.voice_memory)
+    )
+    eff_voice_memory_dir = Path(
+        voice_memory_dir
+        or getattr(settings, "voice_memory_dir", (Path.cwd() / "data" / "voice_memory"))
+    ).resolve()
+    eff_voice_character_map = (
+        Path(voice_character_map).resolve()
+        if voice_character_map is not None
+        else (
+            Path(settings.voice_character_map).resolve()
+            if getattr(settings, "voice_character_map", None)
+            else None
+        )
+    )
     eff_tts_provider = (tts_provider or settings.tts_provider or "auto").strip().lower()
     if eff_tts_provider not in {"auto", "xtts", "basic", "espeak"}:
         eff_tts_provider = "auto"
@@ -419,6 +440,24 @@ def run(
     with suppress(Exception):
         store.load()
 
+    # Tier-2A voice memory store (optional)
+    vm_store = None
+    vm_manual: dict[str, str] = {}
+    if eff_voice_memory:
+        try:
+            from anime_v2.voice_memory.store import VoiceMemoryStore
+
+            vm_store = VoiceMemoryStore(eff_voice_memory_dir)
+            if eff_voice_character_map and eff_voice_character_map.exists():
+                data = read_json(eff_voice_character_map, default={})
+                if isinstance(data, dict):
+                    vm_manual = {
+                        str(k): str(v) for k, v in data.items() if str(k).strip() and str(v).strip()
+                    }
+        except Exception as ex:
+            logger.warning("[v2] voice-memory unavailable; continuing without it (%s)", ex)
+            vm_store = None
+
     # Engine (lazy-loaded per run)
     engine: CoquiXTTS | None = None
     cb = Circuit.get("tts")
@@ -477,6 +516,27 @@ def run(
             or eff_tts_speaker_wav
             or speaker_rep_wav.get(speaker_id)
         )
+        # Tier-2A: prefer voice-memory refs for stable cross-episode identity.
+        if vm_store is not None:
+            try:
+                # allow optional manual speaker_id -> character_id mapping
+                cid = vm_manual.get(speaker_id, speaker_id)
+                ref = vm_store.best_ref(cid)
+                if ref is not None and ref.exists():
+                    speaker_wav = ref
+                # Allow per-character preferences to override effective voice_mode/preset.
+                for c in vm_store.list_characters():
+                    if str(c.get("character_id") or "") != str(cid):
+                        continue
+                    pref_mode = str(c.get("voice_mode") or "").strip().lower()
+                    pref_preset = str(c.get("preset_voice_id") or "").strip()
+                    if pref_mode in {"clone", "preset", "single"}:
+                        eff_voice_mode = pref_mode
+                    if pref_preset:
+                        per_speaker_preset_override[speaker_id] = pref_preset
+                    break
+            except Exception:
+                pass
         # Optional voice reference directory: prefer stable refs (e.g. <ref_dir>/<speaker_id>.wav)
         if speaker_wav is None and eff_voice_ref_dir:
             with suppress(Exception):

@@ -351,6 +351,48 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 @click.option("--voice-ref-dir", type=click.Path(path_type=Path), default=None)
 @click.option("--voice-store", "voice_store_dir", type=click.Path(path_type=Path), default=None)
 @click.option(
+    "--voice-memory",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default="off",
+    show_default=True,
+    help="Tier-2A Character Voice Memory (cross-episode speaker stability)",
+)
+@click.option("--voice-memory-dir", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "--voice-match-threshold",
+    type=float,
+    default=float(get_settings().voice_match_threshold),
+    show_default=True,
+)
+@click.option(
+    "--voice-auto-enroll/--no-voice-auto-enroll",
+    default=bool(get_settings().voice_auto_enroll),
+    show_default=True,
+)
+@click.option("--voice-character-map", type=click.Path(path_type=Path), default=None)
+@click.option("--list-characters", is_flag=True, default=False, help="List voice-memory characters")
+@click.option(
+    "--rename-character",
+    nargs=2,
+    type=str,
+    default=None,
+    help="Rename a character: --rename-character <id> <name>",
+)
+@click.option(
+    "--set-character-voice-mode",
+    nargs=2,
+    type=str,
+    default=None,
+    help="Set character voice mode: --set-character-voice-mode <id> clone|preset|single",
+)
+@click.option(
+    "--set-character-preset",
+    nargs=2,
+    type=str,
+    default=None,
+    help="Set character preset voice: --set-character-preset <id> <preset_voice_id>",
+)
+@click.option(
     "--tts-provider",
     type=click.Choice(["auto", "xtts", "basic", "espeak"], case_sensitive=False),
     default=str(get_settings().tts_provider),
@@ -420,6 +462,15 @@ def cli(
     voice_mode: str,
     voice_ref_dir: Path | None,
     voice_store_dir: Path | None,
+    voice_memory: str,
+    voice_memory_dir: Path | None,
+    voice_match_threshold: float,
+    voice_auto_enroll: bool,
+    voice_character_map: Path | None,
+    list_characters: bool,
+    rename_character: tuple[str, str] | None,
+    set_character_voice_mode: tuple[str, str] | None,
+    set_character_preset: tuple[str, str] | None,
     tts_provider: str,
     print_config: bool,
     dry_run: bool,
@@ -438,6 +489,35 @@ def cli(
         from config.settings import get_safe_config_report
 
         click.echo(_json.dumps(get_safe_config_report(), indent=2, sort_keys=True))
+        return
+
+    # Tier-2A management commands (no pipeline run required)
+    if list_characters or rename_character or set_character_voice_mode or set_character_preset:
+        import json as _json
+
+        from anime_v2.voice_memory.store import VoiceMemoryStore
+
+        s = get_settings()
+        root = Path(
+            voice_memory_dir
+            or getattr(s, "voice_memory_dir", (Path.cwd() / "data" / "voice_memory"))
+        )
+        store = VoiceMemoryStore(root)
+        if list_characters:
+            for c in store.list_characters():
+                click.echo(_json.dumps(c, sort_keys=True))
+        if rename_character:
+            cid, nm = rename_character
+            store.rename_character(cid, nm)
+            click.echo(f"OK rename {cid} -> {nm}")
+        if set_character_voice_mode:
+            cid, mode2 = set_character_voice_mode
+            store.set_character_voice_mode(cid, mode2)
+            click.echo(f"OK voice_mode {cid} -> {mode2}")
+        if set_character_preset:
+            cid, preset = set_character_preset
+            store.set_character_preset(cid, preset)
+            click.echo(f"OK preset {cid} -> {preset}")
         return
 
     # CLI log verbosity controls (default behavior unchanged when flags not passed)
@@ -532,6 +612,16 @@ def cli(
         base_args += ["--tolerance", str(tolerance)]
         if timing_debug:
             base_args += ["--timing-debug"]
+        base_args += ["--voice-memory", str(voice_memory)]
+        if voice_memory_dir:
+            base_args += ["--voice-memory-dir", str(voice_memory_dir)]
+        base_args += ["--voice-match-threshold", str(voice_match_threshold)]
+        if voice_auto_enroll:
+            base_args += ["--voice-auto-enroll"]
+        else:
+            base_args += ["--no-voice-auto-enroll"]
+        if voice_character_map:
+            base_args += ["--voice-character-map", str(voice_character_map)]
         base_args += ["--emit", str(emit)]
         if separate_vocals:
             base_args += ["--separate-vocals"]
@@ -595,8 +685,32 @@ def cli(
                     wps=wps,
                     tolerance=tolerance,
                     timing_debug=timing_debug,
+                    voice_mode=voice_mode,
+                    voice_ref_dir=voice_ref_dir,
+                    voice_store_dir=voice_store_dir,
+                    voice_memory=voice_memory,
+                    voice_memory_dir=voice_memory_dir,
+                    voice_match_threshold=voice_match_threshold,
+                    voice_auto_enroll=voice_auto_enroll,
+                    voice_character_map=voice_character_map,
+                    list_characters=False,
+                    rename_character=None,
+                    set_character_voice_mode=None,
+                    set_character_preset=None,
+                    tts_provider=tts_provider,
                     emit=emit,
+                    emotion_mode=emotion_mode,
+                    speech_rate=speech_rate,
+                    pitch=pitch,
+                    energy=energy,
+                    realtime=realtime,
+                    chunk_seconds=chunk_seconds,
+                    chunk_overlap=chunk_overlap,
+                    stitch=stitch,
                     print_config=False,
+                    dry_run=False,
+                    verbose=verbose,
+                    debug=debug,
                 )
             return
 
@@ -840,31 +954,90 @@ def cli(
         thresholds = {"sim": float(char_sim_thresh)}
         # Map diar speaker label -> persistent character id
         lab_to_char: dict[str, str] = {}
+        vm_store = None
+        vm_map: dict[str, str] = {}
+        vm_meta: dict[str, dict[str, object]] = {}
+        vm_enabled = str(voice_memory).lower() == "on"
+        if vm_enabled:
+            try:
+                from anime_v2.voice_memory.store import VoiceMemoryStore, compute_episode_key
+
+                vm_root = Path(voice_memory_dir or get_settings().voice_memory_dir).resolve()
+                vm_store = VoiceMemoryStore(vm_root)
+                if voice_character_map and voice_character_map.exists():
+                    mdata = read_json(voice_character_map, default={})
+                    if isinstance(mdata, dict):
+                        vm_map = {
+                            str(k): str(v)
+                            for k, v in mdata.items()
+                            if str(k).strip() and str(v).strip()
+                        }
+                episode_key = compute_episode_key(audio_hash=None, video_path=video)
+            except Exception as ex:
+                logger.warning("[v2] voice-memory unavailable; using legacy mapping (%s)", ex)
+                vm_store = None
+                episode_key = ""
+        else:
+            episode_key = ""
         for lab, segs in by_label.items():
             # pick longest seg wav for embedding
             segs_sorted = sorted(segs, key=lambda t: (t[1] - t[0]), reverse=True)
             rep_wav = segs_sorted[0][2]
-            emb = ecapa_embedding(rep_wav, device=chosen_device)
-            if emb is None:
-                # no embeddings => stable ID per show label
-                lab_to_char[lab] = lab
-                continue
-            cid = store.match_or_create(emb, show_id=show, thresholds=thresholds)
-            store.link_speaker_wav(cid, str(rep_wav))
-            lab_to_char[lab] = cid
-            # also persist npy for downstream preset matching (optional)
-            try:
-                import numpy as np  # type: ignore
+            if vm_store is not None:
+                try:
+                    manual = vm_map.get(lab)
+                    if manual:
+                        cid = vm_store.ensure_character(character_id=manual)
+                        sim_score = 1.0
+                        provider = "manual"
+                    else:
+                        cid, sim_score, provider = vm_store.match_or_create_from_wav(
+                            rep_wav,
+                            device=chosen_device,
+                            threshold=float(voice_match_threshold),
+                            auto_enroll=bool(voice_auto_enroll),
+                        )
+                    lab_to_char[lab] = cid
+                    vm_meta[lab] = {
+                        "character_id": cid,
+                        "similarity": float(sim_score),
+                        "provider": str(provider),
+                        "confidence": float(max(0.0, min(1.0, sim_score))),
+                    }
+                except Exception as ex:
+                    logger.warning("[v2] voice-memory match failed (%s): %s", lab, ex)
+                    lab_to_char[lab] = lab
+            else:
+                emb = ecapa_embedding(rep_wav, device=chosen_device)
+                if emb is None:
+                    # no embeddings => stable ID per show label
+                    lab_to_char[lab] = lab
+                    continue
+                cid = store.match_or_create(emb, show_id=show, thresholds=thresholds)
+                store.link_speaker_wav(cid, str(rep_wav))
+                lab_to_char[lab] = cid
+                # also persist npy for downstream preset matching (optional)
+                try:
+                    import numpy as np  # type: ignore
 
-                emb_dir = Path("voices") / "embeddings"
-                emb_dir.mkdir(parents=True, exist_ok=True)
-                emb_path = emb_dir / f"{cid}.npy"
-                np.save(str(emb_path), emb.astype("float32"))
-                speaker_embeddings[cid] = str(emb_path)
-            except Exception:
-                pass
+                    emb_dir = Path("voices") / "embeddings"
+                    emb_dir.mkdir(parents=True, exist_ok=True)
+                    emb_path = emb_dir / f"{cid}.npy"
+                    np.save(str(emb_path), emb.astype("float32"))
+                    speaker_embeddings[cid] = str(emb_path)
+                except Exception:
+                    pass
 
         store.save()
+        if vm_store is not None and episode_key:
+            from contextlib import suppress
+
+            with suppress(Exception):
+                vm_store.write_episode_mapping(
+                    episode_key,
+                    source={"video_path": str(video), "show_id": str(show)},
+                    mapping=vm_meta,
+                )
 
         diar_segments = []
         for lab, segs in by_label.items():
@@ -1231,6 +1404,13 @@ def cli(
             voice_mode=voice_mode,
             voice_ref_dir=voice_ref_dir,
             voice_store_dir=voice_store_dir,
+            voice_memory=(str(voice_memory).lower() == "on"),
+            voice_memory_dir=Path(voice_memory_dir).resolve() if voice_memory_dir else None,
+            voice_match_threshold=float(voice_match_threshold),
+            voice_auto_enroll=bool(voice_auto_enroll),
+            voice_character_map=(
+                Path(voice_character_map).resolve() if voice_character_map else None
+            ),
             tts_provider=tts_provider,
             emotion_mode=emotion_mode,
             speech_rate=float(speech_rate),

@@ -463,16 +463,97 @@ class JobQueue:
                 store_chars.load()
                 thresholds = {"sim": sim}
                 lab_to_char: dict[str, str] = {}
+                # Tier-2A voice memory (optional, opt-in)
+                vm_store = None
+                vm_map: dict[str, str] = {}
+                vm_meta: dict[str, dict[str, object]] = {}
+                vm_enabled = bool(getattr(settings, "voice_memory", False))
+                if vm_enabled:
+                    try:
+                        from anime_v2.voice_memory.store import (
+                            VoiceMemoryStore,
+                            compute_episode_key,
+                        )
+
+                        vm_dir = Path(settings.voice_memory_dir).resolve()
+                        vm_store = VoiceMemoryStore(vm_dir)
+                        # optional manual diar_label -> character_id overrides
+                        mp = getattr(settings, "voice_character_map", None)
+                        if mp:
+                            from anime_v2.utils.io import read_json
+
+                            mdata = read_json(Path(str(mp)), default={})
+                            if isinstance(mdata, dict):
+                                vm_map = {
+                                    str(k): str(v)
+                                    for k, v in mdata.items()
+                                    if str(k).strip() and str(v).strip()
+                                }
+                        episode_key = compute_episode_key(
+                            audio_hash=audio_hash, video_path=video_path
+                        )
+                    except Exception as ex:
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] voice_memory unavailable: {ex}"
+                        )
+                        vm_store = None
+                        episode_key = ""
+
                 for lab, segs in by_label.items():
                     rep_wav = sorted(segs, key=lambda t: (t[1] - t[0]), reverse=True)[0][2]
-                    emb = ecapa_embedding(rep_wav, device=_select_device(job.device))
-                    if emb is None:
-                        lab_to_char[lab] = lab
-                        continue
-                    cid = store_chars.match_or_create(emb, show_id=show, thresholds=thresholds)
-                    store_chars.link_speaker_wav(cid, str(rep_wav))
-                    lab_to_char[lab] = cid
+                    if vm_store is not None:
+                        # voice memory path (offline-first; falls back if embeddings unavailable)
+                        try:
+                            manual = vm_map.get(lab)
+                            if manual:
+                                cid = vm_store.ensure_character(character_id=manual)
+                                sim_score = 1.0
+                                provider = "manual"
+                            else:
+                                cid, sim_score, provider = vm_store.match_or_create_from_wav(
+                                    rep_wav,
+                                    device=_select_device(job.device),
+                                    threshold=float(
+                                        getattr(settings, "voice_match_threshold", 0.75)
+                                    ),
+                                    auto_enroll=bool(getattr(settings, "voice_auto_enroll", True)),
+                                )
+                            lab_to_char[lab] = cid
+                            vm_meta[lab] = {
+                                "character_id": cid,
+                                "similarity": float(sim_score),
+                                "provider": str(provider),
+                                "confidence": float(max(0.0, min(1.0, sim_score))),
+                            }
+                        except Exception as ex:
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] voice_memory match failed ({lab}): {ex}"
+                            )
+                            lab_to_char[lab] = lab
+                    else:
+                        # legacy path (CharacterStore)
+                        emb = ecapa_embedding(rep_wav, device=_select_device(job.device))
+                        if emb is None:
+                            lab_to_char[lab] = lab
+                            continue
+                        cid = store_chars.match_or_create(emb, show_id=show, thresholds=thresholds)
+                        store_chars.link_speaker_wav(cid, str(rep_wav))
+                        lab_to_char[lab] = cid
+
                 store_chars.save()
+
+                # Persist episode mapping (best-effort)
+                if vm_store is not None and episode_key:
+                    with suppress(Exception):
+                        vm_store.write_episode_mapping(
+                            episode_key,
+                            source={
+                                "video_path": str(video_path),
+                                "audio_hash": str(audio_hash or ""),
+                                "show_id": str(show),
+                            },
+                            mapping=vm_meta,
+                        )
 
                 diar_segments = []
                 for lab, segs in by_label.items():
@@ -956,6 +1037,22 @@ class JobQueue:
                             speech_rate=float(settings.speech_rate),
                             pitch=float(settings.pitch),
                             energy=float(settings.energy),
+                            # Tier-2A voice memory controls (opt-in)
+                            voice_memory=bool(getattr(settings, "voice_memory", False)),
+                            voice_memory_dir=(
+                                Path(settings.voice_memory_dir).resolve()
+                                if getattr(settings, "voice_memory_dir", None)
+                                else None
+                            ),
+                            voice_match_threshold=float(
+                                getattr(settings, "voice_match_threshold", 0.75)
+                            ),
+                            voice_auto_enroll=bool(getattr(settings, "voice_auto_enroll", True)),
+                            voice_character_map=(
+                                Path(str(settings.voice_character_map)).resolve()
+                                if getattr(settings, "voice_character_map", None)
+                                else None
+                            ),
                             pacing=bool(getattr(settings, "pacing", False)),
                             pacing_min_ratio=float(getattr(settings, "pacing_min_ratio", 0.88)),
                             pacing_max_ratio=float(getattr(settings, "pacing_max_ratio", 1.18)),
