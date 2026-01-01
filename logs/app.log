@@ -21,3 +21,29 @@
 2026-01-01 00:42:30 INFO anime_v2 [5532] [v2] mux: ok (0.11s) → /workspace/Output/Test/dub.mkv
 2026-01-01 00:42:30 INFO anime_v2 [5532] [v2] Done in 0.27s
 2026-01-01 00:42:30 INFO anime_v2 [5532] [v2] Done. Output: /workspace/Output/Test/dub.mkv
+2026-01-01 00:48:34 WARNING anime_v2 [6139] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 00:48:34 WARNING anime_v2 [6139] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 00:48:34 INFO anime_v2 [6139] [v2] translate: trying Marian model Helsinki-NLP/opus-mt-ja-en
+2026-01-01 00:48:34 INFO anime_v2 [6139] [v2] translate: trying Marian model Helsinki-NLP/opus-mt-fr-en
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] Starting dub: video=/workspace/samples/sample.mp4 mode=low model=small device=cpu
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] Languages: src_lang=auto tgt_lang=en translate=False
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] Extracting audio → /workspace/Output/sample/audio.wav
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] audio_extractor: ok path=/workspace/Output/sample/audio.wav (0.06s)
+2026-01-01 00:48:37 WARNING anime_v2 [6224] API_TOKEN is set to default 'change-me' (set it in env for production).
+2026-01-01 00:48:37 WARNING anime_v2 [6224] COQUI_TOS_AGREED is not enabled (set COQUI_TOS_AGREED=1 to acknowledge Coqui TOS).
+2026-01-01 00:48:37 WARNING anime_v2 [6224] [v2] Diarization unavailable (No module named 'pyannote'). Falling back to single speaker.
+2026-01-01 00:48:37 WARNING anime_v2 [6224] [v2] Embeddings unavailable (No module named 'resemblyzer'). Stable IDs will still persist.
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] Diarization: diar_speakers=1 stable_speakers=1 segments=1
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] diarize: diar_segments=1 stable_speakers=1 (0.07s)
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] Whisper transcribe: model=small device=cpu task=transcribe src_lang=auto tgt_lang=en
+2026-01-01 00:48:37 WARNING anime_v2 [6224] [v2] Whisper not installed (No module named 'whisper'). Writing placeholder SRT/metadata.
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] transcription: cues=0 (0.00s) → /workspace/Output/sample/sample.srt
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] translate: disabled (--no-translate)
+2026-01-01 00:48:37 WARNING anime_v2 [6224] [v2] TTS engine unavailable: COQUI_TOS_AGREED must be set to 1 to use Coqui TTS.
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] TTS done → /workspace/Output/sample/sample.tts.wav
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] tts: ok (0.00s) → /workspace/Output/sample/sample.tts.wav
+2026-01-01 00:48:37 WARNING anime_v2 [6224] [v2] SRT missing/empty; muxing without subtitles (/workspace/Output/sample/sample.srt)
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] mux complete → /workspace/Output/sample/dub.mkv
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] mux: ok (0.11s) → /workspace/Output/sample/dub.mkv
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] Done in 0.24s
+2026-01-01 00:48:37 INFO anime_v2 [6224] [v2] Done. Output: /workspace/Output/sample/dub.mkv

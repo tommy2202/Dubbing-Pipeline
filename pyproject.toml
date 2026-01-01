@@ -33,6 +33,9 @@ tts = [
   "resemblyzer>=0.1.4",
   "TTS>=0.22.0",
 ]
+dev = [
+  "pytest>=8.0.0",
+]
 
 [project.scripts]
 anime-v1 = "anime_v1.cli:cli"

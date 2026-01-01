@@ -12,6 +12,7 @@ from anime_v2.stages.transcription import transcribe
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.paths import output_dir_for
+from anime_v2.utils.time import format_srt_timestamp
 
 
 MODE_TO_MODEL: dict[str, str] = {
@@ -83,18 +84,11 @@ def _assign_speakers(cues: list[dict], diar_segments: list[dict] | None) -> list
 
 
 def _write_srt_from_lines(lines: list[dict], srt_path: Path) -> None:
-    def fmt_ts(sec: float) -> str:
-        h = int(sec // 3600)
-        m = int(sec % 3600 // 60)
-        s = int(sec % 60)
-        ms = int((sec - int(sec)) * 1000)
-        return f"{h:02}:{m:02}:{s:02},{ms:03}"
-
     srt_path.parent.mkdir(parents=True, exist_ok=True)
     with srt_path.open("w", encoding="utf-8") as f:
         for idx, line in enumerate(lines, 1):
-            st = fmt_ts(float(line["start"]))
-            en = fmt_ts(float(line["end"]))
+            st = format_srt_timestamp(float(line["start"]))
+            en = format_srt_timestamp(float(line["end"]))
             txt = str(line.get("text", "") or "").strip()
             f.write(f"{idx}\n{st} --> {en}\n{txt}\n\n")
 

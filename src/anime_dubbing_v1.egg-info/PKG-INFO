@@ -22,6 +22,8 @@ Provides-Extra: tts
 Requires-Dist: numpy>=1.24; extra == "tts"
 Requires-Dist: resemblyzer>=0.1.4; extra == "tts"
 Requires-Dist: TTS>=0.22.0; extra == "tts"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
 
 Anime Dub Alpha:
 

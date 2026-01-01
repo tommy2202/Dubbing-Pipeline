@@ -5,21 +5,15 @@ import time
 from pathlib import Path
 
 from anime_v2.utils.log import logger
+from anime_v2.utils.time import format_srt_timestamp
 
 
 def _write_srt(segments: list[dict], srt_path: Path) -> None:
-    def _fmt_ts(sec: float) -> str:
-        h = int(sec // 3600)
-        m = int(sec % 3600 // 60)
-        s = int(sec % 60)
-        ms = int((sec - int(sec)) * 1000)
-        return f"{h:02}:{m:02}:{s:02},{ms:03}"
-
     srt_path.parent.mkdir(parents=True, exist_ok=True)
     with srt_path.open("w", encoding="utf-8") as f:
         for i, seg in enumerate(segments, 1):
-            start = _fmt_ts(float(seg["start"]))
-            end = _fmt_ts(float(seg["end"]))
+            start = format_srt_timestamp(float(seg["start"]))
+            end = format_srt_timestamp(float(seg["end"]))
             text = (seg.get("text") or "").strip()
             f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
 
