@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from anime_v2.api.deps import Identity, require_role
 from anime_v2.api.models import ApiKey, AuthStore, Role, now_ts
+from anime_v2.api.middleware import audit_event
 from anime_v2.utils.crypto import hash_secret, random_id, random_prefix
 
 
@@ -62,6 +63,12 @@ async def create_key(request: Request, ident: Identity = Depends(require_role(Ro
         revoked=False,
     )
     store.create_api_key(k)
+    audit_event(
+        "api_key.create",
+        request=request,
+        user_id=ident.user.id,
+        meta={"key_id": k.id, "user_id": user_id, "scopes": scopes, "prefix": f"dp_{prefix}_..."},
+    )
     return {"id": k.id, "prefix": f"dp_{prefix}_...", "key": key_plain, "scopes": scopes, "user_id": user_id}
 
 
@@ -69,5 +76,6 @@ async def create_key(request: Request, ident: Identity = Depends(require_role(Ro
 async def revoke_key(request: Request, key_id: str, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
     store = _get_store(request)
     store.revoke_api_key(key_id)
+    audit_event("api_key.revoke", request=request, user_id=ident.user.id, meta={"key_id": key_id})
     return {"ok": True}
 

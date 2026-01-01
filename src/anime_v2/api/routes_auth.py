@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
+from anime_v2.api.middleware import audit_event
 from anime_v2.api.models import AuthStore, Role, User, now_ts
 from anime_v2.api.security import create_access_token, create_refresh_token, decode_token, issue_csrf_token
 from anime_v2.config import get_settings
@@ -53,18 +54,22 @@ async def login(request: Request) -> Response:
     store = _get_store(request)
     user = store.get_user_by_username(username)
     if user is None:
+        audit_event("auth.login_failed", request=request, user_id=None, meta={"username": username})
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if not PasswordHasher().verify(user.password_hash, password):
+        audit_event("auth.login_failed", request=request, user_id=None, meta={"username": username})
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if user.totp_enabled:
         if not totp:
+            audit_event("auth.login_failed_totp", request=request, user_id=user.id, meta={"username": username})
             raise HTTPException(status_code=401, detail="TOTP required")
         try:
             import pyotp  # type: ignore
 
             if not user.totp_secret or not pyotp.TOTP(user.totp_secret).verify(totp, valid_window=1):
+                audit_event("auth.login_failed_totp", request=request, user_id=user.id, meta={"username": username})
                 raise HTTPException(status_code=401, detail="Invalid TOTP")
         except HTTPException:
             raise
@@ -83,6 +88,7 @@ async def login(request: Request) -> Response:
 
     refresh = create_refresh_token(sub=user.id, days=s.refresh_token_days)
     csrf = issue_csrf_token()
+    audit_event("auth.login_ok", request=request, user_id=user.id, meta={"username": username, "role": user.role.value, "session": session})
 
     resp = Response()
     resp.set_cookie(
@@ -138,12 +144,14 @@ async def refresh(request: Request) -> Response:
 
     rt = request.cookies.get("refresh")
     if not rt:
+        audit_event("auth.refresh_failed", request=request, user_id=None, meta={"reason": "missing_refresh_cookie"})
         raise HTTPException(status_code=401, detail="Missing refresh token")
     data = decode_token(rt, expected_typ="refresh")
     sub = str(data.get("sub") or "")
     store = _get_store(request)
     user = store.get_user(sub)
     if user is None:
+        audit_event("auth.refresh_failed", request=request, user_id=None, meta={"reason": "unknown_user"})
         raise HTTPException(status_code=401, detail="Unknown user")
 
     s = get_settings()
@@ -154,6 +162,7 @@ async def refresh(request: Request) -> Response:
         scopes.append("admin:*")
     access = create_access_token(sub=user.id, role=user.role.value, scopes=scopes, minutes=s.access_token_minutes)
     csrf = issue_csrf_token()
+    audit_event("auth.refresh_ok", request=request, user_id=user.id, meta={"role": user.role.value})
 
     resp = Response()
     resp.set_cookie(

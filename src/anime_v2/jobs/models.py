@@ -41,6 +41,7 @@ class Job:
     work_dir: str
     log_path: str
     error: str | None = None
+    request_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

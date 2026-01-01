@@ -35,6 +35,13 @@ redis==5.1.1
 pydantic==2.9.2
 pydantic-settings==2.6.1
 
+# ops / observability
+structlog==24.4.0
+opentelemetry-sdk==1.27.0
+opentelemetry-exporter-otlp==1.27.0
+opentelemetry-instrumentation-fastapi==0.48b0
+prometheus-client==0.21.0
+
 # jobs + realtime progress
 sqlitedict==2.1.0
 websockets==12.0

@@ -10,6 +10,7 @@ from anime_v2.api.models import ApiKey, AuthStore, Role, User
 from anime_v2.api.security import decode_token, extract_api_key, extract_bearer, verify_csrf
 from anime_v2.config import get_settings
 from anime_v2.utils.crypto import verify_secret
+from anime_v2.utils.log import set_user_id
 from anime_v2.utils.ratelimit import RateLimiter
 
 
@@ -55,6 +56,7 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
                 user = store.get_user(k.user_id)
                 if user is None:
                     break
+                set_user_id(user.id)
                 return Identity(kind="api_key", user=user, scopes=k.scopes, api_key_prefix=prefix)
         raise HTTPException(status_code=401, detail="Invalid API key")
 
@@ -66,6 +68,7 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
         user = store.get_user(sub)
         if user is None:
             raise HTTPException(status_code=401, detail="Unknown user")
+        set_user_id(user.id)
         scopes = data.get("scopes") if isinstance(data.get("scopes"), list) else []
         scopes = [str(s) for s in scopes]
         return Identity(kind="user", user=user, scopes=scopes)
@@ -84,6 +87,7 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
             user = store.get_user(sub)
             if user is None:
                 raise HTTPException(status_code=401, detail="Unknown user")
+            set_user_id(user.id)
             scopes = data.get("scopes") if isinstance(data.get("scopes"), list) else []
             scopes = [str(x) for x in scopes]
             # enforce CSRF for cookie sessions

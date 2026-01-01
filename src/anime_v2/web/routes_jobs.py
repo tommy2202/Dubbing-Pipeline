@@ -14,6 +14,8 @@ from anime_v2.jobs.models import Job, JobState, new_id, now_utc
 from anime_v2.api.deps import Identity, require_scope
 from anime_v2.api.models import AuthStore
 from anime_v2.api.security import decode_token
+from anime_v2.ops.metrics import jobs_queued
+from anime_v2.utils.log import request_id_var
 from anime_v2.utils.crypto import verify_secret
 from anime_v2.utils.ratelimit import RateLimiter
 
@@ -146,6 +148,7 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     job = Job(
         id=jid,
         video_path=str(video_path),
+        request_id=(request_id_var.get() or ""),
         mode=mode,
         device=device,
         src_lang=src_lang,
@@ -163,6 +166,7 @@ async def create_job(request: Request, ident: Identity = Depends(require_scope("
     )
     store.put(job)
     await queue.enqueue(job)
+    jobs_queued.inc()
     return {"id": jid}
 
 

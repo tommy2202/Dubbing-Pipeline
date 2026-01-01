@@ -15,12 +15,15 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from starlette.templating import Jinja2Templates
 
 from anime_v2.api.deps import require_role, require_scope
+from anime_v2.api.middleware import request_context_middleware
 from anime_v2.api.models import AuthStore, Role, User, now_ts
 from anime_v2.api.routes_auth import router as auth_router
 from anime_v2.api.routes_keys import router as keys_router
 from anime_v2.config import get_settings
 from anime_v2.jobs.queue import JobQueue
 from anime_v2.jobs.store import JobStore
+from anime_v2.ops import audit
+from anime_v2.ops.metrics import REGISTRY
 from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.log import logger
 from anime_v2.utils.ratelimit import RateLimiter
@@ -48,6 +51,16 @@ async def lifespan(app: FastAPI):
     # bootstrap admin user
     s = get_settings()
     install_egress_policy()
+    audit.emit(
+        "policy.egress",
+        request_id=None,
+        user_id=None,
+        meta={
+            "offline_mode": bool(s.offline_mode),
+            "allow_egress": bool(s.allow_egress),
+            "allow_hf_egress": bool(s.allow_hf_egress),
+        },
+    )
     if s.admin_username and s.admin_password:
         ph = PasswordHasher()
         u = User(
@@ -70,6 +83,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="anime_v2 server", lifespan=lifespan)
+
+# OpenTelemetry (opt-in via OTEL_EXPORTER_OTLP_ENDPOINT)
+_otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+if _otel_endpoint:
+    try:
+        from opentelemetry import trace  # type: ignore
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter  # type: ignore
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # type: ignore
+        from opentelemetry.sdk.resources import Resource  # type: ignore
+        from opentelemetry.sdk.trace import TracerProvider  # type: ignore
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore
+
+        resource = Resource.create({"service.name": os.environ.get("OTEL_SERVICE_NAME", "anime_v2")})
+        provider = TracerProvider(resource=resource)
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=_otel_endpoint)))
+        trace.set_tracer_provider(provider)
+        FastAPIInstrumentor.instrument_app(app)
+        logger.info("otel_enabled", endpoint=_otel_endpoint)
+    except Exception as ex:
+        logger.warning("otel_enable_failed", error=str(ex))
 
 # Strict CORS: only configured origins, credentials on for cookies
 s = get_settings()
@@ -98,8 +131,12 @@ async def log_requests(request: Request, call_next):
     finally:
         dt_ms = (time.perf_counter() - t0) * 1000.0
         status_code = getattr(locals().get("response"), "status_code", 0)
-        logger.info("http ip=%s %s %s %s %.1fms", ip, request.method, path, status_code, dt_ms)
+        logger.info("http_done", ip=ip, method=request.method, path=path, status=status_code, duration_ms=dt_ms)
     return response
+
+
+# Must be outermost so request_id is present for all logs (including log_requests).
+app.middleware("http")(request_context_middleware)
 
 
 def _iter_videos() -> list[dict]:
@@ -175,6 +212,15 @@ async def health():
 async def healthz():
     # Liveness: process is up.
     return {"ok": True}
+
+
+@app.get("/metrics")
+async def metrics():
+    try:
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest  # type: ignore
+    except Exception as ex:  # pragma: no cover
+        raise HTTPException(status_code=500, detail=f"prometheus-client unavailable: {ex}")
+    return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/readyz")

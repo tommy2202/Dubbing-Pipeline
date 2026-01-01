@@ -11,6 +11,7 @@ from pathlib import Path
 
 from anime_v2.jobs.models import Job, JobState, now_utc
 from anime_v2.jobs.store import JobStore
+from anime_v2.ops.metrics import job_errors, jobs_finished, whisper_seconds, tts_seconds
 from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.diarization import DiarizeConfig, diarize as diarize_v2
@@ -277,15 +278,22 @@ class JobQueue:
             srt_out = out_dir / f"{video_path.stem}.srt"
             self.store.update(job_id, progress=0.30, message=f"Transcribing (Whisper {model_name})")
             self.store.append_log(job_id, f"[{now_utc()}] transcribe model={model_name} device={device}")
-            transcribe(
-                audio_path=wav,
-                srt_out=srt_out,
-                device=device,
-                model_name=model_name,
-                task="transcribe",
-                src_lang=job.src_lang,
-                tgt_lang=job.tgt_lang,
-            )
+            t_wh0 = time.perf_counter()
+            try:
+                transcribe(
+                    audio_path=wav,
+                    srt_out=srt_out,
+                    device=device,
+                    model_name=model_name,
+                    task="transcribe",
+                    src_lang=job.src_lang,
+                    tgt_lang=job.tgt_lang,
+                )
+            except Exception:
+                job_errors.labels(stage="whisper").inc()
+                raise
+            finally:
+                whisper_seconds.observe(max(0.0, time.perf_counter() - t_wh0))
             # Prefer rich segment metadata (avg_logprob) when available.
             cues: list[dict] = []
             try:
@@ -400,6 +408,7 @@ class JobQueue:
             self.store.update(job_id, progress=0.76, message="Synthesizing TTS")
             self.store.append_log(job_id, f"[{now_utc()}] tts")
             try:
+                t_tts0 = time.perf_counter()
                 tts.run(
                     out_dir=out_dir,
                     translated_json=translated_json if translated_json.exists() else None,
@@ -409,11 +418,15 @@ class JobQueue:
                     cancel_cb=cancel_cb,
                     max_stretch=float(os.environ.get("MAX_STRETCH", "0.15")),
                 )
+                tts_seconds.observe(max(0.0, time.perf_counter() - t_tts0))
             except tts.TTSCanceled:
+                job_errors.labels(stage="tts").inc()
                 raise JobCanceled()
             except JobCanceled:
+                job_errors.labels(stage="tts").inc()
                 raise
             except Exception as ex:
+                job_errors.labels(stage="tts").inc()
                 self.store.append_log(job_id, f"[{now_utc()}] tts failed: {ex} (continuing with silence)")
                 # Silence track is already best-effort within tts.run; ensure file exists.
                 if not tts_wav.exists():
@@ -464,14 +477,17 @@ class JobQueue:
                 output_mkv=str(out_mkv),
                 output_srt=str(subs_srt_path) if subs_srt_path else "",
             )
+            jobs_finished.labels(state="DONE").inc()
             self.store.append_log(job_id, f"[{now_utc()}] done in {time.perf_counter()-t0:.2f}s")
         except JobCanceled:
             self.store.append_log(job_id, f"[{now_utc()}] canceled")
             self.store.update(job_id, state=JobState.CANCELED, message="Canceled", error=None)
+            jobs_finished.labels(state="CANCELED").inc()
             # optional cleanup of in-progress outputs: leave as-is (ignored by state)
         except Exception as ex:
             self.store.append_log(job_id, f"[{now_utc()}] failed: {ex}")
             self.store.update(job_id, state=JobState.FAILED, message="Failed", error=str(ex))
+            jobs_finished.labels(state="FAILED").inc()
         finally:
             dt = time.perf_counter() - t0
             logger.info("job %s finished state=%s in %.2fs", job_id, (self.store.get(job_id).state if self.store.get(job_id) else "unknown"), dt)

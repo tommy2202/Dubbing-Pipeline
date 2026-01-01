@@ -28,6 +28,7 @@ src/anime_v2/config.py
 src/anime_v2/server.py
 src/anime_v2/api/__init__.py
 src/anime_v2/api/deps.py
+src/anime_v2/api/middleware.py
 src/anime_v2/api/models.py
 src/anime_v2/api/routes_auth.py
 src/anime_v2/api/routes_keys.py
@@ -37,6 +38,9 @@ src/anime_v2/jobs/__init__.py
 src/anime_v2/jobs/models.py
 src/anime_v2/jobs/queue.py
 src/anime_v2/jobs/store.py
+src/anime_v2/ops/__init__.py
+src/anime_v2/ops/audit.py
+src/anime_v2/ops/metrics.py
 src/anime_v2/stages/__init__.py
 src/anime_v2/stages/align.py
 src/anime_v2/stages/audio_extractor.py
