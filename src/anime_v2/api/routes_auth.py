@@ -43,13 +43,33 @@ async def login(request: Request) -> Response:
     if not rl.allow(f"auth:login:ip:{ip}", limit=5, per_seconds=60):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+    body: dict[str, Any] = {}
+    ctype = (request.headers.get("content-type") or "").lower()
+    if "application/json" in ctype:
+        raw = await request.json()
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+        body = raw
+    elif "application/x-www-form-urlencoded" in ctype or "multipart/form-data" in ctype:
+        form = await request.form()
+        body = {str(k): form.get(k) for k in form.keys()}
+    else:
+        # best-effort: try JSON
+        try:
+            raw = await request.json()
+            if isinstance(raw, dict):
+                body = raw
+        except Exception:
+            body = {}
+
     username = str(body.get("username") or "").strip()
     password = str(body.get("password") or "")
     totp = str(body.get("totp") or "").strip() or None
-    session = bool(body.get("session") or False)
+    session_val = body.get("session") or False
+    if isinstance(session_val, str):
+        session = session_val.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        session = bool(session_val)
 
     store = _get_store(request)
     user = store.get_user_by_username(username)

@@ -1,0 +1,21 @@
+{% extends "_base.html" %}
+
+{% block title %}Dashboard • anime_v2{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Dashboard</h1>
+    <p class="mt-1 text-sm text-slate-400">Jobs and outputs will appear here (UX-2).</p>
+  </div>
+  <a href="/ui/upload" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium">
+    New Job
+  </a>
+</div>
+
+<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+  <div class="text-sm text-slate-300">Jobs</div>
+  <div class="mt-3 text-sm text-slate-500">Table placeholder.</div>
+</div>
+{% endblock %}
+

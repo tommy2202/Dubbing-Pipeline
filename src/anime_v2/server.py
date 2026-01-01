@@ -13,6 +13,7 @@ from typing import Iterator
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
 from anime_v2.api.deps import require_role, require_scope
@@ -36,9 +37,12 @@ from anime_v2.utils.ratelimit import RateLimiter
 from anime_v2.utils.net import install_egress_policy
 from anime_v2.web.routes_jobs import router as jobs_router
 from anime_v2.web.routes_webrtc import router as webrtc_router
+from anime_v2.web.routes_ui import router as ui_router
 
 OUTPUT_ROOT = Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
-TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "web" / "templates"))
+TEMPLATES_DIR = (Path(__file__).parent / "web" / "templates").resolve()
+STATIC_DIR = (Path(__file__).parent / "web" / "static").resolve()
+TEMPLATES = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 @asynccontextmanager
@@ -139,6 +143,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="anime_v2 server", lifespan=lifespan)
+app.state.templates = TEMPLATES
+try:
+    STATIC_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Signal handlers (best-effort, uvicorn will also trigger lifespan shutdown)
 try:
@@ -186,10 +196,13 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+# Also expose auth endpoints under /api/auth/* for browser-friendly UI wiring.
+app.include_router(auth_router, prefix="/api")
 app.include_router(keys_router)
 app.include_router(runtime_router)
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
+app.include_router(ui_router)
 
 
 @app.middleware("http")
@@ -320,7 +333,7 @@ async def readyz(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request, _: object = Depends(require_role(Role.viewer))):
     videos = _iter_videos()
-    return TEMPLATES.TemplateResponse("index.html", {"request": request, "videos": videos})
+    return TEMPLATES.TemplateResponse(request, "index.html", {"videos": videos})
 
 
 @app.get("/video/{job}")

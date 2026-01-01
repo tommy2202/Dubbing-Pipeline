@@ -22,6 +22,8 @@ fastapi==0.115.5
 uvicorn==0.32.0
 python-multipart==0.0.17
 jinja2==3.1.4
+aiofiles==23.2.1
+qrcode==7.4.2
 
 # auth / security
 itsdangerous==2.2.0
