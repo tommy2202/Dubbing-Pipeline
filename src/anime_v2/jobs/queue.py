@@ -355,11 +355,35 @@ class JobQueue:
             try:
                 from anime_v2.jobs.manifests import file_fingerprint, write_stage_manifest
 
+                # Project profile provenance (best-effort; affects resume params hash)
+                proj_name = ""
+                proj_hash = ""
+                try:
+                    curj = self.store.get(job_id)
+                    rt2 = dict((curj.runtime or {}) if curj else runtime)
+                    proj_name = str(rt2.get("project_name") or "").strip()
+                    if proj_name:
+                        from anime_v2.projects.loader import load_project_profile, write_profile_artifacts
+
+                        prof = load_project_profile(proj_name)
+                        if prof is not None:
+                            proj_hash = prof.profile_hash
+                            with suppress(Exception):
+                                self.store.update(
+                                    job_id,
+                                    runtime={**rt2, "project_profile_hash": proj_hash, "project_name": prof.name},
+                                )
+                            # Persist under Output/<job>/analysis/
+                            with suppress(Exception):
+                                write_profile_artifacts(base_dir, prof)
+                except Exception:
+                    pass
+
                 write_stage_manifest(
                     job_dir=base_dir,
                     stage="audio",
                     inputs={"video": file_fingerprint(video_path)},
-                    params={"wav_out": "audio.wav"},
+                    params={"wav_out": "audio.wav", "project": proj_name, "project_profile_hash": proj_hash},
                     outputs={"audio_wav": str(Path(str(wav)).resolve())},
                 )
             except Exception:
@@ -419,8 +443,44 @@ class JobQueue:
             base_audio_dir = base_dir / "audio"
             base_audio_dir.mkdir(parents=True, exist_ok=True)
 
+            # Per-project profile: can provide mix presets + QA thresholds + provenance (best-effort).
+            try:
+                curj = self.store.get(job_id)
+                rt2 = dict((curj.runtime or {}) if curj else runtime)
+                proj_name = str(rt2.get("project_name") or "").strip()
+                if proj_name:
+                    from anime_v2.projects.loader import (
+                        load_project_profile,
+                        log_profile_applied,
+                        mix_overrides_from_profile,
+                        write_profile_artifacts,
+                    )
+
+                    prof = load_project_profile(proj_name)
+                    if prof is not None:
+                        mo = mix_overrides_from_profile(prof)
+                        # Only apply keys not already explicitly present in runtime.
+                        applied = []
+                        for k, v in mo.items():
+                            if k not in rt2:
+                                rt2[k] = v
+                                applied.append(k)
+                        rt2["project_name"] = prof.name
+                        rt2["project_profile_hash"] = prof.profile_hash
+                        with suppress(Exception):
+                            self.store.update(job_id, runtime=rt2)
+                        with suppress(Exception):
+                            write_profile_artifacts(base_dir, prof)
+                        log_profile_applied(
+                            project=prof.name, profile_hash=prof.profile_hash, applied_keys=applied
+                        )
+            except Exception:
+                pass
+
             sep_mode = str(getattr(settings, "separation", "off") or "off").lower()
-            mix_mode = str(getattr(settings, "mix_mode", "legacy") or "legacy").lower()
+            curj = self.store.get(job_id)
+            rt2 = dict((curj.runtime or {}) if curj else runtime)
+            mix_mode = str(rt2.get("mix_mode") or getattr(settings, "mix_mode", "legacy") or "legacy").lower()
             background_wav: Path | None = None
             if mix_mode == "enhanced":
                 if sep_mode == "demucs":
@@ -808,6 +868,16 @@ class JobQueue:
             try:
                 from anime_v2.jobs.manifests import file_fingerprint, write_stage_manifest
 
+                proj_name = ""
+                proj_hash = ""
+                try:
+                    curj = self.store.get(job_id)
+                    rt2 = dict((curj.runtime or {}) if curj else runtime)
+                    proj_name = str(rt2.get("project_name") or "").strip()
+                    proj_hash = str(rt2.get("project_profile_hash") or "").strip()
+                except Exception:
+                    pass
+
                 write_stage_manifest(
                     job_dir=base_dir,
                     stage="transcribe",
@@ -819,6 +889,8 @@ class JobQueue:
                         "src_lang": str(job.src_lang),
                         "tgt_lang": str(job.tgt_lang),
                         "word_timestamps": bool(get_settings().whisper_word_timestamps),
+                        "project": proj_name,
+                        "project_profile_hash": proj_hash,
                     },
                     outputs={
                         "srt": str(srt_public.resolve() if srt_public.exists() else srt_out.resolve()),
@@ -1453,7 +1525,11 @@ class JobQueue:
                     else:
                         emit_env = str(settings.emit_formats or "mkv,mp4")
                         cfg_mix = MixConfig(
-                            profile=str(settings.mix_profile),
+                            profile=str(
+                                (self.store.get(job_id).runtime or {}).get("mix_profile", str(settings.mix_profile))
+                                if self.store.get(job_id)
+                                else str(settings.mix_profile)
+                            ),
                             separate_vocals=bool(settings.separate_vocals),
                             emit=tuple(
                                 sorted(
@@ -1515,12 +1591,28 @@ class JobQueue:
                                     tts_dialogue_wav=tts_wav,
                                     out_wav=final_mix_wav,
                                     params=MixParams(
-                                        lufs_target=float(getattr(settings, "lufs_target", -16.0)),
+                                        lufs_target=float(
+                                            ((self.store.get(job_id).runtime or {}).get("lufs_target"))
+                                            if self.store.get(job_id)
+                                            and isinstance(self.store.get(job_id).runtime, dict)
+                                            and "lufs_target" in (self.store.get(job_id).runtime or {})
+                                            else getattr(settings, "lufs_target", -16.0)
+                                        ),
                                         ducking=bool(getattr(settings, "ducking", True)),
                                         ducking_strength=float(
-                                            getattr(settings, "ducking_strength", 1.0)
+                                            ((self.store.get(job_id).runtime or {}).get("ducking_strength"))
+                                            if self.store.get(job_id)
+                                            and isinstance(self.store.get(job_id).runtime, dict)
+                                            and "ducking_strength" in (self.store.get(job_id).runtime or {})
+                                            else getattr(settings, "ducking_strength", 1.0)
                                         ),
-                                        limiter=bool(getattr(settings, "limiter", True)),
+                                        limiter=bool(
+                                            ((self.store.get(job_id).runtime or {}).get("limiter"))
+                                            if self.store.get(job_id)
+                                            and isinstance(self.store.get(job_id).runtime, dict)
+                                            and "limiter" in (self.store.get(job_id).runtime or {})
+                                            else getattr(settings, "limiter", True)
+                                        ),
                                     ),
                                 )
                                 with suppress(Exception):

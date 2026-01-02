@@ -264,6 +264,26 @@ def score_job(
     asr_lowconf_warn = -0.80  # avg logprob approx
     asr_lowconf_fail = -1.05
 
+    # Project profile overrides (best-effort; deterministic)
+    try:
+        from anime_v2.projects.loader import load_job_qa_profile
+
+        prof = load_job_qa_profile(job_dir)
+        th = prof.get("thresholds") if isinstance(prof, dict) else None
+        if isinstance(th, dict):
+            drift_warn_ratio = float(th.get("drift_warn_ratio", drift_warn_ratio))
+            drift_fail_ratio = float(th.get("drift_fail_ratio", drift_fail_ratio))
+            wps_warn = float(th.get("wps_warn", wps_warn))
+            wps_fail = float(th.get("wps_fail", wps_fail))
+            cps_warn = float(th.get("cps_warn", cps_warn))
+            cps_fail = float(th.get("cps_fail", cps_fail))
+            peak_warn = float(th.get("peak_warn", peak_warn))
+            peak_fail = float(th.get("peak_fail", peak_fail))
+            asr_lowconf_warn = float(th.get("asr_lowconf_warn", asr_lowconf_warn))
+            asr_lowconf_fail = float(th.get("asr_lowconf_fail", asr_lowconf_fail))
+    except Exception:
+        pass
+
     by_sev = {"info": 0, "warn": 0, "fail": 0}
     seg_rows: list[SegmentQA] = []
     all_issues: list[tuple[int, QAIssue]] = []

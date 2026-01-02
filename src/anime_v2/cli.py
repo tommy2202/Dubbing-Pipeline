@@ -1206,6 +1206,45 @@ def run(
     out_dir = output_dir_for(video)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Per-project profile (optional): may set mix presets + QA thresholds + provenance.
+    project_profile_hash = ""
+    if project_name:
+        try:
+            from anime_v2.projects.loader import (
+                load_project_profile,
+                log_profile_applied,
+                mix_overrides_from_profile,
+                write_profile_artifacts,
+            )
+
+            prof = load_project_profile(str(project_name))
+            if prof is not None:
+                project_name = prof.name
+                project_profile_hash = prof.profile_hash
+                write_profile_artifacts(out_dir, prof)
+
+                mo = mix_overrides_from_profile(prof)
+                applied = []
+                if mo:
+                    if not _is_explicit("mix_profile") and "mix_profile" in mo:
+                        mix_profile = str(mo["mix_profile"])
+                        applied.append("mix_profile")
+                    if not _is_explicit("mix_mode") and "mix_mode" in mo:
+                        mix_mode = str(mo["mix_mode"])
+                        applied.append("mix_mode")
+                    if not _is_explicit("lufs_target") and "lufs_target" in mo:
+                        lufs_target = float(mo["lufs_target"])
+                        applied.append("lufs_target")
+                    if not _is_explicit("ducking_strength") and "ducking_strength" in mo:
+                        ducking_strength = float(mo["ducking_strength"])
+                        applied.append("ducking_strength")
+                    if not _is_explicit("limiter") and "limiter" in mo:
+                        limiter = bool(mo["limiter"])
+                        applied.append("limiter")
+                log_profile_applied(project=prof.name, profile_hash=prof.profile_hash, applied_keys=applied)
+        except Exception as ex:
+            logger.warning("project_profile_load_failed_continue", project=str(project_name), error=str(ex))
+
     if bool(debug_dump):
         try:
             from config.settings import get_safe_config_report
@@ -1361,7 +1400,11 @@ def run(
             job_logger.event(stage="audio", level="info", msg="stage_start")
         if resume and job_ctx is not None and can_resume_stage is not None and file_fingerprint is not None:
             inputs = {"video": file_fingerprint(video)}
-            params = {"wav_out": str(wav_path.name)}
+            params = {
+                "wav_out": str(wav_path.name),
+                "project": str(project_name or ""),
+                "project_profile_hash": str(project_profile_hash or ""),
+            }
             if can_resume_stage(
                 job_dir=out_dir,
                 stage="audio",
@@ -1383,6 +1426,19 @@ def run(
                     )
         else:
             extracted = audio_extractor.extract(video=video, out_dir=out_dir, wav_out=wav_path)
+            if write_stage_manifest is not None and file_fingerprint is not None and extracted and Path(extracted).exists():
+                with suppress(Exception):
+                    write_stage_manifest(
+                        job_dir=out_dir,
+                        stage="audio",
+                        inputs={"video": file_fingerprint(video)},
+                        params={
+                            "wav_out": str(wav_path.name),
+                            "project": str(project_name or ""),
+                            "project_profile_hash": str(project_profile_hash or ""),
+                        },
+                        outputs={"audio_wav": str(Path(extracted).resolve())},
+                    )
         logger.info(
             "[v2] audio_extractor: ok path=%s (%.2fs)", extracted, time.perf_counter() - t_stage
         )
@@ -1704,6 +1760,8 @@ def run(
                 "src_lang": str(src_lang),
                 "tgt_lang": str(tgt_lang),
                 "word_timestamps": bool(want_words),
+                "project": str(project_name or ""),
+                "project_profile_hash": str(project_profile_hash or ""),
             }
             if can_resume_stage(
                 job_dir=out_dir,
@@ -1738,6 +1796,8 @@ def run(
                             "src_lang": str(src_lang),
                             "tgt_lang": str(tgt_lang),
                             "word_timestamps": bool(want_words),
+                            "project": str(project_name or ""),
+                            "project_profile_hash": str(project_profile_hash or ""),
                         },
                         outputs={
                             "srt": str(srt_out.resolve()),

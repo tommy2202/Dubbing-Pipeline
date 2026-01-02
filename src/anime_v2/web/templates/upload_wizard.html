@@ -21,6 +21,7 @@
     fileSize: 0,
     preset_id: '',
     project_id: '',
+    project: '', // filesystem project profile name (projects/<name>/profile.yaml)
     mode: '{{ (user_defaults.mode if user_defaults and user_defaults.mode else "medium") | e }}',
     device: '{{ (user_defaults.device if user_defaults and user_defaults.device else "auto") | e }}',
     src_lang: '{{ (user_defaults.src_lang if user_defaults and user_defaults.src_lang else "ja") | e }}',
@@ -171,6 +172,16 @@
             <option value="">(none)</option>
           </select>
           <div class="mt-1 text-xs text-slate-500">Loaded from /api/projects.</div>
+        </div>
+      </div>
+      <div class="mt-4 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm text-slate-300" for="profileSel">Project profile (optional)</label>
+          <select id="profileSel" name="project" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                  x-model="project">
+            <option value="">(none)</option>
+          </select>
+          <div class="mt-1 text-xs text-slate-500">Loaded from /api/project-profiles (filesystem profiles).</div>
         </div>
       </div>
       <div class="mt-4 grid gap-4 sm:grid-cols-2">
@@ -416,14 +427,16 @@
         const items = Array.isArray(d.items) ? d.items : [];
         for(const it of items){
           const o = document.createElement('option');
-          o.value = it.id;
-          o.textContent = it.name || it.id;
+          // Support both {id,name} and {name} payloads
+          o.value = (it.id !== undefined && it.id !== null) ? it.id : (it.name || '');
+          o.textContent = it.name || it.id || '';
           sel.appendChild(o);
         }
       }catch(e){}
     }
     fill('/api/presets','preset_id');
     fill('/api/projects','project_id');
+    fill('/api/project-profiles','project');
   })();
 </script>
 {% endblock %}

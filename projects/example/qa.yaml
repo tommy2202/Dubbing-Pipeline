@@ -1,0 +1,20 @@
+version: 1
+thresholds:
+  # Alignment drift (ratio of clip duration to slot duration)
+  drift_warn_ratio: 1.10
+  drift_fail_ratio: 1.25
+
+  # Speaking rate
+  wps_warn: 3.2
+  wps_fail: 3.8
+  cps_warn: 18.0
+  cps_fail: 22.0
+
+  # Clipping (linear peak)
+  peak_warn: 0.98
+  peak_fail: 0.999
+
+  # ASR/MT low confidence (avg logprob proxy; best-effort)
+  asr_lowconf_warn: -0.80
+  asr_lowconf_fail: -1.05
+

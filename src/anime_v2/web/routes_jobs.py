@@ -950,6 +950,29 @@ async def list_jobs(
     }
 
 
+@router.get("/api/project-profiles")
+async def list_project_profiles(_: Identity = Depends(require_scope("read:job"))) -> dict[str, Any]:
+    """
+    Filesystem-backed project profiles under <APP_ROOT>/projects/<name>/profile.yaml.
+    Returned items are safe to expose (no secrets).
+    """
+    try:
+        from anime_v2.projects.loader import list_project_profiles as _list, load_project_profile
+
+        items: list[dict[str, Any]] = []
+        for name in _list():
+            try:
+                prof = load_project_profile(name)
+                if prof is None:
+                    continue
+                items.append({"name": prof.name, "profile_hash": prof.profile_hash})
+            except Exception:
+                continue
+        return {"items": items}
+    except Exception:
+        return {"items": []}
+
+
 @router.get("/api/jobs/{id}")
 async def get_job(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
