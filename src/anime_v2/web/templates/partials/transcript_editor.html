@@ -79,6 +79,18 @@
                       placeholder="(target text)"></textarea>
           </div>
         </div>
+
+        <div class="mt-3 flex flex-wrap items-center gap-3">
+          <div class="text-xs text-slate-500">Speaker override</div>
+          <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100 {% if user and user.role and user.role.value == 'viewer' %}opacity-80{% endif %}"
+                 :value="seg.speaker_override || ''"
+                 @input="seg.speaker_override = $event.target.value; markDirty(seg)"
+                 :aria-label="`Speaker override for segment ${seg.index}`"
+                 {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}
+                 placeholder="(optional character_id)" />
+          <span class="text-xs rounded bg-amber-700/30 border border-amber-700/60 px-2 py-1 text-amber-200"
+                x-show="(seg.speaker_override||'').trim().length" x-cloak>changed by user</span>
+        </div>
       </div>
     </template>
   </div>
@@ -139,6 +151,7 @@
           tgt_text: seg.tgt_text,
           approved: !!seg.approved,
           flags: Array.isArray(seg.flags) ? seg.flags : [],
+          speaker_override: seg.speaker_override || "",
         };
         if (this._debounce) clearTimeout(this._debounce);
         this._debounce = setTimeout(() => this.saveNow(), 900);
@@ -163,6 +176,20 @@
             this.error = data.detail || ("Save failed (" + r.status + ")");
             return;
           }
+          // Speaker overrides are stored separately (Output/<job>/review/overrides.json).
+          try {
+            const spUpdates = updates
+              .filter(u => u && (u.speaker_override !== undefined))
+              .map(u => ({ index: u.index, speaker_override: u.speaker_override }));
+            if (spUpdates.length) {
+              await fetch(`/api/jobs/${encodeURIComponent(this.jobId)}/overrides/speaker`, {
+                method: "POST",
+                credentials: "include",
+                headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+                body: JSON.stringify({ updates: spUpdates }),
+              });
+            }
+          } catch (e) {}
           this.dirty = {};
           if (data.version !== undefined) this.version = data.version;
           this.toast = "Saved.";

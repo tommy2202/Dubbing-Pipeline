@@ -431,6 +431,21 @@ class JobQueue:
                             atomic_copy(oped_path, base_analysis_dir / "op_ed.json")
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] music_detect failed: {ex}")
+            # Feature D: per-job overrides can provide effective music regions even if detection is off.
+            try:
+                from anime_v2.review.overrides import apply_overrides, overrides_path
+
+                if overrides_path(base_dir).exists() or music_regions_path_work is not None:
+                    rep = apply_overrides(base_dir, write_manifest=True)
+                    eff = base_analysis_dir / "music_regions.effective.json"
+                    if eff.exists():
+                        music_regions_path_work = eff
+                    self.store.append_log(
+                        job_id,
+                        f"[{now_utc()}] overrides applied hash={rep.overrides_hash} music_regions={str(music_regions_path_work or '')}",
+                    )
+            except Exception:
+                pass
 
             # Tier-1 A: dialogue isolation + enhanced mixing (opt-in).
             # Defaults preserve behavior (SEPARATION=off, MIX=legacy).
@@ -548,7 +563,22 @@ class JobQueue:
                             min_turn_s=float(getattr(settings, "smoothing_min_turn_s", 0.6)),
                             surround_gap_s=float(getattr(settings, "smoothing_surround_gap_s", 0.4)),
                         )
-                        utts = utts2
+                        # Feature D: optional per-job smoothing overrides (disable smoothing in selected ranges/segments)
+                        try:
+                            from anime_v2.review.overrides import apply_smoothing_overrides_to_utts, load_overrides
+
+                            ov = load_overrides(base_dir)
+                            sm_ov = ov.get("smoothing_overrides", {}) if isinstance(ov, dict) else {}
+                            utts2b, reverted = apply_smoothing_overrides_to_utts(
+                                utts2, sm_ov, segment_ranges=None
+                            )
+                            if reverted:
+                                self.store.append_log(
+                                    job_id, f"[{now_utc()}] smoothing_overrides reverted_utts={reverted}"
+                                )
+                            utts = utts2b
+                        except Exception:
+                            utts = utts2
                         rep_path = analysis_dir / "speaker_smoothing.json"
                         write_speaker_smoothing_report(
                             rep_path,
@@ -974,6 +1004,25 @@ class JobQueue:
                         )
                     except Exception:
                         continue
+
+            # Feature D: apply per-job speaker overrides to segment speaker IDs (best-effort).
+            try:
+                curj = self.store.get(job_id)
+                rt2 = dict((curj.runtime or {}) if curj else runtime)
+                from anime_v2.review.overrides import apply_speaker_overrides_to_segments
+
+                sp = rt2.get("speaker_overrides", {})
+                if not isinstance(sp, dict):
+                    # fall back to overrides file if present
+                    from anime_v2.review.overrides import load_overrides
+
+                    ov = load_overrides(base_dir)
+                    sp = ov.get("speaker_overrides", {}) if isinstance(ov, dict) else {}
+                segments_for_mt, changed = apply_speaker_overrides_to_segments(segments_for_mt, sp)
+                if changed:
+                    self.store.append_log(job_id, f"[{now_utc()}] speaker_overrides applied segments={changed}")
+            except Exception:
+                pass
             translated_json = base_dir / "translated.json"
             translated_srt = base_dir / f"{video_path.stem}.translated.srt"
 

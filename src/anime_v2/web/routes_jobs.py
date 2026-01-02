@@ -973,6 +973,67 @@ async def list_project_profiles(_: Identity = Depends(require_scope("read:job"))
         return {"items": []}
 
 
+@router.get("/api/jobs/{id}/overrides")
+async def get_job_overrides(
+    request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    try:
+        from anime_v2.review.overrides import load_overrides
+
+        return load_overrides(base_dir)
+    except Exception:
+        return {
+            "version": 1,
+            "music_regions_overrides": {"adds": [], "removes": [], "edits": []},
+            "speaker_overrides": {},
+            "smoothing_overrides": {"disable_segments": [], "disable_ranges": []},
+        }
+
+
+@router.put("/api/jobs/{id}/overrides")
+async def put_job_overrides(
+    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    try:
+        from anime_v2.review.overrides import save_overrides
+
+        save_overrides(base_dir, body)
+        return {"ok": True}
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=f"Failed to save overrides: {ex}") from ex
+
+
+@router.post("/api/jobs/{id}/overrides/apply")
+async def apply_job_overrides(
+    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    try:
+        from anime_v2.review.overrides import apply_overrides
+
+        rep = apply_overrides(base_dir)
+        return {"ok": True, "report": rep.to_dict()}
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=f"Failed to apply overrides: {ex}") from ex
+
+
 @router.get("/api/jobs/{id}")
 async def get_job(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
@@ -1355,6 +1416,16 @@ async def get_job_transcript(
     st = _load_transcript_store(base_dir)
     seg_over = st.get("segments", {})
     version = int(st.get("version") or 0)
+    speaker_overrides: dict[str, Any] = {}
+    try:
+        from anime_v2.review.overrides import load_overrides
+
+        ov = load_overrides(base_dir)
+        speaker_overrides = ov.get("speaker_overrides", {}) if isinstance(ov, dict) else {}
+        if not isinstance(speaker_overrides, dict):
+            speaker_overrides = {}
+    except Exception:
+        speaker_overrides = {}
 
     for i in range(n):
         s0 = (
@@ -1377,6 +1448,11 @@ async def get_job_transcript(
         flags = ov.get("flags") if isinstance(ov, dict) else []
         if not isinstance(flags, list):
             flags = []
+        speaker_override = ""
+        try:
+            speaker_override = str(speaker_overrides.get(str(i + 1)) or "")
+        except Exception:
+            speaker_override = ""
         items.append(
             {
                 "index": i + 1,
@@ -1386,6 +1462,7 @@ async def get_job_transcript(
                 "tgt_text": tgt_text,
                 "approved": approved,
                 "flags": [str(x) for x in flags],
+                "speaker_override": speaker_override,
             }
         )
 
@@ -1461,6 +1538,51 @@ async def put_job_transcript(
     rt["transcript_version"] = st["version"]
     store.update(id, runtime=rt)
     return {"ok": True, "version": st["version"]}
+
+
+@router.post("/api/jobs/{id}/overrides/speaker")
+async def set_speaker_overrides_from_ui(
+    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
+    """
+    Set per-segment speaker overrides (used by transcript editor UI).
+    Body: { updates: [{ index: <int>, speaker_override: <str> }, ...] }
+    """
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    body = await request.json()
+    if not isinstance(body, dict) or not isinstance(body.get("updates"), list):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    updates = [u for u in body.get("updates", []) if isinstance(u, dict)]
+    if not updates:
+        return {"ok": True}
+    try:
+        from anime_v2.review.overrides import load_overrides, save_overrides
+
+        ov = load_overrides(base_dir)
+        sp = ov.get("speaker_overrides", {})
+        if not isinstance(sp, dict):
+            sp = {}
+        for u in updates:
+            try:
+                idx = int(u.get("index"))
+            except Exception:
+                continue
+            if idx <= 0:
+                continue
+            val = str(u.get("speaker_override") or "").strip()
+            if val:
+                sp[str(idx)] = val
+            else:
+                sp.pop(str(idx), None)
+        ov["speaker_overrides"] = sp
+        save_overrides(base_dir, ov)
+        return {"ok": True}
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=f"Failed to update speaker overrides: {ex}") from ex
 
 
 @router.post("/api/jobs/{id}/transcript/synthesize")

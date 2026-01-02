@@ -463,6 +463,18 @@ def run(
 
     voice_db_embeddings_dir = (settings.voice_db_path.parent / "embeddings").resolve()
 
+    # Feature D: per-job overrides (speaker override; optional)
+    speaker_overrides: dict[str, str] = {}
+    try:
+        from anime_v2.review.overrides import load_overrides
+
+        ov = load_overrides(out_dir)
+        sp = ov.get("speaker_overrides", {}) if isinstance(ov, dict) else {}
+        if isinstance(sp, dict):
+            speaker_overrides = {str(k): str(v) for k, v in sp.items() if str(v).strip()}
+    except Exception:
+        speaker_overrides = {}
+
     # Tier-Next A/B: optional music preservation (skip dubbing in these regions)
     music_regions: list[dict] = []
     if music_regions_path is not None:
@@ -568,7 +580,9 @@ def run(
                 pitch_mul *= float(plan.pitch_mul)
                 energy_mul *= float(plan.energy_mul)
                 _director_plans.append(plan)
-        speaker_id = str(line.get("speaker_id") or eff_tts_speaker or "default")
+        # Segment index is 1-based; allow per-segment forced character_id.
+        forced = speaker_overrides.get(str(i + 1))
+        speaker_id = str(forced or line.get("speaker_id") or eff_tts_speaker or "default")
         if eff_voice_mode == "single":
             speaker_id = str(eff_tts_speaker or "default")
         if not text:

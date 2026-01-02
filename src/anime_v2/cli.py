@@ -1505,6 +1505,23 @@ def run(
         except Exception:
             logger.exception("music_detect_failed_continue")
 
+    # Feature D: per-job overrides can provide effective music regions even if detection is off.
+    try:
+        from anime_v2.review.overrides import apply_overrides, overrides_path
+
+        if overrides_path(out_dir).exists() or music_regions_path is not None:
+            rep = apply_overrides(out_dir, write_manifest=True)
+            eff_path = out_dir / "analysis" / "music_regions.effective.json"
+            if eff_path.exists():
+                music_regions_path = eff_path
+            logger.info(
+                "overrides_applied",
+                overrides_hash=str(rep.overrides_hash),
+                music_regions_path=str(music_regions_path or ""),
+            )
+    except Exception:
+        pass
+
     # Optional Tier-1 A separation (opt-in; default off)
     stems_dir = out_dir / "stems"
     audio_dir = out_dir / "audio"
@@ -1558,7 +1575,18 @@ def run(
                     min_turn_s=float(smoothing_min_turn),
                     surround_gap_s=float(smoothing_surround_gap),
                 )
-                utts = utts2
+                # Feature D: optional per-job smoothing overrides (disable smoothing in selected ranges)
+                try:
+                    from anime_v2.review.overrides import apply_smoothing_overrides_to_utts, load_overrides
+
+                    ov = load_overrides(out_dir)
+                    sm_ov = ov.get("smoothing_overrides", {}) if isinstance(ov, dict) else {}
+                    utts2b, reverted = apply_smoothing_overrides_to_utts(utts2, sm_ov)
+                    if reverted:
+                        logger.info("smoothing_overrides_applied", reverted_utts=int(reverted))
+                    utts = utts2b
+                except Exception:
+                    utts = utts2
                 write_speaker_smoothing_report(
                     analysis_dir / "speaker_smoothing.json",
                     scenes=scenes,
@@ -1915,6 +1943,18 @@ def run(
                 )
             except Exception:
                 continue
+
+    # Feature D: apply per-job speaker overrides to segment speaker IDs (best-effort).
+    try:
+        from anime_v2.review.overrides import apply_speaker_overrides_to_segments, load_overrides
+
+        ov = load_overrides(out_dir)
+        sp = ov.get("speaker_overrides", {}) if isinstance(ov, dict) else {}
+        segments_for_mt, changed = apply_speaker_overrides_to_segments(segments_for_mt, sp)
+        if changed:
+            logger.info("speaker_overrides_applied", segments=int(changed))
+    except Exception:
+        pass
 
     # 4) translate.translate_lines (when needed)
     subs_srt_path: Path | None = srt_out
@@ -2535,11 +2575,13 @@ def run(
 # Public entrypoint (project.scripts -> anime_v2.cli:cli)
 from anime_v2.review.cli import review as review  # noqa: E402
 from anime_v2.qa.cli import qa as qa  # noqa: E402
+from anime_v2.overrides.cli import overrides as overrides  # noqa: E402
 
 cli = DefaultGroup(name="anime-v2", help="anime-v2 CLI (run + review)")  # type: ignore[assignment]
 cli.add_command(run)
 cli.add_command(review)
 cli.add_command(qa)
+cli.add_command(overrides)
 
 
 if __name__ == "__main__":  # pragma: no cover
