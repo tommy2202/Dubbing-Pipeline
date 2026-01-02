@@ -390,6 +390,7 @@ async def create_job(
     qa = False
     project_name = ""
     style_guide_path = ""
+    cache_policy = "full"
     speaker_smoothing = False
     scene_detect = "audio"
     director = False
@@ -410,6 +411,7 @@ async def create_job(
         qa = bool(body.get("qa") or False)
         project_name = str(body.get("project") or body.get("project_name") or "")
         style_guide_path = str(body.get("style_guide_path") or "")
+        cache_policy = str(body.get("cache_policy") or cache_policy)
         speaker_smoothing = bool(body.get("speaker_smoothing") or False)
         scene_detect = str(body.get("scene_detect") or scene_detect)
         director = bool(body.get("director") or False)
@@ -434,6 +436,7 @@ async def create_job(
         qa = str(form.get("qa") or "").strip() not in {"", "0", "false", "off"}
         project_name = str(form.get("project") or form.get("project_name") or "")
         style_guide_path = str(form.get("style_guide_path") or "")
+        cache_policy = str(form.get("cache_policy") or cache_policy)
         speaker_smoothing = str(form.get("speaker_smoothing") or "").strip() not in {"", "0", "false", "off"}
         scene_detect = str(form.get("scene_detect") or scene_detect)
         director = str(form.get("director") or "").strip() not in {"", "0", "false", "off"}
@@ -573,6 +576,11 @@ async def create_job(
         rt["director"] = True
         rt["director_strength"] = float(director_strength)
 
+    # retention policy (per-job)
+    cp = str(cache_policy or "").strip().lower()
+    if cp in {"full", "balanced", "minimal"}:
+        rt["cache_policy"] = cp
+
     # Store requested + effective settings summary (best-effort; no secrets).
     try:
         from anime_v2.modes import resolve_effective_settings
@@ -672,6 +680,7 @@ async def create_jobs_batch(
         pg: str = "off",
         pg_policy_path: str = "",
         qa: bool = False,
+        cache_policy: str = "full",
         project_name: str = "",
         style_guide_path: str = "",
     ) -> str:
@@ -733,6 +742,9 @@ async def create_jobs_batch(
                 rt["pg_policy_path"] = str(pg_policy_path).strip()
         if bool(qa):
             rt["qa"] = True
+        cp = str(cache_policy or "").strip().lower()
+        if cp in {"full", "balanced", "minimal"}:
+            rt["cache_policy"] = cp
         if str(project_name or "").strip():
             rt["project_name"] = str(project_name).strip()
         if str(style_guide_path or "").strip():
@@ -790,6 +802,7 @@ async def create_jobs_batch(
             pg = str(it.get("pg") or "off")
             pg_policy_path = str(it.get("pg_policy_path") or "")
             qa = bool(it.get("qa") or False)
+            cache_policy = str(it.get("cache_policy") or "full")
             project_name = str(it.get("project") or it.get("project_name") or "")
             style_guide_path = str(it.get("style_guide_path") or "")
             # project output folder stored in runtime; validated here
@@ -809,6 +822,7 @@ async def create_jobs_batch(
                     pg=pg,
                     pg_policy_path=pg_policy_path,
                     qa=qa,
+                    cache_policy=cache_policy,
                     project_name=project_name,
                     style_guide_path=style_guide_path,
                 )
@@ -830,6 +844,7 @@ async def create_jobs_batch(
         pg = str(form.get("pg") or "off")
         pg_policy_path = str(form.get("pg_policy_path") or "")
         qa = str(form.get("qa") or "").strip() not in {"", "0", "false", "off"}
+        cache_policy = str(form.get("cache_policy") or "full")
 
         files = form.getlist("files") if hasattr(form, "getlist") else []
         if not files:
@@ -876,6 +891,7 @@ async def create_jobs_batch(
                     pg=pg,
                     pg_policy_path=pg_policy_path,
                     qa=qa,
+                    cache_policy=cache_policy,
                 )
             )
 
@@ -1666,6 +1682,24 @@ async def job_files(
             )
         except Exception:
             continue
+
+    # Retention report (best-effort)
+    try:
+        p = base_dir / "analysis" / "retention_report.json"
+        if p.exists():
+            st = p.stat()
+            files.append(
+                {
+                    "kind": "retention_report",
+                    "name": p.name,
+                    "path": str(p),
+                    "url": rel_url(p),
+                    "size_bytes": int(st.st_size),
+                    "mtime": float(st.st_mtime),
+                }
+            )
+    except Exception:
+        pass
 
     # Multi-track artifacts (best-effort)
     try:

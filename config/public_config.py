@@ -118,6 +118,10 @@ class PublicConfig(BaseSettings):
     multitrack: bool = Field(default=False, alias="MULTITRACK")
     container: str = Field(default="mkv", alias="CONTAINER")  # mkv|mp4 (used when multitrack on)
 
+    # Feature B: retention/cache policy (opt-in; default keep everything)
+    cache_policy: str = Field(default="full", alias="CACHE_POLICY")  # full|balanced|minimal
+    retention_days: int = Field(default=0, alias="RETENTION_DAYS")  # 0 disables time-based pruning
+
     # --- web server ---
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")

@@ -1824,6 +1824,29 @@ class JobQueue:
             except Exception:
                 self.store.append_log(job_id, f"[{now_utc()}] qa failed; continuing")
 
+            # Feature B: per-job retention policy (default full => keep everything)
+            try:
+                curj = self.store.get(job_id)
+                rt2 = dict((curj.runtime or {}) if curj else runtime)
+                policy = str(rt2.get("cache_policy") or getattr(settings, "cache_policy", "full")).strip().lower()
+                retention_days = int(rt2.get("retention_days") or getattr(settings, "retention_days", 0) or 0)
+                dry_run = bool(rt2.get("retention_dry_run") or False)
+                if policy in {"balanced", "minimal"} or retention_days > 0:
+                    from anime_v2.storage.retention import apply_retention
+
+                    rep = apply_retention(
+                        base_dir,
+                        policy,
+                        retention_days=retention_days,
+                        dry_run=dry_run,
+                    )
+                    self.store.append_log(
+                        job_id,
+                        f"[{now_utc()}] retention: policy={policy} dry_run={dry_run} deleted={len(rep.get('deleted', []))}",
+                    )
+            except Exception as ex:
+                self.store.append_log(job_id, f"[{now_utc()}] retention failed; continuing: {ex}")
+
             self.store.update(
                 job_id,
                 state=JobState.DONE,

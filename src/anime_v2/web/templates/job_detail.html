@@ -59,6 +59,7 @@
           <div><span class="text-slate-500">Device:</span> <span x-text="job?.device || ''"></span></div>
           <div><span class="text-slate-500">Lang:</span> <span x-text="(job?.src_lang||'') + ' → ' + (job?.tgt_lang||'')"></span></div>
           <div><span class="text-slate-500">PG:</span> <span x-text="(job && job.runtime && job.runtime.pg) ? job.runtime.pg : 'off'"></span></div>
+          <div><span class="text-slate-500">Cache policy:</span> <span x-text="(job && job.runtime && job.runtime.cache_policy) ? job.runtime.cache_policy : 'full'"></span></div>
           <div><span class="text-slate-500">Created:</span> <span x-text="job?.created_at || ''"></span></div>
           <div><span class="text-slate-500">Updated:</span> <span x-text="job?.updated_at || ''"></span></div>
         </div>

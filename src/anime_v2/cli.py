@@ -611,6 +611,26 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     default=False,
     help="Write extra debug artifacts under Output/<job>/analysis/ (best-effort).",
 )
+@click.option(
+    "--cache-policy",
+    type=click.Choice(["full", "balanced", "minimal"], case_sensitive=False),
+    default=str(get_settings().cache_policy),
+    show_default=True,
+    help="Per-job artifact retention policy: full keeps everything; minimal keeps only final outputs + essential logs/manifests.",
+)
+@click.option(
+    "--retention-days",
+    type=int,
+    default=int(get_settings().retention_days),
+    show_default=True,
+    help="Only apply retention to jobs older than N days (0 disables age gating).",
+)
+@click.option(
+    "--retention-dry-run",
+    is_flag=True,
+    default=False,
+    help="Compute retention plan and write report without deleting.",
+)
 def run(
     video: Path | None,
     batch_spec: str | None,
@@ -715,6 +735,9 @@ def run(
     log_level: str,
     log_json: str,
     debug_dump: bool,
+    cache_policy: str,
+    retention_days: int,
+    retention_dry_run: bool,
 ) -> None:
     """
     Run pipeline-v2 on VIDEO.
@@ -2423,6 +2446,22 @@ def run(
         logger.warning("[v2] lipsync skipped (%s)", ex)
 
     logger.info("[v2] Done. Output: %s", dub_mkv)
+
+    # Apply per-job retention policy (default full => no-op).
+    try:
+        pol = str(cache_policy or get_settings().cache_policy or "full").lower()
+        if pol in {"balanced", "minimal"} or int(retention_days) > 0:
+            from anime_v2.storage.retention import apply_retention
+
+            rep = apply_retention(
+                out_dir,
+                pol,
+                retention_days=int(retention_days),
+                dry_run=bool(retention_dry_run),
+            )
+            logger.info("retention_applied", policy=pol, dry_run=bool(retention_dry_run), deleted=len(rep.get("deleted", [])))
+    except Exception as ex:
+        logger.warning("retention_failed_continue", error=str(ex))
 
     # Tier-Next D: optional QA scoring (offline-only; writes reports, does not change outputs)
     if str(qa_mode).lower() == "on":

@@ -228,6 +228,16 @@ When running `anime-v2`, the pipeline also writes per-job artifacts:
 - `Output/<job>/logs/summary.json` (timings summary, best-effort)
 - `Output/<job>/manifests/<stage>.json` (resume-safe stage metadata, best-effort)
 
+### Artifact retention / cache policy
+
+By default the pipeline keeps everything. You can opt into cleanup of heavy intermediates under `Output/<job>/`.
+
+- `--cache-policy full|balanced|minimal` (default: `full`)
+- `--retention-days N` (optional age gate; `0` disables)
+- `--retention-dry-run` (plan + report, no deletes)
+
+Report: `Output/<job>/analysis/retention_report.json`
+
 ### Legacy v1 (optional)
 
 `anime-v1` is kept for compatibility, but most users should use **v2**.
