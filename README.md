@@ -238,6 +238,31 @@ Artifacts:
 Web UI:
 - Job page includes a **Quality** tab when QA reports exist (or after enabling QA on submit).
 
+### Projects / Style Guides (Tier‑Next E, optional)
+
+Deterministic per-project text rules applied in this order:
+
+**translate → style guide → PG filter → timing-fit → TTS/subtitles**
+
+Folder layout:
+- `projects/<project_name>/style_guide.yaml` (or `.json`)
+
+CLI:
+
+```bash
+# load projects/example/style_guide.yaml
+anime-v2 Input/Test.mp4 --project example
+
+# explicit path override
+anime-v2 Input/Test.mp4 --style-guide projects/example/style_guide.yaml
+```
+
+Audit artifact:
+- `Output/<job>/analysis/style_guide_applied.jsonl` (per-segment applied rule IDs + conflict detection)
+
+Conflict detection:
+- If rules cause the text to repeat a previous state (loop/toggle), the engine stops early for that segment and logs a `style_guide_conflict`.
+
 ### Timing Fit & Pacing (Tier‑1 B/C)
 
 Defaults preserve current behavior. To enable timing-aware translation fitting + segment pacing:

@@ -864,6 +864,37 @@ class JobQueue:
                     try:
                         curj = self.store.get(job_id)
                         rt2 = dict((curj.runtime or {}) if curj else runtime)
+                        # Tier-Next E: optional style guide on transcript-edited text (best-effort).
+                        try:
+                            proj = rt2.get("project") if isinstance(rt2.get("project"), dict) else {}
+                            proj_name = str(proj.get("name") or rt2.get("project_name") or "").strip()
+                            sg_path = str(rt2.get("style_guide_path") or "").strip()
+                            if proj_name or sg_path:
+                                from anime_v2.text.style_guide import (
+                                    apply_style_guide_to_segments,
+                                    load_style_guide,
+                                    resolve_style_guide_path,
+                                )
+
+                                eff_path = (
+                                    Path(sg_path).resolve()
+                                    if sg_path
+                                    else resolve_style_guide_path(project=proj_name, style_guide_path=None)
+                                )
+                                if eff_path and Path(eff_path).exists():
+                                    guide = load_style_guide(Path(eff_path), project=proj_name)
+                                    analysis_dir = work_dir / "analysis"
+                                    analysis_dir.mkdir(parents=True, exist_ok=True)
+                                    out_jsonl = analysis_dir / "style_guide_applied.jsonl"
+                                    out_segments = apply_style_guide_to_segments(
+                                        out_segments,
+                                        guide=guide,
+                                        out_jsonl=out_jsonl,
+                                        stage="post_translate",
+                                        job_id=str(job_id),
+                                    )
+                        except Exception:
+                            pass
                         eff_pg = str(rt2.get("pg") or "off").strip().lower()
                         eff_pg_policy = str(rt2.get("pg_policy_path") or "").strip()
                         if eff_pg != "off":
@@ -936,6 +967,45 @@ class JobQueue:
                     translated_segments = translate_segments(
                         segments_for_mt, src_lang=job.src_lang, tgt_lang=job.tgt_lang, cfg=cfg
                     )
+                    # Tier-Next E: optional project style guide (best-effort; OFF by default).
+                    try:
+                        curj = self.store.get(job_id)
+                        rt2 = dict((curj.runtime or {}) if curj else runtime)
+                        proj = rt2.get("project") if isinstance(rt2.get("project"), dict) else {}
+                        proj_name = str(proj.get("name") or rt2.get("project_name") or "").strip()
+                        sg_path = str(rt2.get("style_guide_path") or "").strip()
+                        if proj_name or sg_path:
+                            from anime_v2.text.style_guide import (
+                                apply_style_guide_to_segments,
+                                load_style_guide,
+                                resolve_style_guide_path,
+                            )
+
+                            eff_path = (
+                                Path(sg_path).resolve()
+                                if sg_path
+                                else resolve_style_guide_path(project=proj_name, style_guide_path=None)
+                            )
+                            if eff_path and Path(eff_path).exists():
+                                guide = load_style_guide(Path(eff_path), project=proj_name)
+                                analysis_dir = work_dir / "analysis"
+                                analysis_dir.mkdir(parents=True, exist_ok=True)
+                                base_analysis_dir = base_dir / "analysis"
+                                base_analysis_dir.mkdir(parents=True, exist_ok=True)
+                                out_jsonl = analysis_dir / "style_guide_applied.jsonl"
+                                translated_segments = apply_style_guide_to_segments(
+                                    translated_segments,
+                                    guide=guide,
+                                    out_jsonl=out_jsonl,
+                                    stage="post_translate",
+                                    job_id=str(job_id),
+                                )
+                                with suppress(Exception):
+                                    from anime_v2.utils.io import atomic_copy
+
+                                    atomic_copy(out_jsonl, base_analysis_dir / "style_guide_applied.jsonl")
+                    except Exception:
+                        self.store.append_log(job_id, f"[{now_utc()}] style_guide failed; continuing")
                     # Tier-Next C: per-job PG mode (opt-in; OFF by default), before timing-fit/TTS/subs.
                     try:
                         curj = self.store.get(job_id)

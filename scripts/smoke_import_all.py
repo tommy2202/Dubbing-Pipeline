@@ -30,6 +30,7 @@ def main() -> int:
             "anime_v2.audio.mix",
             "anime_v2.audio.music_detect",
             "anime_v2.text.pg_filter",
+            "anime_v2.text.style_guide",
             "anime_v2.timing.fit_text",
             "anime_v2.timing.pacing",
             "anime_v2.voice_memory.store",

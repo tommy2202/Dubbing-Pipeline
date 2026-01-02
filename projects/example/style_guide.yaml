@@ -1,0 +1,33 @@
+version: 1
+project: example
+
+# Explicit mapping for names/terms (applied post-translate)
+name_map:
+  Shinobu: Shinobu
+  Tanjiro: Tanjiro
+
+# Enforce terms exactly (applied post-translate)
+glossary_terms:
+  - source: "鬼殺隊"
+    target: "Demon Slayer Corps"
+    case_sensitive: false
+
+# Honorific handling (optional)
+honorific_policy:
+  keep: true
+  map:
+    "-san": ""
+    "-chan": ""
+
+# Safe-subset regex phrase rules (ordered)
+phrase_rules:
+  - id: tighten_in_order_to
+    order: 10
+    stage: post_translate
+    pattern: "\\bin order to\\b"
+    replace: "to"
+    flags: "i"
+
+forbidden_terms:
+  - "foobar_slur_placeholder"
+

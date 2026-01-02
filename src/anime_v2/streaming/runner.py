@@ -151,6 +151,8 @@ def run_streaming(
     mt_lowconf_thresh: float,
     glossary: str | None,
     style: str | None,
+    project: str | None = None,
+    style_guide_path: Path | None = None,
     stream: bool,
     chunk_seconds: float,
     overlap_seconds: float,
@@ -257,6 +259,7 @@ def run_streaming(
     results: list[StreamChunkResult] = []
     mp4s: list[Path] = []
     pg_reports: list[dict[str, Any]] = []
+    style_guide_records: list[str] = []
 
     # NOTE: keep concurrency at 1 by default; higher values are best-effort and may be memory-heavy.
     if stream_concurrency and int(stream_concurrency) > 1:
@@ -325,6 +328,44 @@ def run_streaming(
                         translated = translate_segments(
                             segs_for_mt, src_lang=src_lang, tgt_lang=tgt_lang, cfg=cfg
                         )
+
+                # Tier-Next E: optional style guide before PG/timing-fit.
+                if project or style_guide_path:
+                    with suppress(Exception):
+                        from anime_v2.text.style_guide import (
+                            apply_style_guide,
+                            load_style_guide,
+                            resolve_style_guide_path,
+                        )
+
+                        sgp = resolve_style_guide_path(
+                            project=str(project or ""),
+                            style_guide_path=Path(style_guide_path) if style_guide_path else None,
+                        )
+                        if sgp and sgp.exists():
+                            guide = load_style_guide(sgp, project=str(project or ""))
+                            for j, seg in enumerate(translated, 1):
+                                sid = int(seg.get("segment_id") or j)
+                                before = str(seg.get("text") or "")
+                                after, applied, meta = apply_style_guide(before, guide, stage="post_translate")
+                                if after != before:
+                                    seg["text_pre_style_guide"] = before
+                                    seg["text"] = after
+                                if applied:
+                                    style_guide_records.append(
+                                        json.dumps(
+                                            {
+                                                "version": 1,
+                                                "chunk_idx": int(ch.idx),
+                                                "segment_id": sid,
+                                                "project": guide.project,
+                                                "applied_rules": [a.to_dict() for a in applied],
+                                                "conflict": meta.get("conflict"),
+                                                "forbidden_hits": meta.get("forbidden_hits") or [],
+                                            },
+                                            sort_keys=True,
+                                        )
+                                    )
 
                 # Tier-Next C: per-run PG mode (opt-in; OFF by default), before timing-fit/TTS/subs.
                 if str(pg).lower() != "off":
@@ -561,6 +602,16 @@ def run_streaming(
             from anime_v2.utils.io import write_json as _wj
 
             _wj(analysis_dir / "pg_filter_report.json", {"version": 1, "chunks": pg_reports})
+
+    if style_guide_records:
+        with suppress(Exception):
+            analysis_dir = out_dir / "analysis"
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(
+                analysis_dir / "style_guide_applied.jsonl",
+                "\n".join(style_guide_records) + "\n",
+                encoding="utf-8",
+            )
 
     # Tier-Next D: optional QA scoring (offline-only; writes reports, does not change outputs)
     if bool(qa):

@@ -388,6 +388,8 @@ async def create_job(
     pg = "off"
     pg_policy_path = ""
     qa = False
+    project_name = ""
+    style_guide_path = ""
     video_path: Path | None = None
     duration_s = 0.0
 
@@ -402,6 +404,8 @@ async def create_job(
         pg = str(body.get("pg") or pg)
         pg_policy_path = str(body.get("pg_policy_path") or pg_policy_path)
         qa = bool(body.get("qa") or False)
+        project_name = str(body.get("project") or body.get("project_name") or "")
+        style_guide_path = str(body.get("style_guide_path") or "")
         vp = body.get("video_path")
         if not isinstance(vp, str):
             raise HTTPException(status_code=400, detail="Missing video_path")
@@ -420,6 +424,8 @@ async def create_job(
         pg = str(form.get("pg") or pg)
         pg_policy_path = str(form.get("pg_policy_path") or pg_policy_path)
         qa = str(form.get("qa") or "").strip() not in {"", "0", "false", "off"}
+        project_name = str(form.get("project") or form.get("project_name") or "")
+        style_guide_path = str(form.get("style_guide_path") or "")
 
         file = form.get("file")
         vp = form.get("video_path")
@@ -544,6 +550,10 @@ async def create_job(
             rt["pg_policy_path"] = pg_policy_path.strip()
     if bool(qa):
         rt["qa"] = True
+    if project_name.strip():
+        rt["project_name"] = project_name.strip()
+    if style_guide_path.strip():
+        rt["style_guide_path"] = style_guide_path.strip()
     job.runtime = rt
     store.put(job)
     if idem_key:
@@ -610,6 +620,8 @@ async def create_jobs_batch(
         pg: str = "off",
         pg_policy_path: str = "",
         qa: bool = False,
+        project_name: str = "",
+        style_guide_path: str = "",
     ) -> str:
         # duration validation
         try:
@@ -669,6 +681,10 @@ async def create_jobs_batch(
                 rt["pg_policy_path"] = str(pg_policy_path).strip()
         if bool(qa):
             rt["qa"] = True
+        if str(project_name or "").strip():
+            rt["project_name"] = str(project_name).strip()
+        if str(style_guide_path or "").strip():
+            rt["style_guide_path"] = str(style_guide_path).strip()
         job.runtime = rt
         store.put(job)
         try:
@@ -722,6 +738,8 @@ async def create_jobs_batch(
             pg = str(it.get("pg") or "off")
             pg_policy_path = str(it.get("pg_policy_path") or "")
             qa = bool(it.get("qa") or False)
+            project_name = str(it.get("project") or it.get("project_name") or "")
+            style_guide_path = str(it.get("style_guide_path") or "")
             # project output folder stored in runtime; validated here
             if project and project.get("output_subdir"):
                 project["output_subdir"] = _sanitize_output_subdir(
@@ -739,6 +757,8 @@ async def create_jobs_batch(
                     pg=pg,
                     pg_policy_path=pg_policy_path,
                     qa=qa,
+                    project_name=project_name,
+                    style_guide_path=style_guide_path,
                 )
             )
     else:

@@ -212,6 +212,14 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 )
 @click.option("--glossary", default=None, help="Glossary TSV path or directory")
 @click.option("--style", default=None, help="Style YAML path or directory")
+@click.option("--project", "project_name", default=None, help="Project profile name under projects/<name>/")
+@click.option(
+    "--style-guide",
+    "style_guide_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Project style guide YAML/JSON (overrides --project).",
+)
 @click.option(
     "--aligner",
     type=click.Choice(["auto", "aeneas", "heuristic"], case_sensitive=False),
@@ -555,6 +563,8 @@ def run(
     mt_lowconf_thresh: float,
     glossary: str | None,
     style: str | None,
+    project_name: str | None,
+    style_guide_path: Path | None,
     aligner: str,
     align_mode: str,
     max_stretch: float,
@@ -771,6 +781,10 @@ def run(
             base_args += ["--no-voice-auto-enroll"]
         if voice_character_map:
             base_args += ["--voice-character-map", str(voice_character_map)]
+        if project_name:
+            base_args += ["--project", str(project_name)]
+        if style_guide_path:
+            base_args += ["--style-guide", str(style_guide_path)]
         base_args += ["--emit", str(emit)]
         if separate_vocals:
             base_args += ["--separate-vocals"]
@@ -815,6 +829,8 @@ def run(
                     mt_lowconf_thresh=mt_lowconf_thresh,
                     glossary=glossary,
                     style=style,
+                    project_name=project_name,
+                    style_guide_path=style_guide_path,
                     aligner=aligner,
                     max_stretch=max_stretch,
                     mix_profile=mix_profile,
@@ -1037,6 +1053,8 @@ def run(
             mt_lowconf_thresh=float(mt_lowconf_thresh),
             glossary=glossary,
             style=style,
+            project=str(project_name) if project_name else None,
+            style_guide_path=Path(style_guide_path).resolve() if style_guide_path else None,
             stream=True,
             chunk_seconds=float(chunk_seconds),
             overlap_seconds=float(chunk_overlap),
@@ -1498,6 +1516,31 @@ def run(
                 logger.warning("[v2] align: skipped/failed (no-translate) (%s)", ex)
 
             # Keep segments for downstream (TTS windowing)
+            if project_name or style_guide_path:
+                try:
+                    from anime_v2.text.style_guide import (
+                        apply_style_guide_to_segments,
+                        load_style_guide,
+                        resolve_style_guide_path,
+                    )
+
+                    sg_path = resolve_style_guide_path(
+                        project=str(project_name or ""),
+                        style_guide_path=Path(style_guide_path) if style_guide_path else None,
+                    )
+                    if sg_path and sg_path.exists():
+                        guide = load_style_guide(sg_path, project=str(project_name or ""))
+                        analysis_dir = out_dir / "analysis"
+                        analysis_dir.mkdir(parents=True, exist_ok=True)
+                        segments_for_mt = apply_style_guide_to_segments(
+                            segments_for_mt,
+                            guide=guide,
+                            out_jsonl=(analysis_dir / "style_guide_applied.jsonl"),
+                            stage="post_translate",
+                            job_id=str(out_dir.name),
+                        )
+                except Exception:
+                    logger.exception("style_guide_failed_continue")
             if str(pg_mode).lower() != "off":
                 try:
                     from anime_v2.text.pg_filter import apply_pg_filter_to_segments
@@ -1565,6 +1608,33 @@ def run(
                 )
             except Exception as ex:
                 logger.warning("[v2] align: skipped/failed (%s)", ex)
+
+            # Tier-Next E: optional project style guide (opt-in; OFF by default).
+            if project_name or style_guide_path:
+                try:
+                    from anime_v2.text.style_guide import (
+                        apply_style_guide_to_segments,
+                        load_style_guide,
+                        resolve_style_guide_path,
+                    )
+
+                    sg_path = resolve_style_guide_path(
+                        project=str(project_name or ""),
+                        style_guide_path=Path(style_guide_path) if style_guide_path else None,
+                    )
+                    if sg_path and sg_path.exists():
+                        guide = load_style_guide(sg_path, project=str(project_name or ""))
+                        analysis_dir = out_dir / "analysis"
+                        analysis_dir.mkdir(parents=True, exist_ok=True)
+                        translated_segments = apply_style_guide_to_segments(
+                            translated_segments,
+                            guide=guide,
+                            out_jsonl=(analysis_dir / "style_guide_applied.jsonl"),
+                            stage="post_translate",
+                            job_id=str(out_dir.name),
+                        )
+                except Exception:
+                    logger.exception("style_guide_failed_continue")
 
             # Tier-Next C: per-run PG mode (opt-in; OFF by default).
             if str(pg_mode).lower() != "off":
