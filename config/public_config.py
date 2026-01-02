@@ -104,6 +104,16 @@ class PublicConfig(BaseSettings):
     op_ed_detect: bool = Field(default=False, alias="OP_ED_DETECT")
     op_ed_seconds: int = Field(default=90, alias="OP_ED_SECONDS")
 
+    # Tier-Next F: speaker smoothing / audio scene detection (opt-in; default off)
+    speaker_smoothing: bool = Field(default=False, alias="SPEAKER_SMOOTHING")
+    scene_detect: str = Field(default="audio", alias="SCENE_DETECT")  # off|audio
+    smoothing_min_turn_s: float = Field(default=0.6, alias="SMOOTHING_MIN_TURN_S")
+    smoothing_surround_gap_s: float = Field(default=0.4, alias="SMOOTHING_SURROUND_GAP_S")
+
+    # Tier-Next G: Dub Director mode (opt-in; default off)
+    director: bool = Field(default=False, alias="DIRECTOR")
+    director_strength: float = Field(default=0.5, alias="DIRECTOR_STRENGTH")
+
     # --- web server ---
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")

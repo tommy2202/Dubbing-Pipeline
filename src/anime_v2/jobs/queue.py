@@ -446,6 +446,57 @@ class JobQueue:
                 cfg = DiarizeConfig(diarizer=str(settings.diarizer))
                 utts = diarize_v2(str(wav), device=_select_device(job.device), cfg=cfg)
 
+                # Tier-Next F: optional scene-aware speaker smoothing (opt-in; default off).
+                try:
+                    curj = self.store.get(job_id)
+                    rt2 = dict((curj.runtime or {}) if curj else runtime)
+                    eff_sm = bool(rt2.get("speaker_smoothing")) or bool(
+                        getattr(settings, "speaker_smoothing", False)
+                    )
+                    eff_scene = str(rt2.get("scene_detect") or getattr(settings, "scene_detect", "audio")).lower()
+                    if eff_sm and eff_scene != "off":
+                        from anime_v2.diarization.smoothing import (
+                            detect_scenes_audio,
+                            smooth_speakers_in_scenes,
+                            write_speaker_smoothing_report,
+                        )
+
+                        analysis_dir = work_dir / "analysis"
+                        analysis_dir.mkdir(parents=True, exist_ok=True)
+                        base_analysis_dir = base_dir / "analysis"
+                        base_analysis_dir.mkdir(parents=True, exist_ok=True)
+
+                        scenes = detect_scenes_audio(Path(str(wav)))
+                        utts2, changes = smooth_speakers_in_scenes(
+                            utts,
+                            scenes,
+                            min_turn_s=float(getattr(settings, "smoothing_min_turn_s", 0.6)),
+                            surround_gap_s=float(getattr(settings, "smoothing_surround_gap_s", 0.4)),
+                        )
+                        utts = utts2
+                        rep_path = analysis_dir / "speaker_smoothing.json"
+                        write_speaker_smoothing_report(
+                            rep_path,
+                            scenes=scenes,
+                            changes=changes,
+                            enabled=True,
+                            config={
+                                "scene_detect": eff_scene,
+                                "min_turn_s": float(getattr(settings, "smoothing_min_turn_s", 0.6)),
+                                "surround_gap_s": float(getattr(settings, "smoothing_surround_gap_s", 0.4)),
+                            },
+                        )
+                        with suppress(Exception):
+                            from anime_v2.utils.io import atomic_copy
+
+                            atomic_copy(rep_path, base_analysis_dir / "speaker_smoothing.json")
+                        self.store.append_log(
+                            job_id,
+                            f"[{now_utc()}] speaker_smoothing scenes={len(scenes)} changes={len(changes)}",
+                        )
+                except Exception:
+                    self.store.append_log(job_id, f"[{now_utc()}] speaker_smoothing failed; continuing")
+
                 seg_dir = work_dir / "segments"
                 seg_dir.mkdir(parents=True, exist_ok=True)
                 by_label: dict[str, list[tuple[float, float, Path]]] = {}
@@ -1134,6 +1185,8 @@ class JobQueue:
                         tts_lang = str(job.tgt_lang) if getattr(job, "tgt_lang", None) else None
                         tts_speaker = None
                         tts_speaker_wav = None
+                        director_on = False
+                        director_strength = 0.5
                         try:
                             curj = self.store.get(job_id)
                             rt = dict((curj.runtime or {}) if curj else runtime)
@@ -1148,6 +1201,12 @@ class JobQueue:
                                 wp = str(preset.get("tts_speaker_wav") or "").strip()
                                 if wp:
                                     tts_speaker_wav = Path(wp)
+                            director_on = bool(rt.get("director")) or bool(
+                                getattr(settings, "director", False)
+                            )
+                            director_strength = float(
+                                rt.get("director_strength") or getattr(settings, "director_strength", 0.5)
+                            )
                         except Exception:
                             pass
                         review_state = base_dir / "review" / "state.json"
@@ -1172,6 +1231,8 @@ class JobQueue:
                             expressive_debug=bool(getattr(settings, "expressive_debug", False)),
                             source_audio_wav=Path(str(wav)),
                             music_regions_path=music_regions_path_work,
+                            director=bool(director_on),
+                            director_strength=float(director_strength),
                             speech_rate=float(settings.speech_rate),
                             pitch=float(settings.pitch),
                             energy=float(settings.energy),

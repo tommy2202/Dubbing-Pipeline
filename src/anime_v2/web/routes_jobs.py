@@ -390,6 +390,10 @@ async def create_job(
     qa = False
     project_name = ""
     style_guide_path = ""
+    speaker_smoothing = False
+    scene_detect = "audio"
+    director = False
+    director_strength = 0.5
     video_path: Path | None = None
     duration_s = 0.0
 
@@ -406,6 +410,10 @@ async def create_job(
         qa = bool(body.get("qa") or False)
         project_name = str(body.get("project") or body.get("project_name") or "")
         style_guide_path = str(body.get("style_guide_path") or "")
+        speaker_smoothing = bool(body.get("speaker_smoothing") or False)
+        scene_detect = str(body.get("scene_detect") or scene_detect)
+        director = bool(body.get("director") or False)
+        director_strength = float(body.get("director_strength") or director_strength)
         vp = body.get("video_path")
         if not isinstance(vp, str):
             raise HTTPException(status_code=400, detail="Missing video_path")
@@ -426,6 +434,10 @@ async def create_job(
         qa = str(form.get("qa") or "").strip() not in {"", "0", "false", "off"}
         project_name = str(form.get("project") or form.get("project_name") or "")
         style_guide_path = str(form.get("style_guide_path") or "")
+        speaker_smoothing = str(form.get("speaker_smoothing") or "").strip() not in {"", "0", "false", "off"}
+        scene_detect = str(form.get("scene_detect") or scene_detect)
+        director = str(form.get("director") or "").strip() not in {"", "0", "false", "off"}
+        director_strength = float(form.get("director_strength") or director_strength)
 
         file = form.get("file")
         vp = form.get("video_path")
@@ -554,6 +566,12 @@ async def create_job(
         rt["project_name"] = project_name.strip()
     if style_guide_path.strip():
         rt["style_guide_path"] = style_guide_path.strip()
+    if bool(speaker_smoothing):
+        rt["speaker_smoothing"] = True
+        rt["scene_detect"] = str(scene_detect or "audio").strip().lower()
+    if bool(director):
+        rt["director"] = True
+        rt["director_strength"] = float(director_strength)
     job.runtime = rt
     store.put(job)
     if idem_key:

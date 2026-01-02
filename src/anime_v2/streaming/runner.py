@@ -179,6 +179,12 @@ def run_streaming(
     pg: str = "off",
     pg_policy_path: Path | None = None,
     qa: bool = False,
+    speaker_smoothing: bool = False,
+    scene_detect: str = "audio",
+    smoothing_min_turn_s: float = 0.6,
+    smoothing_surround_gap_s: float = 0.4,
+    director: bool = False,
+    director_strength: float = 0.5,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """
@@ -207,6 +213,10 @@ def run_streaming(
     # 1) Extract full audio (mono16k)
     wav_full = out_dir / "audio.wav"
     extracted = extract_audio(video=video, out_dir=out_dir, wav_out=wav_full)
+
+    # Optional: speaker smoothing in streaming mode is best-effort and only affects speaker tags
+    # if diarization is later introduced. Currently streaming uses a single speaker label.
+    # (kept for API/CLI consistency)
 
     # Tier-Next A/B: optional job-level music region detection (used to suppress dubbing + preserve original)
     full_music_regions: list[dict[str, Any]] = []
@@ -475,6 +485,8 @@ def run_streaming(
                     expressive_debug=bool(expressive_debug),
                     source_audio_wav=ch.wav_path,
                     music_regions_path=music_regions_path,
+                    director=bool(director),
+                    director_strength=float(director_strength),
                     speech_rate=float(speech_rate),
                     pitch=float(pitch),
                     energy=float(energy),

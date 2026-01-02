@@ -153,11 +153,13 @@ def regen_segment(job_dir: Path, segment_id: int) -> Path:
     pacing = bool(params.get("pacing", get_settings().pacing))
     try:
         tts_wav = tmp_dir / "tts.wav"
+        src_wav = job_dir / "audio.wav"
         tts_stage.run(
             out_dir=tmp_dir,
             translated_json=one_json,
             diarization_json=diar,
             wav_out=tts_wav,
+            source_audio_wav=(src_wav if src_wav.exists() else None),
             pacing=pacing,
             pacing_min_ratio=float(
                 params.get("pacing_min_ratio", getattr(get_settings(), "pacing_min_ratio", 0.88))
@@ -169,6 +171,10 @@ def regen_segment(job_dir: Path, segment_id: int) -> Path:
                 params.get(
                     "timing_tolerance", getattr(get_settings(), "timing_tolerance", 0.10)
                 )
+            ),
+            director=bool(params.get("director", getattr(get_settings(), "director", False))),
+            director_strength=float(
+                params.get("director_strength", getattr(get_settings(), "director_strength", 0.5))
             ),
             voice_memory=bool(params.get("voice_memory", getattr(get_settings(), "voice_memory", False))),
             voice_match_threshold=float(

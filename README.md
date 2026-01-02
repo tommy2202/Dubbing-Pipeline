@@ -263,6 +263,36 @@ Audit artifact:
 Conflict detection:
 - If rules cause the text to repeat a previous state (loop/toggle), the engine stops early for that segment and logs a `style_guide_conflict`.
 
+### Speaker smoothing (Tier‑Next F, optional)
+
+Optional scene-aware post-processing to reduce rapid diarization speaker flips **within a scene** (helps voice selection stability and voice memory mapping).
+
+CLI:
+
+```bash
+anime-v2 Input/Test.mp4 --speaker-smoothing on --scene-detect audio --smoothing-min-turn 0.6 --smoothing-surround-gap 0.4
+```
+
+Artifact:
+- `Output/<job>/analysis/speaker_smoothing.json`
+
+Notes:
+- Offline-only, heuristic by default (audio RMS/spectral changes + silence boundaries).
+- If disabled, diarization behavior is unchanged.
+
+### Dub Director mode (Tier‑Next G, optional)
+
+Optional “direction” layer that makes **conservative** per-segment expressive adjustments (rate/pitch/energy/pauses) based on punctuation + scene intensity proxy. Tier‑1 pacing still enforces segment duration when enabled.
+
+CLI:
+
+```bash
+anime-v2 Input/Test.mp4 --director on --director-strength 0.5
+```
+
+Artifact:
+- `Output/<job>/expressive/director_plans.jsonl`
+
 ### Timing Fit & Pacing (Tier‑1 B/C)
 
 Defaults preserve current behavior. To enable timing-aware translation fitting + segment pacing:

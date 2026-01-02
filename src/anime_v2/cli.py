@@ -419,6 +419,33 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     show_default=True,
 )
 @click.option(
+    "--speaker-smoothing",
+    "speaker_smoothing",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default="off",
+    show_default=True,
+    help="Scene-aware post-processing to reduce diarization speaker flips (uses audio scene detection).",
+)
+@click.option(
+    "--scene-detect",
+    type=click.Choice(["off", "audio"], case_sensitive=False),
+    default="audio",
+    show_default=True,
+    help="Scene boundary detection mode (only used when speaker smoothing is enabled).",
+)
+@click.option(
+    "--smoothing-min-turn",
+    type=float,
+    default=float(get_settings().smoothing_min_turn_s),
+    show_default=True,
+)
+@click.option(
+    "--smoothing-surround-gap",
+    type=float,
+    default=float(get_settings().smoothing_surround_gap_s),
+    show_default=True,
+)
+@click.option(
     "--pg",
     "pg_mode",
     type=click.Choice(["off", "pg13", "pg"], case_sensitive=False),
@@ -441,6 +468,20 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     default="off",
     show_default=True,
     help="Run offline quality checks after pipeline (writes Output/<job>/qa/*).",
+)
+@click.option(
+    "--director",
+    "director_mode",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default="off",
+    show_default=True,
+    help="Dub Director mode: adds conservative expressive adjustments based on scene/intent.",
+)
+@click.option(
+    "--director-strength",
+    type=float,
+    default=float(get_settings().director_strength),
+    show_default=True,
 )
 @click.option(
     "--voice-mode",
@@ -606,9 +647,15 @@ def run(
     music_threshold: float,
     op_ed_detect: str,
     op_ed_seconds: int,
+    speaker_smoothing: str,
+    scene_detect: str,
+    smoothing_min_turn: float,
+    smoothing_surround_gap: float,
     pg_mode: str,
     pg_policy_path: Path | None,
     qa_mode: str,
+    director_mode: str,
+    director_strength: float,
     voice_mode: str,
     voice_ref_dir: Path | None,
     voice_store_dir: Path | None,
@@ -891,9 +938,15 @@ def run(
                     music_threshold=music_threshold,
                     op_ed_detect=op_ed_detect,
                     op_ed_seconds=op_ed_seconds,
+                    speaker_smoothing=speaker_smoothing,
+                    scene_detect=scene_detect,
+                    smoothing_min_turn=smoothing_min_turn,
+                    smoothing_surround_gap=smoothing_surround_gap,
                     pg_mode=pg_mode,
                     pg_policy_path=str(pg_policy_path) if pg_policy_path else None,
                     qa_mode=qa_mode,
+                    director_mode=director_mode,
+                    director_strength=float(director_strength),
                     print_config=False,
                     dry_run=False,
                     verbose=verbose,
@@ -1081,6 +1134,12 @@ def run(
             pg=str(pg_mode).lower(),
             pg_policy_path=Path(pg_policy_path).resolve() if pg_policy_path else None,
             qa=(str(qa_mode).lower() == "on"),
+            speaker_smoothing=(str(speaker_smoothing).lower() == "on"),
+            scene_detect=str(scene_detect).lower(),
+            smoothing_min_turn_s=float(smoothing_min_turn),
+            smoothing_surround_gap_s=float(smoothing_surround_gap),
+            director=(str(director_mode).lower() == "on"),
+            director_strength=float(director_strength),
         )
         return
 
@@ -1182,6 +1241,43 @@ def run(
         show = show_id or video.stem
         cfg = DiarizeConfig(diarizer=diarizer.lower())
         utts = diarize_v2(str(extracted), device=chosen_device, cfg=cfg)
+
+        # Tier-Next F: optional scene-aware speaker smoothing (opt-in; default off).
+        if str(speaker_smoothing).lower() == "on" and str(scene_detect).lower() != "off":
+            try:
+                from anime_v2.diarization.smoothing import (
+                    detect_scenes_audio,
+                    smooth_speakers_in_scenes,
+                    write_speaker_smoothing_report,
+                )
+
+                scenes = detect_scenes_audio(Path(str(extracted)))
+                utts2, changes = smooth_speakers_in_scenes(
+                    utts,
+                    scenes,
+                    min_turn_s=float(smoothing_min_turn),
+                    surround_gap_s=float(smoothing_surround_gap),
+                )
+                utts = utts2
+                write_speaker_smoothing_report(
+                    analysis_dir / "speaker_smoothing.json",
+                    scenes=scenes,
+                    changes=changes,
+                    enabled=True,
+                    config={
+                        "scene_detect": str(scene_detect).lower(),
+                        "min_turn_s": float(smoothing_min_turn),
+                        "surround_gap_s": float(smoothing_surround_gap),
+                    },
+                )
+                logger.info(
+                    "speaker_smoothing_done",
+                    scenes=len(scenes),
+                    changes=len(changes),
+                    path=str(analysis_dir / "speaker_smoothing.json"),
+                )
+            except Exception:
+                logger.exception("speaker_smoothing_failed_continue")
 
         # Extract per-utterance wavs and compute per-speaker embeddings for re-ID
         seg_dir = out_dir / "segments"
@@ -1770,6 +1866,8 @@ def run(
             expressive_debug=bool(expressive_debug),
             source_audio_wav=Path(str(extracted)) if extracted is not None else None,
             music_regions_path=Path(music_regions_path).resolve() if music_regions_path else None,
+            director=(str(director_mode).lower() == "on"),
+            director_strength=float(director_strength),
             speech_rate=float(speech_rate),
             pitch=float(pitch),
             energy=float(energy),

@@ -200,6 +200,8 @@ def run(
     expressive_debug: bool | None = None,
     source_audio_wav: Path | None = None,
     music_regions_path: Path | None = None,
+    director: bool | None = None,
+    director_strength: float | None = None,
     pacing: bool | None = None,
     pacing_min_ratio: float | None = None,
     pacing_max_ratio: float | None = None,
@@ -259,6 +261,12 @@ def run(
     )
     eff_expressive_debug = bool(
         expressive_debug if expressive_debug is not None else bool(settings.expressive_debug)
+    )
+    eff_director = bool(director) if director is not None else bool(getattr(settings, "director", False))
+    eff_director_strength = float(
+        director_strength
+        if director_strength is not None
+        else float(getattr(settings, "director_strength", 0.5))
     )
     eff_pacing = bool(pacing) if pacing is not None else bool(settings.pacing)
     eff_pacing_min = (
@@ -451,6 +459,7 @@ def run(
     clips_dir.mkdir(parents=True, exist_ok=True)
     clip_paths: list[Path] = []
     music_suppressed = 0
+    _director_plans = []
 
     voice_db_embeddings_dir = (settings.voice_db_path.parent / "embeddings").resolve()
 
@@ -540,6 +549,25 @@ def run(
                     write_plan_json(plan, out_plan, features=feats)
             except Exception:
                 pass
+
+        # Tier-Next G: Dub Director mode (optional; OFF by default)
+        if eff_director:
+            with suppress(Exception):
+                from anime_v2.expressive.director import plan_for_segment
+
+                seg_id = int(i + 1)
+                plan = plan_for_segment(
+                    segment_id=seg_id,
+                    text=text,
+                    start_s=float(line.get("start", 0.0)),
+                    end_s=float(line.get("end", 0.0)),
+                    source_audio_wav=Path(source_audio_wav) if source_audio_wav is not None else None,
+                    strength=float(eff_director_strength),
+                )
+                rate_mul *= float(plan.rate_mul)
+                pitch_mul *= float(plan.pitch_mul)
+                energy_mul *= float(plan.energy_mul)
+                _director_plans.append(plan)
         speaker_id = str(line.get("speaker_id") or eff_tts_speaker or "default")
         if eff_voice_mode == "single":
             speaker_id = str(eff_tts_speaker or "default")
@@ -987,6 +1015,12 @@ def run(
             return wav_out
 
     render_aligned_track(lines, clip_paths, wav_out)
+    if eff_director:
+        with suppress(Exception):
+            from anime_v2.expressive.director import write_director_plans_jsonl
+
+            outp = out_dir / "expressive" / "director_plans.jsonl"
+            write_director_plans_jsonl(_director_plans, outp)
     if music_regions:
         logger.info(
             "music_suppress_summary",
