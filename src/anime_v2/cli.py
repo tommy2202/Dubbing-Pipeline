@@ -346,13 +346,17 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 @click.option("--pitch", type=float, default=float(get_settings().pitch), show_default=True)
 @click.option("--energy", type=float, default=float(get_settings().energy), show_default=True)
 @click.option("--realtime/--no-realtime", default=False, show_default=True)
-@click.option("--chunk-seconds", type=float, default=20.0, show_default=True)
-@click.option("--chunk-overlap", type=float, default=2.0, show_default=True)
+@click.option(
+    "--chunk-seconds", type=float, default=float(get_settings().stream_chunk_seconds), show_default=True
+)
+@click.option(
+    "--chunk-overlap", type=float, default=float(get_settings().stream_overlap_seconds), show_default=True
+)
 @click.option(
     "--stream",
     "stream_mode",
     type=click.Choice(["off", "on"], case_sensitive=False),
-    default="off",
+    default=("on" if bool(get_settings().stream) else "off"),
     show_default=True,
     help="Tier-3C streaming mode (chunked). Alias: --realtime",
 )
@@ -366,11 +370,13 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 @click.option(
     "--stream-output",
     type=click.Choice(["segments", "final"], case_sensitive=False),
-    default="segments",
+    default=str(get_settings().stream_output),
     show_default=True,
     help="Streaming output mode: per-chunk MP4s or stitched final MP4",
 )
-@click.option("--stream-concurrency", type=int, default=1, show_default=True)
+@click.option(
+    "--stream-concurrency", type=int, default=int(get_settings().stream_concurrency), show_default=True
+)
 @click.option("--stitch/--no-stitch", default=True, show_default=True)
 @click.option(
     "--voice-mode",

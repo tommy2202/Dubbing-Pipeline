@@ -90,6 +90,13 @@ class PublicConfig(BaseSettings):
     expressive_strength: float = Field(default=0.5, alias="EXPRESSIVE_STRENGTH")  # 0..1
     expressive_debug: bool = Field(default=False, alias="EXPRESSIVE_DEBUG")
 
+    # Tier-3 C: streaming mode (opt-in; default off)
+    stream: bool = Field(default=False, alias="STREAM")  # off by default
+    stream_chunk_seconds: float = Field(default=20.0, alias="STREAM_CHUNK_SECONDS")
+    stream_overlap_seconds: float = Field(default=2.0, alias="STREAM_OVERLAP_SECONDS")
+    stream_output: str = Field(default="segments", alias="STREAM_OUTPUT")  # segments|final
+    stream_concurrency: int = Field(default=1, alias="STREAM_CONCURRENCY")
+
     # --- web server ---
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")

@@ -340,6 +340,11 @@ Notes:
 - `--realtime` remains as a backwards-compatible alias for chunked mode.
 - Streaming mode is offline-first; it may fall back to silence chunks in degraded environments.
 
+Troubleshooting:
+- If you see missing chunk outputs, verify `ffmpeg`/`ffprobe` are installed and on PATH.
+- Chunk MP4s are **re-encoded** (baseline H.264) for concat compatibility; this is slower but robust.
+- If Whisper/MT/TTS deps are missing, streaming runs in degraded mode (silence chunks) rather than crashing.
+
 ### Preflight / dry-run
 
 ```bash
