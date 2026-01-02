@@ -2654,12 +2654,14 @@ def run(
 from anime_v2.review.cli import review as review  # noqa: E402
 from anime_v2.qa.cli import qa as qa  # noqa: E402
 from anime_v2.overrides.cli import overrides as overrides  # noqa: E402
+from anime_v2.voice_memory.cli import voice as voice  # noqa: E402
 
 cli = DefaultGroup(name="anime-v2", help="anime-v2 CLI (run + review)")  # type: ignore[assignment]
 cli.add_command(run)
 cli.add_command(review)
 cli.add_command(qa)
 cli.add_command(overrides)
+cli.add_command(voice)
 
 
 if __name__ == "__main__":  # pragma: no cover

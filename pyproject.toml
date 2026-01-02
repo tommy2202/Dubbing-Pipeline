@@ -89,6 +89,8 @@ webrtc = [
 anime-v1 = "anime_v1.cli:cli"
 anime-v2 = "anime_v2.cli:cli"
 anime-v2-web = "anime_v2.web.run:main"
+dub = "anime_v2.cli:cli"
+dub-web = "anime_v2.web.run:main"
 
 [tool.setuptools]
 package-dir = {"" = "."}
