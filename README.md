@@ -172,6 +172,28 @@ Artifacts:
 anime-v2 Input/Test.mp4 --mix enhanced --lufs-target -16 --ducking --ducking-strength 1.0 --limiter
 ```
 
+### Singing/Music Preservation (Tier‑Next A/B, optional)
+
+Opt-in detector that attempts to find **music/singing-heavy regions** (anime OP/ED, inserted songs) and **leaves the original audio unchanged** during those time ranges.
+
+```bash
+anime-v2 Input/Test.mp4 --music-detect on --music-threshold 0.70
+```
+
+OP/ED specialization (best-effort):
+
+```bash
+anime-v2 Input/Test.mp4 --music-detect on --op-ed-detect on --op-ed-seconds 90
+```
+
+Artifacts:
+- `Output/<job>/analysis/music_regions.json`
+- `Output/<job>/analysis/op_ed.json` (when enabled)
+
+Notes:
+- When Demucs separation is enabled (`--mix enhanced --separation demucs`), music preservation switches the bed to the **original audio** during detected music regions so vocals aren’t lost.
+- Detection is offline-first and uses lightweight heuristics by default. If optional deps are missing, it logs the chosen strategy and continues.
+
 ### Timing Fit & Pacing (Tier‑1 B/C)
 
 Defaults preserve current behavior. To enable timing-aware translation fitting + segment pacing:

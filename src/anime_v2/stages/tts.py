@@ -199,6 +199,7 @@ def run(
     expressive_strength: float | None = None,
     expressive_debug: bool | None = None,
     source_audio_wav: Path | None = None,
+    music_regions_path: Path | None = None,
     pacing: bool | None = None,
     pacing_min_ratio: float | None = None,
     pacing_max_ratio: float | None = None,
@@ -449,8 +450,20 @@ def run(
     clips_dir = out_dir / "tts_clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
     clip_paths: list[Path] = []
+    music_suppressed = 0
 
     voice_db_embeddings_dir = (settings.voice_db_path.parent / "embeddings").resolve()
+
+    # Tier-Next A/B: optional music preservation (skip dubbing in these regions)
+    music_regions: list[dict] = []
+    if music_regions_path is not None:
+        try:
+            data = read_json(Path(music_regions_path), default={})
+            regs = data.get("regions", []) if isinstance(data, dict) else []
+            if isinstance(regs, list):
+                music_regions = [r for r in regs if isinstance(r, dict)]
+        except Exception:
+            music_regions = []
 
     total = len(lines)
     if progress_cb is not None:
@@ -468,6 +481,8 @@ def run(
         if should_cancel:
             raise TTSCanceled()
 
+        seg_start = float(line.get("start", 0.0))
+        seg_end = float(line.get("end", 0.0))
         text = str(line.get("text", "") or "").strip()
         text, emo_rate, emo_pitch, emo_energy = _emotion_controls(text, mode=eff_emotion_mode)
         rate_mul = float(eff_rate) * float(emo_rate)
@@ -538,6 +553,24 @@ def run(
                 with suppress(Exception):
                     progress_cb(i + 1, total)
             continue
+
+        # If this segment overlaps a detected music region, suppress dubbing (silence clip)
+        try:
+            from anime_v2.audio.music_detect import should_suppress_segment
+
+            if music_regions and should_suppress_segment(seg_start, seg_end, music_regions):
+                clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
+                _write_silence_wav(clip, duration_s=max(0.0, seg_end - seg_start))
+                _ffmpeg_to_pcm16k(clip, clip)
+                clip_paths.append(clip)
+                music_suppressed += 1
+                logger.info("music_suppress_segment", idx=i + 1, start_s=seg_start, end_s=seg_end)
+                if progress_cb is not None:
+                    with suppress(Exception):
+                        progress_cb(i + 1, total)
+                continue
+        except Exception:
+            pass
 
         raw_clip = clips_dir / f"{i:04d}_{speaker_id}.raw.wav"
         clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
@@ -954,6 +987,13 @@ def run(
             return wav_out
 
     render_aligned_track(lines, clip_paths, wav_out)
+    if music_regions:
+        logger.info(
+            "music_suppress_summary",
+            suppressed_segments=int(music_suppressed),
+            total_segments=int(total),
+            music_regions=int(len(music_regions)),
+        )
 
     # Optional metadata
     with suppress(Exception):

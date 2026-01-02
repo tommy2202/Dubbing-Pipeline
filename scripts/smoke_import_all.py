@@ -28,6 +28,7 @@ def main() -> int:
             "anime_v2.config",
             "anime_v2.audio.separation",
             "anime_v2.audio.mix",
+            "anime_v2.audio.music_detect",
             "anime_v2.timing.fit_text",
             "anime_v2.timing.pacing",
             "anime_v2.voice_memory.store",

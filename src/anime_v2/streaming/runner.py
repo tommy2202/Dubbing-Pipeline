@@ -169,6 +169,11 @@ def run_streaming(
     speech_rate: float = 1.0,
     pitch: float = 1.0,
     energy: float = 1.0,
+    music_detect: bool = False,
+    music_mode: str = "auto",
+    music_threshold: float = 0.70,
+    op_ed_detect: bool = False,
+    op_ed_seconds: int = 90,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """
@@ -197,6 +202,44 @@ def run_streaming(
     # 1) Extract full audio (mono16k)
     wav_full = out_dir / "audio.wav"
     extracted = extract_audio(video=video, out_dir=out_dir, wav_out=wav_full)
+
+    # Tier-Next A/B: optional job-level music region detection (used to suppress dubbing + preserve original)
+    full_music_regions: list[dict[str, Any]] = []
+    if bool(music_detect):
+        try:
+            from anime_v2.audio.music_detect import (
+                analyze_audio_for_music_regions,
+                detect_op_ed,
+                write_oped_json,
+                write_regions_json,
+            )
+
+            analysis_dir = out_dir / "analysis"
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            regs = analyze_audio_for_music_regions(
+                extracted,
+                mode=str(music_mode).lower(),
+                threshold=float(music_threshold),
+            )
+            write_regions_json(regs, analysis_dir / "music_regions.json")
+            full_music_regions = [r.to_dict() for r in regs]
+            logger.info(
+                "stream_music_detect_regions",
+                regions=len(full_music_regions),
+                threshold=float(music_threshold),
+                mode=str(music_mode).lower(),
+            )
+            if bool(op_ed_detect):
+                oped = detect_op_ed(
+                    extracted,
+                    music_regions=regs,
+                    seconds=int(op_ed_seconds),
+                    threshold=float(music_threshold),
+                )
+                write_oped_json(oped, analysis_dir / "op_ed.json")
+        except Exception:
+            logger.exception("stream_music_detect_failed_continue")
+            full_music_regions = []
 
     # 2) Build chunk wavs
     chunks: list[Chunk] = split_audio_to_chunks(
@@ -315,6 +358,50 @@ def run_streaming(
                 # 3d) TTS
                 from anime_v2.stages import tts as tts_stage
 
+                # Chunk-local regions (relative to chunk timeline) for suppressing dubbing.
+                music_regions_path = None
+                chunk_music_regions: list[dict[str, Any]] = []
+                if full_music_regions:
+                    for r in full_music_regions:
+                        try:
+                            rs = float(r.get("start", 0.0))
+                            re = float(r.get("end", 0.0))
+                        except Exception:
+                            continue
+                        if re <= float(ch.start_s) or rs >= float(ch.end_s):
+                            continue
+                        cs = max(float(ch.start_s), rs) - float(ch.start_s)
+                        ce = min(float(ch.end_s), re) - float(ch.start_s)
+                        if ce > cs:
+                            chunk_music_regions.append(
+                                {
+                                    "start": float(cs),
+                                    "end": float(ce),
+                                    "kind": str(r.get("kind") or "music"),
+                                    "confidence": float(r.get("confidence", 1.0)),
+                                    "reason": str(r.get("reason") or ""),
+                                }
+                            )
+                if chunk_music_regions:
+                    from anime_v2.audio.music_detect import Region, write_regions_json
+
+                    analysis_dir = chunk_base / "analysis"
+                    analysis_dir.mkdir(parents=True, exist_ok=True)
+                    music_regions_path = analysis_dir / "music_regions.json"
+                    write_regions_json(
+                        [
+                            Region(
+                                start=float(rr["start"]),
+                                end=float(rr["end"]),
+                                kind=str(rr.get("kind") or "music"),
+                                confidence=float(rr.get("confidence", 1.0)),
+                                reason=str(rr.get("reason") or ""),
+                            )
+                            for rr in chunk_music_regions
+                        ],
+                        music_regions_path,
+                    )
+
                 tts_stage.run(
                     out_dir=chunk_base,
                     translated_json=translated_json,
@@ -326,6 +413,7 @@ def run_streaming(
                     expressive_strength=float(expressive_strength),
                     expressive_debug=bool(expressive_debug),
                     source_audio_wav=ch.wav_path,
+                    music_regions_path=music_regions_path,
                     speech_rate=float(speech_rate),
                     pitch=float(pitch),
                     energy=float(energy),
@@ -338,12 +426,58 @@ def run_streaming(
                 )
 
                 # Ensure chunk audio spans the chunk duration
-                pad_or_trim_wav(
-                    tts_wav,
-                    dubbed_wav,
-                    float(ch.end_s - ch.start_s),
-                    timeout_s=120,
-                )
+                tts_full = chunk_base / "tts.full.wav"
+                pad_or_trim_wav(tts_wav, tts_full, float(ch.end_s - ch.start_s), timeout_s=120)
+
+                # If chunk overlaps music regions, preserve original chunk audio in those intervals.
+                if chunk_music_regions:
+                    parts = []
+                    for rr in chunk_music_regions:
+                        a = max(0.0, float(rr.get("start", 0.0)))
+                        b = max(a, float(rr.get("end", 0.0)))
+                        parts.append(f"between(t,{a:.3f},{b:.3f})")
+                    cond = "+".join(parts) if parts else "0"
+                    music_only = chunk_base / "music_only.wav"
+                    run_ffmpeg(
+                        [
+                            str(s.ffmpeg_bin),
+                            "-y",
+                            "-i",
+                            str(ch.wav_path),
+                            "-filter:a",
+                            f"volume='if({cond},1,0)':eval=frame",
+                            "-ac",
+                            "1",
+                            "-ar",
+                            "16000",
+                            str(music_only),
+                        ],
+                        timeout_s=120,
+                        retries=0,
+                        capture=True,
+                    )
+                    run_ffmpeg(
+                        [
+                            str(s.ffmpeg_bin),
+                            "-y",
+                            "-i",
+                            str(tts_full),
+                            "-i",
+                            str(music_only),
+                            "-filter_complex",
+                            "[0:a][1:a]amix=inputs=2:normalize=0",
+                            "-ac",
+                            "1",
+                            "-ar",
+                            "16000",
+                            str(dubbed_wav),
+                        ],
+                        timeout_s=120,
+                        retries=0,
+                        capture=True,
+                    )
+                else:
+                    dubbed_wav.write_bytes(tts_full.read_bytes())
 
             # 4) Chunk MP4: slice video segment and mux dubbed audio
             video_seg = chunk_base / "video.mp4"

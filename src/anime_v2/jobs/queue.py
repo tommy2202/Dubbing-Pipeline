@@ -350,6 +350,49 @@ class JobQueue:
             self.store.update(job_id, progress=0.10, message="Audio extracted")
             await self._check_canceled(job_id)
 
+            # Tier-Next A/B: optional music/singing region detection (opt-in; OFF by default).
+            analysis_dir = work_dir / "analysis"
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            base_analysis_dir = base_dir / "analysis"
+            base_analysis_dir.mkdir(parents=True, exist_ok=True)
+            music_regions_path_work: Path | None = None
+            try:
+                if bool(getattr(settings, "music_detect", False)):
+                    from anime_v2.audio.music_detect import (
+                        analyze_audio_for_music_regions,
+                        detect_op_ed,
+                        write_oped_json,
+                        write_regions_json,
+                    )
+                    from anime_v2.utils.io import atomic_copy
+
+                    regs = analyze_audio_for_music_regions(
+                        Path(str(wav)),
+                        mode=str(getattr(settings, "music_mode", "auto") or "auto"),
+                        threshold=float(getattr(settings, "music_threshold", 0.70)),
+                    )
+                    music_regions_path_work = analysis_dir / "music_regions.json"
+                    write_regions_json(regs, music_regions_path_work)
+                    with suppress(Exception):
+                        atomic_copy(music_regions_path_work, base_analysis_dir / "music_regions.json")
+                    self.store.append_log(
+                        job_id,
+                        f"[{now_utc()}] music_detect regions={len(regs)} threshold={float(getattr(settings, 'music_threshold', 0.70)):.2f}",
+                    )
+                    if bool(getattr(settings, "op_ed_detect", False)):
+                        oped = detect_op_ed(
+                            Path(str(wav)),
+                            music_regions=regs,
+                            seconds=int(getattr(settings, "op_ed_seconds", 90)),
+                            threshold=float(getattr(settings, "music_threshold", 0.70)),
+                        )
+                        oped_path = analysis_dir / "op_ed.json"
+                        write_oped_json(oped, oped_path)
+                        with suppress(Exception):
+                            atomic_copy(oped_path, base_analysis_dir / "op_ed.json")
+            except Exception as ex:
+                self.store.append_log(job_id, f"[{now_utc()}] music_detect failed: {ex}")
+
             # Tier-1 A: dialogue isolation + enhanced mixing (opt-in).
             # Defaults preserve behavior (SEPARATION=off, MIX=legacy).
             stems_dir = work_dir / "stems"
@@ -1009,6 +1052,7 @@ class JobQueue:
                             expressive_strength=float(getattr(settings, "expressive_strength", 0.5)),
                             expressive_debug=bool(getattr(settings, "expressive_debug", False)),
                             source_audio_wav=Path(str(wav)),
+                            music_regions_path=music_regions_path_work,
                             speech_rate=float(settings.speech_rate),
                             pitch=float(settings.pitch),
                             energy=float(settings.energy),
@@ -1182,6 +1226,31 @@ class JobQueue:
                             from anime_v2.utils.io import atomic_copy
 
                             bg = background_wav or Path(str(wav))
+                            # If separation is on, background stem likely removes vocals. For detected music
+                            # regions, preserve original audio (singing) by switching bed source.
+                            if (
+                                background_wav is not None
+                                and music_regions_path_work is not None
+                                and music_regions_path_work.exists()
+                            ):
+                                try:
+                                    from anime_v2.audio.music_detect import build_music_preserving_bed
+                                    from anime_v2.utils.io import read_json
+
+                                    data = read_json(music_regions_path_work, default={})
+                                    regs = data.get("regions", []) if isinstance(data, dict) else []
+                                    if isinstance(regs, list) and regs:
+                                        bed = audio_dir / "background_music_preserve.wav"
+                                        bg = build_music_preserving_bed(
+                                            background_wav=background_wav,
+                                            original_wav=Path(str(wav)),
+                                            regions=[r for r in regs if isinstance(r, dict)],
+                                            out_wav=bed,
+                                        )
+                                except Exception:
+                                    self.store.append_log(
+                                        job_id, f"[{now_utc()}] music bed build failed; continuing"
+                                    )
                             final_mix_wav = audio_dir / "final_mix.wav"
 
                             def _enhanced_phase():

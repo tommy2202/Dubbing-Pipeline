@@ -97,6 +97,13 @@ class PublicConfig(BaseSettings):
     stream_output: str = Field(default="segments", alias="STREAM_OUTPUT")  # segments|final
     stream_concurrency: int = Field(default=1, alias="STREAM_CONCURRENCY")
 
+    # Tier-Next A/B: music/singing preservation (opt-in; default off)
+    music_detect: bool = Field(default=False, alias="MUSIC_DETECT")
+    music_mode: str = Field(default="auto", alias="MUSIC_MODE")  # auto|heuristic|classifier
+    music_threshold: float = Field(default=0.70, alias="MUSIC_THRESHOLD")
+    op_ed_detect: bool = Field(default=False, alias="OP_ED_DETECT")
+    op_ed_seconds: int = Field(default=90, alias="OP_ED_SECONDS")
+
     # --- web server ---
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")

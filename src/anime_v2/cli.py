@@ -379,6 +379,38 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 )
 @click.option("--stitch/--no-stitch", default=True, show_default=True)
 @click.option(
+    "--music-detect",
+    "music_detect",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default=("on" if bool(get_settings().music_detect) else "off"),
+    show_default=True,
+)
+@click.option(
+    "--music-mode",
+    type=click.Choice(["auto", "heuristic", "classifier"], case_sensitive=False),
+    default=str(get_settings().music_mode),
+    show_default=True,
+)
+@click.option(
+    "--music-threshold",
+    type=float,
+    default=float(get_settings().music_threshold),
+    show_default=True,
+)
+@click.option(
+    "--op-ed-detect",
+    "op_ed_detect",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default=("on" if bool(get_settings().op_ed_detect) else "off"),
+    show_default=True,
+)
+@click.option(
+    "--op-ed-seconds",
+    type=int,
+    default=int(get_settings().op_ed_seconds),
+    show_default=True,
+)
+@click.option(
     "--voice-mode",
     type=click.Choice(["clone", "preset", "single"], case_sensitive=False),
     default=str(get_settings().voice_mode),
@@ -535,6 +567,11 @@ def run(
     stream_output: str,
     stream_concurrency: int,
     stitch: bool,
+    music_detect: str,
+    music_mode: str,
+    music_threshold: float,
+    op_ed_detect: str,
+    op_ed_seconds: int,
     voice_mode: str,
     voice_ref_dir: Path | None,
     voice_store_dir: Path | None,
@@ -806,6 +843,11 @@ def run(
                     stream_output=stream_output,
                     stream_concurrency=int(stream_concurrency),
                     stitch=stitch,
+                    music_detect=music_detect,
+                    music_mode=music_mode,
+                    music_threshold=music_threshold,
+                    op_ed_detect=op_ed_detect,
+                    op_ed_seconds=op_ed_seconds,
                     print_config=False,
                     dry_run=False,
                     verbose=verbose,
@@ -983,6 +1025,11 @@ def run(
             speech_rate=float(speech_rate),
             pitch=float(pitch),
             energy=float(energy),
+            music_detect=(str(music_detect).lower() == "on"),
+            music_mode=str(music_mode).lower(),
+            music_threshold=float(music_threshold),
+            op_ed_detect=(str(op_ed_detect).lower() == "on"),
+            op_ed_seconds=int(op_ed_seconds),
         )
         return
 
@@ -1000,6 +1047,53 @@ def run(
         logger.exception("[v2] audio_extractor failed: %s", ex)
         logger.error("[v2] Done. Output: (failed early)")
         return
+
+    # Tier-Next A/B: optional music/singing preservation analysis
+    analysis_dir = out_dir / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    music_regions_path = None
+    if str(music_detect).lower() == "on":
+        try:
+            from anime_v2.audio.music_detect import (
+                analyze_audio_for_music_regions,
+                detect_op_ed,
+                write_oped_json,
+                write_regions_json,
+            )
+
+            regs = analyze_audio_for_music_regions(
+                extracted,
+                mode=str(music_mode).lower(),
+                window_s=1.0,
+                hop_s=0.5,
+                threshold=float(music_threshold),
+            )
+            music_regions_path = analysis_dir / "music_regions.json"
+            write_regions_json(regs, music_regions_path)
+            logger.info(
+                "music_detect_regions",
+                regions=len(regs),
+                path=str(music_regions_path),
+                mode=str(music_mode).lower(),
+                threshold=float(music_threshold),
+            )
+            if str(op_ed_detect).lower() == "on":
+                oped = detect_op_ed(
+                    extracted,
+                    music_regions=regs,
+                    seconds=int(op_ed_seconds),
+                    threshold=float(music_threshold),
+                )
+                oped_path = analysis_dir / "op_ed.json"
+                write_oped_json(oped, oped_path)
+                logger.info(
+                    "op_ed_detect_done",
+                    path=str(oped_path),
+                    seconds=int(op_ed_seconds),
+                    threshold=float(music_threshold),
+                )
+        except Exception:
+            logger.exception("music_detect_failed_continue")
 
     # Optional Tier-1 A separation (opt-in; default off)
     stems_dir = out_dir / "stems"
@@ -1540,6 +1634,7 @@ def run(
             expressive_strength=float(expressive_strength),
             expressive_debug=bool(expressive_debug),
             source_audio_wav=Path(str(extracted)) if extracted is not None else None,
+            music_regions_path=Path(music_regions_path).resolve() if music_regions_path else None,
             speech_rate=float(speech_rate),
             pitch=float(pitch),
             energy=float(energy),
@@ -1575,6 +1670,24 @@ def run(
             from anime_v2.stages.export import export_hls, export_mkv, export_mp4
 
             bg = background_wav or Path(str(extracted))
+            # If separation enabled and music regions exist, preserve original audio during music
+            if background_wav is not None and music_regions_path is not None:
+                try:
+                    from anime_v2.audio.music_detect import build_music_preserving_bed
+                    from anime_v2.utils.io import read_json as _rj
+
+                    data = _rj(Path(music_regions_path), default={})
+                    regs = data.get("regions", []) if isinstance(data, dict) else []
+                    if isinstance(regs, list) and regs:
+                        bed = audio_dir / "background_music_preserve.wav"
+                        bg = build_music_preserving_bed(
+                            background_wav=background_wav,
+                            original_wav=Path(str(extracted)),
+                            regions=[r for r in regs if isinstance(r, dict)],
+                            out_wav=bed,
+                        )
+                except Exception:
+                    logger.exception("music_bed_build_failed_continue")
             final_mix = audio_dir / "final_mix.wav"
             mix_dubbed_audio(
                 background_wav=bg,
