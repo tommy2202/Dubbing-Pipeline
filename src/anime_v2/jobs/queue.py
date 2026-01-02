@@ -1402,7 +1402,13 @@ class JobQueue:
                         if mix_mode == "enhanced":
                             # Tier-1 A enhanced mix: background + TTS → final_mix.wav, then export container(s).
                             from anime_v2.audio.mix import MixParams, mix_dubbed_audio
-                            from anime_v2.stages.export import export_hls, export_mkv, export_mp4
+                            from anime_v2.stages.export import (
+                                export_hls,
+                                export_m4a,
+                                export_mkv,
+                                export_mkv_multitrack,
+                                export_mp4,
+                            )
                             from anime_v2.utils.io import atomic_copy
 
                             bg = background_wav or Path(str(wav))
@@ -1452,7 +1458,80 @@ class JobQueue:
 
                                 outs2: dict[str, Path] = {}
                                 emit = set(cfg_mix.emit or ())
-                                if "mkv" in emit:
+                                # Multi-track output (opt-in): write track artifacts + mux multi-audio MKV (preferred).
+                                if bool(getattr(settings, "multitrack", False)):
+                                    try:
+                                        from anime_v2.audio.tracks import build_multitrack_artifacts
+
+                                        tracks = build_multitrack_artifacts(
+                                            job_dir=base_dir,
+                                            original_wav=Path(str(wav)),
+                                            dubbed_wav=final_mix_wav,
+                                            dialogue_wav=tts_wav,
+                                            background_wav=bg if background_wav is not None else None,
+                                        )
+                                        if str(getattr(settings, "container", "mkv")).lower() == "mkv" and "mkv" in emit:
+                                            outs2["mkv"] = export_mkv_multitrack(
+                                                video_in=video_path,
+                                                tracks=[
+                                                    {
+                                                        "path": str(tracks.original_full_wav),
+                                                        "title": "Original (JP)",
+                                                        "language": "jpn",
+                                                        "default": "0",
+                                                    },
+                                                    {
+                                                        "path": str(tracks.dubbed_full_wav),
+                                                        "title": "Dubbed (EN)",
+                                                        "language": "eng",
+                                                        "default": "1",
+                                                    },
+                                                    {
+                                                        "path": str(tracks.background_only_wav),
+                                                        "title": "Background Only",
+                                                        "language": "und",
+                                                        "default": "0",
+                                                    },
+                                                    {
+                                                        "path": str(tracks.dialogue_only_wav),
+                                                        "title": "Dialogue Only",
+                                                        "language": "eng",
+                                                        "default": "0",
+                                                    },
+                                                ],
+                                                srt=subs_srt_path,
+                                                out_path=work_dir / f"{video_path.stem}.dub.mkv",
+                                            )
+                                        elif str(getattr(settings, "container", "mkv")).lower() == "mp4":
+                                            sidecar_dir = base_dir / "audio" / "tracks"
+                                            export_m4a(
+                                                tracks.original_full_wav,
+                                                sidecar_dir / "original_full.m4a",
+                                                title="Original (JP)",
+                                                language="jpn",
+                                            )
+                                            export_m4a(
+                                                tracks.background_only_wav,
+                                                sidecar_dir / "background_only.m4a",
+                                                title="Background Only",
+                                                language="und",
+                                            )
+                                            export_m4a(
+                                                tracks.dialogue_only_wav,
+                                                sidecar_dir / "dialogue_only.m4a",
+                                                title="Dialogue Only",
+                                                language="eng",
+                                            )
+                                            export_m4a(
+                                                tracks.dubbed_full_wav,
+                                                sidecar_dir / "dubbed_full.m4a",
+                                                title="Dubbed (EN)",
+                                                language="eng",
+                                            )
+                                    except Exception as ex:
+                                        self.store.append_log(job_id, f"[{now_utc()}] multitrack failed; continuing ({ex})")
+
+                                if "mkv" in emit and "mkv" not in outs2:
                                     outs2["mkv"] = export_mkv(
                                         video_path,
                                         final_mix_wav,
@@ -1508,6 +1587,45 @@ class JobQueue:
                                     )
                         out_mkv = outs.get("mkv", out_mkv)
                         out_mp4 = outs.get("mp4", out_mp4)
+                        if bool(getattr(settings, "multitrack", False)):
+                            try:
+                                from anime_v2.audio.tracks import build_multitrack_artifacts
+                                from anime_v2.stages.export import export_m4a, export_mkv_multitrack
+
+                                mixed_wav = outs.get("mixed_wav", None)
+                                if mixed_wav is not None and Path(mixed_wav).exists():
+                                    stems_bg = (
+                                        work_dir / "stems" / "background.wav"
+                                        if (work_dir / "stems" / "background.wav").exists()
+                                        else None
+                                    )
+                                    tracks = build_multitrack_artifacts(
+                                        job_dir=base_dir,
+                                        original_wav=Path(str(wav)),
+                                        dubbed_wav=Path(mixed_wav),
+                                        dialogue_wav=tts_wav,
+                                        background_wav=stems_bg,
+                                    )
+                                    if str(getattr(settings, "container", "mkv")).lower() == "mkv" and out_mkv:
+                                        out_mkv = export_mkv_multitrack(
+                                            video_in=video_path,
+                                            tracks=[
+                                                {"path": str(tracks.original_full_wav), "title": "Original (JP)", "language": "jpn", "default": "0"},
+                                                {"path": str(tracks.dubbed_full_wav), "title": "Dubbed (EN)", "language": "eng", "default": "1"},
+                                                {"path": str(tracks.background_only_wav), "title": "Background Only", "language": "und", "default": "0"},
+                                                {"path": str(tracks.dialogue_only_wav), "title": "Dialogue Only", "language": "eng", "default": "0"},
+                                            ],
+                                            srt=subs_srt_path,
+                                            out_path=Path(out_mkv),
+                                        )
+                                    elif str(getattr(settings, "container", "mkv")).lower() == "mp4":
+                                        sidecar_dir = base_dir / "audio" / "tracks"
+                                        export_m4a(tracks.original_full_wav, sidecar_dir / "original_full.m4a", title="Original (JP)", language="jpn")
+                                        export_m4a(tracks.background_only_wav, sidecar_dir / "background_only.m4a", title="Background Only", language="und")
+                                        export_m4a(tracks.dialogue_only_wav, sidecar_dir / "dialogue_only.m4a", title="Dialogue Only", language="eng")
+                                        export_m4a(tracks.dubbed_full_wav, sidecar_dir / "dubbed_full.m4a", title="Dubbed (EN)", language="eng")
+                            except Exception as ex:
+                                self.store.append_log(job_id, f"[{now_utc()}] multitrack failed; continuing ({ex})")
                         try:
                             art = {"mkv": out_mkv}
                             if out_mp4 and Path(out_mp4).exists():

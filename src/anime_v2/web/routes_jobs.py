@@ -1633,6 +1633,40 @@ async def job_files(
         except Exception:
             continue
 
+    # Multi-track artifacts (best-effort)
+    try:
+        tracks_dir = base_dir / "audio" / "tracks"
+        if tracks_dir.exists():
+            preferred = [
+                tracks_dir / "original_full.wav",
+                tracks_dir / "dubbed_full.wav",
+                tracks_dir / "background_only.wav",
+                tracks_dir / "dialogue_only.wav",
+                tracks_dir / "original_full.m4a",
+                tracks_dir / "dubbed_full.m4a",
+                tracks_dir / "background_only.m4a",
+                tracks_dir / "dialogue_only.m4a",
+            ]
+            for p in preferred:
+                if not p.exists():
+                    continue
+                try:
+                    st = p.stat()
+                    files.append(
+                        {
+                            "kind": "audio_track",
+                            "name": p.name,
+                            "path": str(p),
+                            "url": rel_url(p),
+                            "size_bytes": int(st.st_size),
+                            "mtime": float(st.st_mtime),
+                        }
+                    )
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
     data: dict[str, Any] = {
         "files": files,
         "hls_manifest": None,

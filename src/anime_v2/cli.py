@@ -484,6 +484,22 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     show_default=True,
 )
 @click.option(
+    "--multitrack",
+    "multitrack",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default="off",
+    show_default=True,
+    help="Produce multi-track audio artifacts and mux multi-audio MKV (when container=mkv).",
+)
+@click.option(
+    "--container",
+    "container",
+    type=click.Choice(["mkv", "mp4"], case_sensitive=False),
+    default=str(get_settings().container),
+    show_default=True,
+    help="Primary container when --multitrack on (MP4 uses sidecar .m4a tracks).",
+)
+@click.option(
     "--voice-mode",
     type=click.Choice(["clone", "preset", "single"], case_sensitive=False),
     default=str(get_settings().voice_mode),
@@ -656,6 +672,8 @@ def run(
     qa_mode: str,
     director_mode: str,
     director_strength: float,
+    multitrack: str,
+    container: str,
     voice_mode: str,
     voice_ref_dir: Path | None,
     voice_store_dir: Path | None,
@@ -947,6 +965,8 @@ def run(
                     qa_mode=qa_mode,
                     director_mode=director_mode,
                     director_strength=float(director_strength),
+                    multitrack=multitrack,
+                    container=container,
                     print_config=False,
                     dry_run=False,
                     verbose=verbose,
@@ -1900,7 +1920,7 @@ def run(
         if str(mix_mode).lower() == "enhanced":
             # Tier-1 A enhanced mixing uses extracted/separated background + TTS dialogue
             from anime_v2.audio.mix import MixParams, mix_dubbed_audio
-            from anime_v2.stages.export import export_hls, export_mkv, export_mp4
+            from anime_v2.stages.export import export_hls, export_m4a, export_mkv, export_mkv_multitrack, export_mp4
 
             bg = background_wav or Path(str(extracted))
             # If separation enabled and music regions exist, preserve original audio during music
@@ -1934,10 +1954,59 @@ def run(
                 ),
             )
             outs: dict[str, Path] = {}
-            if "mkv" in emit_set:
-                outs["mkv"] = export_mkv(
-                    video, final_mix, None if no_subs else subs_srt_path, out_dir / "dub.mkv"
+            # Multi-track output (opt-in): write track artifacts + mux multi-audio MKV (preferred).
+            if str(multitrack).lower() == "on":
+                from anime_v2.audio.tracks import build_multitrack_artifacts
+
+                tracks = build_multitrack_artifacts(
+                    job_dir=out_dir,
+                    original_wav=Path(str(extracted)),
+                    dubbed_wav=final_mix,
+                    dialogue_wav=tts_wav,
+                    background_wav=bg if background_wav is not None else None,
                 )
+                if str(container).lower() == "mkv" and "mkv" in emit_set:
+                    outs["mkv"] = export_mkv_multitrack(
+                        video_in=video,
+                        tracks=[
+                            {
+                                "path": str(tracks.original_full_wav),
+                                "title": "Original (JP)",
+                                "language": "jpn",
+                                "default": "0",
+                            },
+                            {
+                                "path": str(tracks.dubbed_full_wav),
+                                "title": "Dubbed (EN)",
+                                "language": "eng",
+                                "default": "1",
+                            },
+                            {
+                                "path": str(tracks.background_only_wav),
+                                "title": "Background Only",
+                                "language": "und",
+                                "default": "0",
+                            },
+                            {
+                                "path": str(tracks.dialogue_only_wav),
+                                "title": "Dialogue Only",
+                                "language": "eng",
+                                "default": "0",
+                            },
+                        ],
+                        srt=None if no_subs else subs_srt_path,
+                        out_path=out_dir / "dub.mkv",
+                    )
+                elif str(container).lower() == "mp4":
+                    # MP4 fallback: keep normal MP4 output and write sidecar audio tracks.
+                    sidecar_dir = out_dir / "audio" / "tracks"
+                    export_m4a(tracks.original_full_wav, sidecar_dir / "original_full.m4a", title="Original (JP)", language="jpn")
+                    export_m4a(tracks.background_only_wav, sidecar_dir / "background_only.m4a", title="Background Only", language="und")
+                    export_m4a(tracks.dialogue_only_wav, sidecar_dir / "dialogue_only.m4a", title="Dialogue Only", language="eng")
+                    export_m4a(tracks.dubbed_full_wav, sidecar_dir / "dubbed_full.m4a", title="Dubbed (EN)", language="eng")
+
+            if "mkv" in emit_set and "mkv" not in outs:
+                outs["mkv"] = export_mkv(video, final_mix, None if no_subs else subs_srt_path, out_dir / "dub.mkv")
             if "mp4" in emit_set:
                 outs["mp4"] = export_mp4(
                     video, final_mix, None if no_subs else subs_srt_path, out_dir / "dub.mp4"
@@ -1965,6 +2034,38 @@ def run(
                 out_dir=out_dir,
                 cfg=cfg_mix,
             )
+            if str(multitrack).lower() == "on":
+                from anime_v2.audio.tracks import build_multitrack_artifacts
+                from anime_v2.stages.export import export_m4a, export_mkv_multitrack
+
+                mixed_wav = outs.get("mixed_wav", None)
+                if mixed_wav is not None and Path(mixed_wav).exists():
+                    stems_bg = (out_dir / "stems" / "background.wav") if (out_dir / "stems" / "background.wav").exists() else None
+                    tracks = build_multitrack_artifacts(
+                        job_dir=out_dir,
+                        original_wav=Path(str(extracted)),
+                        dubbed_wav=Path(mixed_wav),
+                        dialogue_wav=tts_wav,
+                        background_wav=stems_bg,
+                    )
+                    if str(container).lower() == "mkv" and "mkv" in emit_set:
+                        outs["mkv"] = export_mkv_multitrack(
+                            video_in=video,
+                            tracks=[
+                                {"path": str(tracks.original_full_wav), "title": "Original (JP)", "language": "jpn", "default": "0"},
+                                {"path": str(tracks.dubbed_full_wav), "title": "Dubbed (EN)", "language": "eng", "default": "1"},
+                                {"path": str(tracks.background_only_wav), "title": "Background Only", "language": "und", "default": "0"},
+                                {"path": str(tracks.dialogue_only_wav), "title": "Dialogue Only", "language": "eng", "default": "0"},
+                            ],
+                            srt=None if no_subs else subs_srt_path,
+                            out_path=out_dir / "dub.mkv",
+                        )
+                    elif str(container).lower() == "mp4":
+                        sidecar_dir = out_dir / "audio" / "tracks"
+                        export_m4a(tracks.original_full_wav, sidecar_dir / "original_full.m4a", title="Original (JP)", language="jpn")
+                        export_m4a(tracks.background_only_wav, sidecar_dir / "background_only.m4a", title="Background Only", language="und")
+                        export_m4a(tracks.dialogue_only_wav, sidecar_dir / "dialogue_only.m4a", title="Dialogue Only", language="eng")
+                        export_m4a(tracks.dubbed_full_wav, sidecar_dir / "dubbed_full.m4a", title="Dubbed (EN)", language="eng")
         if "mkv" in outs:
             dub_mkv = outs["mkv"]
         if "mp4" in outs:

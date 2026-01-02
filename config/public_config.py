@@ -114,6 +114,10 @@ class PublicConfig(BaseSettings):
     director: bool = Field(default=False, alias="DIRECTOR")
     director_strength: float = Field(default=0.5, alias="DIRECTOR_STRENGTH")
 
+    # Tier-Next H: multi-track outputs (opt-in; default off)
+    multitrack: bool = Field(default=False, alias="MULTITRACK")
+    container: str = Field(default="mkv", alias="CONTAINER")  # mkv|mp4 (used when multitrack on)
+
     # --- web server ---
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")

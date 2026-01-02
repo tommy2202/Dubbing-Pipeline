@@ -316,6 +316,7 @@ def mix(
     # 1) Mixdown to WAV
     mixed_wav.parent.mkdir(parents=True, exist_ok=True)
     _mixdown_to_wav(loudnorm_pass2)
+    outputs["mixed_wav"] = mixed_wav
 
     # 2) Export containers (always mkv+mp4)
     out_mkv = out_dir / f"{stem}.dub.mkv"

@@ -172,6 +172,39 @@ Artifacts:
 anime-v2 Input/Test.mp4 --mix enhanced --lufs-target -16 --ducking --ducking-strength 1.0 --limiter
 ```
 
+### Multi-track Outputs (Tier‑Next H, optional)
+
+Opt-in multi-audio output for containers that support it (MKV preferred). When enabled, the pipeline writes deterministic track artifacts and (when `--container mkv`) muxes them into a single MKV without re-encoding video.
+
+CLI:
+
+```bash
+# Multi-audio MKV (recommended): Original + Dubbed + Background + Dialogue
+anime-v2 Input/Test.mp4 --multitrack on --container mkv
+
+# MP4 fallback: normal MP4 (dubbed) + sidecar .m4a tracks in Output/<job>/audio/tracks/
+anime-v2 Input/Test.mp4 --multitrack on --container mp4
+```
+
+Artifacts:
+
+- `Output/<job>/audio/tracks/original_full.wav`
+- `Output/<job>/audio/tracks/dubbed_full.wav`
+- `Output/<job>/audio/tracks/background_only.wav` (derived from original when separation is off)
+- `Output/<job>/audio/tracks/dialogue_only.wav`
+- When `--container mp4`: also writes sidecar AAC tracks (`*.m4a`) in the same folder.
+
+MKV track metadata/order:
+
+- Track 1: **Original (JP)** (`language=jpn`)
+- Track 2: **Dubbed (EN)** (`language=eng`, default)
+- Track 3: **Background Only** (`language=und`)
+- Track 4: **Dialogue Only** (`language=eng`)
+
+Playback tip:
+
+- Use VLC to select audio tracks: `Audio -> Audio Track`
+
 ### Singing/Music Preservation (Tier‑Next A/B, optional)
 
 Opt-in detector that attempts to find **music/singing-heavy regions** (anime OP/ED, inserted songs) and **leaves the original audio unchanged** during those time ranges.

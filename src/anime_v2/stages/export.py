@@ -66,6 +66,84 @@ def export_mkv(video_in: Path, dub_wav: Path, srt: Path | None, out_path: Path) 
     return out_path
 
 
+def export_mkv_multitrack(
+    *,
+    video_in: Path,
+    tracks: list[dict[str, str]],
+    srt: Path | None,
+    out_path: Path,
+) -> Path:
+    """
+    MKV export with multiple audio tracks.
+
+    Requirements:
+      - video copied (no re-encode)
+      - each audio WAV encoded to AAC
+      - per-track metadata: title + language
+      - optional SRT soft subs
+
+    tracks: list of:
+      {"path": "...wav", "title": "Dubbed (EN)", "language": "eng", "default": "1|0"}
+    """
+    video_in = Path(video_in)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    srt = _srt_ok(srt)
+
+    cmd: list[str] = [str(get_settings().ffmpeg_bin), "-y", "-i", str(video_in)]
+    for t in tracks:
+        cmd += ["-i", str(t["path"])]
+    if srt is not None:
+        cmd += ["-i", str(srt)]
+
+    # map video
+    cmd += ["-map", "0:v:0"]
+    # map audio inputs 1..N
+    for i in range(len(tracks)):
+        cmd += ["-map", f"{i+1}:a:0"]
+    if srt is not None:
+        cmd += ["-map", f"{len(tracks)+1}:s:0", "-c:s", "srt", "-disposition:s:0", "default", "-metadata:s:s:0", "language=eng"]
+
+    cmd += ["-c:v", "copy"]
+    # Encode all audio tracks
+    for i, t in enumerate(tracks):
+        cmd += [
+            f"-c:a:{i}",
+            "aac",
+            f"-b:a:{i}",
+            "192k",
+            f"-metadata:s:a:{i}",
+            f"language={t.get('language','und')}",
+            f"-metadata:s:a:{i}",
+            f"title={t.get('title','Audio')}",
+        ]
+        if str(t.get("default", "0")) in {"1", "true", "yes"}:
+            cmd += [f"-disposition:a:{i}", "default"]
+        else:
+            cmd += [f"-disposition:a:{i}", "0"]
+
+    cmd += ["-avoid_negative_ts", "make_zero", str(out_path)]
+    run_ffmpeg(cmd, timeout_s=900, retries=0, capture=True)
+    logger.info("[v2] export multitrack mkv → %s", out_path)
+    return out_path
+
+
+def export_m4a(audio_in: Path, out_path: Path, *, title: str | None = None, language: str | None = None) -> Path:
+    """
+    Sidecar audio export for MP4 fallback (players vary in multi-audio support).
+    """
+    audio_in = Path(audio_in)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd: list[str] = [str(get_settings().ffmpeg_bin), "-y", "-i", str(audio_in), "-vn", "-c:a", "aac", "-b:a", "192k"]
+    if language:
+        cmd += ["-metadata:s:a:0", f"language={language}"]
+    if title:
+        cmd += ["-metadata:s:a:0", f"title={title}"]
+    cmd += [str(out_path)]
+    run_ffmpeg(cmd, timeout_s=300, retries=0, capture=True)
+    return out_path
+
 def export_mp4(
     video_in: Path, dub_wav: Path, srt: Path | None, out_path: Path, *, fragmented: bool = False
 ) -> Path:
