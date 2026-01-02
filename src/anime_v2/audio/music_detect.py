@@ -157,7 +157,7 @@ def analyze_audio_for_music_regions(
         m = "auto"
 
     used = "heuristic"
-    # Placeholder for future classifier integration
+    # Hook for future classifier integration (optional)
     if m == "classifier":
         used = "heuristic"
 

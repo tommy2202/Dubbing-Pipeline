@@ -2,9 +2,9 @@ import json
 import pathlib
 import subprocess
 import tempfile
+from typing import Any
 
 from config.settings import get_settings
-from pydub import AudioSegment
 
 from anime_v1.utils import logger
 
@@ -16,6 +16,21 @@ except Exception:  # pragma: no cover
 SAMPLE_RATE = 22050
 _tts_model = None
 _tts_model_name = None
+
+
+def _AudioSegment():  # type: ignore
+    """
+    Lazy import to keep anime_v1 import-safe when optional deps are missing.
+    """
+    try:
+        from pydub import AudioSegment  # type: ignore
+
+        return AudioSegment
+    except Exception as ex:  # pragma: no cover
+        raise RuntimeError(
+            "anime-v1 requires `pydub`. Install it (and ensure ffmpeg is installed) "
+            "or use the v2 pipeline (`anime-v2`)."
+        ) from ex
 
 
 def _load_coqui(model_name: str = "tts_models/en/vctk/vits"):
@@ -149,7 +164,8 @@ def _time_stretch_with_ffmpeg(in_wav: pathlib.Path, out_wav: pathlib.Path, tempo
         return False
 
 
-def _align_to_duration(seg_wav: pathlib.Path, target_ms: int) -> AudioSegment:
+def _align_to_duration(seg_wav: pathlib.Path, target_ms: int) -> Any:
+    AudioSegment = _AudioSegment()
     audio = AudioSegment.from_wav(seg_wav)
     if target_ms <= 0:
         return audio
@@ -185,6 +201,7 @@ def run(
         logger.info("Dubbed audio exists, skip.")
         return out
 
+    AudioSegment = _AudioSegment()
     data = json.loads(transcript_json.read_text())
     segments = data.get("segments", [])
     if not segments:

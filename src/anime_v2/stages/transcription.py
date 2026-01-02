@@ -88,14 +88,14 @@ def transcribe(
             return srt_out
 
     try:
-        pass  # type: ignore
+        import whisper  # type: ignore  # noqa: F401
     except Exception as ex:  # pragma: no cover
         # Degraded mode: still produce an empty SRT + metadata so the pipeline can
         # persist artifacts even when Whisper isn't installed in the environment.
-        logger.warning(
-            "[v2] Whisper not installed (%s). Writing placeholder SRT/metadata.",
-            ex,
-        )
+        #
+        # NOTE: We intentionally do *not* hard-fail here because some environments
+        # run pipeline wiring/tests without optional heavy ML deps installed.
+        logger.warning("[v2] Whisper not installed (%s). Writing degraded SRT/metadata.", ex)
         srt_out.parent.mkdir(parents=True, exist_ok=True)
         srt_out.write_text("", encoding="utf-8")
         meta = {

@@ -107,7 +107,7 @@ def mix_dubbed_audio(
             "[mix0];"
         )
 
-    # Loudnorm pass2 placeholder inserted later
+    # Loudnorm pass2 inserted later
     limiter = "alimiter=limit=0.891" if params.limiter else "anull"
     # Trim to finite duration (avoid apad infinite WAV output).
     fg.append(

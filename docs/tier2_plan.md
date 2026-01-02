@@ -20,7 +20,7 @@ There are **two** diarization-related systems in v2:
   - Output: utterances like `[{start,end,speaker,conf}]` (speaker labels like `SPEAKER_01`)
   - Engines: `pyannote` (optional), `speechbrain`-style clustering over VAD segments (optional), `heuristic` fallback (always).
 
-- **Secondary/legacy-ish path (present but not used by CLI/job queue)**: `src/anime_v2/stages/diarize.py`
+- **Secondary/legacy-ish path (present but not used by CLI/job queue)**: `src/anime_v2/stages/diarize.py` (removed during release hardening)
   - Entry: `run(audio_path: Path, out_dir: Path, ...) -> (segments, speaker_embeddings)`
   - Persists: `voices/registry.json` + `voices/embeddings/*.npy`
   - Uses **resemblyzer** embeddings when available; otherwise writes placeholder embeddings.
@@ -74,7 +74,7 @@ There are multiple voice-related persistence layers today:
   - `data/characters.json` via `CharacterStore` (stores embeddings + speaker wav paths)
 
 - **Diarization speaker registry (plaintext, per-repo)**:
-  - `voices/registry.json` + `voices/embeddings/*.npy` via `src/anime_v2/stages/diarize.py`
+  - `voices/registry.json` + `voices/embeddings/*.npy` via `src/anime_v2/stages/diarize.py` (removed)
   - NOTE: this is not currently the primary path for v2 diarization used by CLI/job queue.
 
 - **Preset voice DB (for “closest preset” fallback)**:
@@ -166,14 +166,14 @@ This is the natural foundation for **T2‑B** (but it currently lacks per-line r
 
 - **Two competing “speaker memory” stores**
   - `CharacterStore` (encrypted, show-aware, used by CLI/job queue)
-  - `voices/registry.json` + `voices/embeddings` (plaintext, produced by `stages/diarize.py`, not used by CLI/job queue)
+  - `voices/registry.json` + `voices/embeddings` (plaintext, produced by `stages/diarize.py`, removed)
   - Tier‑2 should pick **one** canonical memory store. Recommendation: **keep `CharacterStore` as canonical** and treat `voices/registry.json` as either:
     - deprecated legacy artifact, or
     - a derived cache strictly for preset selection (if needed), but not a separate identity source.
 
 - **Two embedding stacks**
   - ECAPA embeddings (`anime_v2.utils.embeds.ecapa_embedding`) used in production speaker mapping now.
-  - Resemblyzer embeddings (`stages/diarize.py`, `tts_engine.py` presets) used elsewhere.
+  - Resemblyzer embeddings (`tts_engine.py` presets) used elsewhere.
   - Tier‑2 should avoid introducing a third embedding type; if we add “episode memory”, store the embedding type + dimension in the schema.
 
 ### Conflicts for T2‑B

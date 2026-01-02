@@ -286,6 +286,14 @@ class JobQueue:
         try:
             await self._check_canceled(job_id)
 
+            # Per-job ffmpeg stderr capture (concurrency-safe via ContextVar)
+            try:
+                from anime_v2.utils.ffmpeg_safe import set_ffmpeg_log_dir
+
+                set_ffmpeg_log_dir((base_dir / "logs" / "ffmpeg").resolve())
+            except Exception:
+                pass
+
             # Compute audio hash once per job (used for cross-job caching)
             audio_hash = None
             try:
@@ -349,6 +357,19 @@ class JobQueue:
                 raise RuntimeError(str(ex)) from ex
             self.store.update(job_id, progress=0.10, message="Audio extracted")
             await self._check_canceled(job_id)
+            # Stage manifest (resume-safe metadata; best-effort)
+            try:
+                from anime_v2.jobs.manifests import file_fingerprint, write_stage_manifest
+
+                write_stage_manifest(
+                    job_dir=base_dir,
+                    stage="audio",
+                    inputs={"video": file_fingerprint(video_path)},
+                    params={"wav_out": "audio.wav"},
+                    outputs={"audio_wav": str(Path(str(wav)).resolve())},
+                )
+            except Exception:
+                pass
 
             # Tier-Next A/B: optional music/singing region detection (opt-in; OFF by default).
             analysis_dir = work_dir / "analysis"
@@ -761,6 +782,33 @@ class JobQueue:
                 cues = _parse_srt_to_cues(srt_out)
             self.store.update(job_id, progress=0.60, message=f"Transcribed ({len(cues)} segments)")
             await self._check_canceled(job_id)
+            # Stage manifest (resume-safe metadata; best-effort)
+            try:
+                from anime_v2.jobs.manifests import file_fingerprint, write_stage_manifest
+
+                write_stage_manifest(
+                    job_dir=base_dir,
+                    stage="transcribe",
+                    inputs={"audio_wav": file_fingerprint(Path(str(wav)))},
+                    params={
+                        "model": str(model_name),
+                        "device": str(device),
+                        "task": "transcribe",
+                        "src_lang": str(job.src_lang),
+                        "tgt_lang": str(job.tgt_lang),
+                        "word_timestamps": bool(get_settings().whisper_word_timestamps),
+                    },
+                    outputs={
+                        "srt": str(srt_public.resolve() if srt_public.exists() else srt_out.resolve()),
+                        "meta": str(
+                            srt_public.with_suffix(".json").resolve()
+                            if srt_public.with_suffix(".json").exists()
+                            else srt_out.with_suffix(".json").resolve()
+                        ),
+                    },
+                )
+            except Exception:
+                pass
 
             # d) translation manager (~0.75) when needed
             # Prefer diarization utterances for timing; assign text/logprob from transcription overlaps.

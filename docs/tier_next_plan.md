@@ -89,7 +89,7 @@ Conflict:
 
 Existing overlapping pieces:
 - `src/anime_v2/stages/diarization.py` already merges short gaps of same speaker after VAD intersection.
-- There is also an older diarization framework: `src/anime_v2/stages/diarize.py` that persists `voices/registry.json` etc.
+- There was an older diarization framework: `src/anime_v2/stages/diarize.py` that persisted `voices/registry.json` etc. (removed during release hardening).
 
 Conflict:
 - **Two diarization implementations** exist (`diarization.py` and `diarize.py`). Today, the v2 pipeline uses `diarization.py`.
@@ -124,7 +124,7 @@ These are **conflict-resolution tasks** that must be done before new Tier‑Next
 
 - **Diarization duplication**
   - **Canonical**: `src/anime_v2/stages/diarization.py`
-  - **Action**: either delete `src/anime_v2/stages/diarize.py` or reroute callers to `diarization.py` only; add a doc comment if it must remain for compatibility.
+  - **Action**: delete the unused `src/anime_v2/stages/diarize.py` and treat `src/anime_v2/stages/diarization.py` as the single source of truth (done).
 
 - **Music/singing timeline**
   - **Canonical to add**: `src/anime_v2/audio/timeline.py` (planned)

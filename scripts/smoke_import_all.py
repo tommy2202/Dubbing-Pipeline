@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
 from importlib import import_module
 from pathlib import Path
 
@@ -22,12 +23,14 @@ def main() -> int:
     os.environ.setdefault("ENABLE_PYANNOTE", "0")
     os.environ.setdefault("COQUI_TOS_AGREED", "0")
 
-    try:
-        for mod in (
+    modules = (
             "config.settings",
             "anime_v2.config",
+            "anime_v2.utils.ffmpeg_safe",
+            "anime_v2.utils.log",
             "anime_v2.audio.separation",
             "anime_v2.audio.mix",
+            "anime_v2.audio.tracks",
             "anime_v2.audio.music_detect",
             "anime_v2.text.pg_filter",
             "anime_v2.text.style_guide",
@@ -39,6 +42,8 @@ def main() -> int:
             "anime_v2.review.state",
             "anime_v2.review.ops",
             "anime_v2.review.cli",
+            "anime_v2.qa.scoring",
+            "anime_v2.qa.cli",
             "anime_v2.plugins.lipsync.base",
             "anime_v2.plugins.lipsync.registry",
             "anime_v2.plugins.lipsync.wav2lip_plugin",
@@ -47,16 +52,39 @@ def main() -> int:
             "anime_v2.expressive.director",
             "anime_v2.streaming.chunker",
             "anime_v2.streaming.runner",
+            "anime_v2.stages.audio_extractor",
+            "anime_v2.stages.transcription",
+            "anime_v2.stages.translation",
+            "anime_v2.stages.diarization",
+            "anime_v2.stages.tts",
+            "anime_v2.stages.mixing",
+            "anime_v2.stages.export",
+            "anime_v2.stages.mkv_export",
+            "anime_v2.web.routes_jobs",
+            "anime_v2.api.routes_auth",
+            "anime_v2.api.routes_audit",
+            "anime_v2.api.routes_keys",
+            "anime_v2.api.routes_runtime",
             "anime_v2.jobs.queue",
             "anime_v2.realtime",
             "anime_v2.server",
             "anime_v2.web.app",
             "anime_v2.cli",
+            "anime_v1.cli",
             "main",
-        ):
-            import_module(mod)
+    )
+
+    try:
+        for mod in modules:
+            try:
+                import_module(mod)
+            except Exception as ex:
+                print(f"IMPORT_SMOKE_FAILED: module={mod} error={ex}", file=sys.stderr)
+                traceback.print_exc()
+                return 2
     except Exception as ex:
-        print(f"IMPORT_SMOKE_FAILED: {ex}", file=sys.stderr)
+        print(f"IMPORT_SMOKE_FAILED: error={ex}", file=sys.stderr)
+        traceback.print_exc()
         return 2
 
     print("IMPORT_SMOKE_OK")

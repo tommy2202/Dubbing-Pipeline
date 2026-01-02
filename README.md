@@ -87,16 +87,28 @@ python3 -m pip install -e ".[translation,diarization,tts,dev]"
 
 ```bash
 python3 scripts/verify_config_wiring.py
+python3 scripts/verify_env.py
 python3 scripts/verify_features.py
 python3 scripts/smoke_import_all.py
 python3 scripts/smoke_run.py
 python3 scripts/verify_runtime.py
+python3 scripts/polish_gate.py
 ```
+
+Notes:
+- `scripts/verify_env.py` reports **required vs optional** dependencies and which features are enabled.
+- `scripts/polish_gate.py` is the “release polish” one-command check (imports + env + synthetic feature tests + stub/dupe scan).
 
 ### Run a single dub job (CLI)
 
 ```bash
 anime-v2 Input/Test.mp4 --mode medium --device auto
+```
+
+Logging flags:
+
+```bash
+anime-v2 Input/Test.mp4 --log-level DEBUG --debug-dump
 ```
 
 Override ASR model directly:
@@ -204,6 +216,27 @@ MKV track metadata/order:
 Playback tip:
 
 - Use VLC to select audio tracks: `Audio -> Audio Track`
+
+### Per-job logs and manifests
+
+When running `anime-v2`, the pipeline also writes per-job artifacts:
+
+- `Output/<job>/logs/pipeline.log` (JSONL)
+- `Output/<job>/logs/pipeline.txt` (human-readable breadcrumbs)
+- `Output/<job>/logs/stages/<stage>.log` (JSONL, best-effort)
+- `Output/<job>/logs/ffmpeg/*.stderr.log` (captured stderr per ffmpeg invocation)
+- `Output/<job>/logs/summary.json` (timings summary, best-effort)
+- `Output/<job>/manifests/<stage>.json` (resume-safe stage metadata, best-effort)
+
+### Legacy v1 (optional)
+
+`anime-v1` is kept for compatibility, but most users should use **v2**.
+
+If you need v1 CLI/UI dependencies:
+
+```bash
+python3 -m pip install -e ".[v1]"
+```
 
 ### Singing/Music Preservation (Tier‑Next A/B, optional)
 

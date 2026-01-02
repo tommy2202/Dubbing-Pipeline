@@ -14,8 +14,8 @@ torchmetrics==1.4.1
 sentencepiece==0.2.0
 sacremoses==0.1.1
 
-# CRITICAL: satisfy TTS wheel for py<=3.10:
-numpy==1.22.0
+# numpy pin (keep compatible with Python 3.10 + modern ML deps)
+numpy==1.26.4
 
 # extras
 fastapi==0.115.5

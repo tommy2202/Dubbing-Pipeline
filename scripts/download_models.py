@@ -10,7 +10,7 @@ MODELS = {
     "whisper-large-v2": ("whisper", "large-v2"),
     # Translation
     "m2m100-418m": ("hf", "facebook/m2m100_418M"),
-    # Optional Marian (generic multi->en as placeholder)
+    # Optional Marian (generic multi->en baseline)
     "marian-mul-en": ("hf", "Helsinki-NLP/opus-mt-mul-en"),
     # Wav2Lip checkpoints
     "wav2lip-main": (

@@ -9,6 +9,7 @@ secrets/
 # python caches
 __pycache__/
 *.pyc
+*.egg-info/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
@@ -16,4 +17,9 @@ __pycache__/
 # runtime artifacts
 logs/
 Output/
+Input/
+uploads/
+outputs/
+_tmp*/
+*.db
 Input/uploads/

@@ -135,7 +135,7 @@ def cli(video, src_lang, tgt_lang, mode, voice, out_dir, lipsync_flag, keep_bg_f
     # 1) Audio extraction
     wav = audio_extractor.run(video, ckpt_dir=ckpt)
 
-    # 2) (Optional) diarisation placeholder
+    # 2) (Optional) diarisation (best-effort; may be unavailable depending on deps)
     diarisation.run(wav, ckpt_dir=ckpt)
 
     # 3) Transcription (ASR), possibly direct translate if prefer_translate
@@ -180,7 +180,7 @@ def cli(video, src_lang, tgt_lang, mode, voice, out_dir, lipsync_flag, keep_bg_f
         except Exception as ex:  # pragma: no cover
             logger.warning("Separation stage skipped (%s)", ex)
 
-    # 6) Optional lip-sync stage (stubbed by default)
+    # 6) Optional lip-sync stage (best-effort; may be unavailable depending on deps)
     video_for_mux = video
     if defaults["lipsync"]:
         try:

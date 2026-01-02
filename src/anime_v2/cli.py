@@ -597,6 +597,26 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 @click.option("--dry-run", is_flag=True, default=False, help="Validate inputs/tools and exit")
 @click.option("--verbose", is_flag=True, default=False, help="Verbose logging (INFO)")
 @click.option("--debug", is_flag=True, default=False, help="Debug logging (DEBUG)")
+@click.option(
+    "--log-level",
+    type=click.Choice(["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"], case_sensitive=False),
+    default=str(get_settings().log_level),
+    show_default=True,
+    help="Runtime log level override (best-effort).",
+)
+@click.option(
+    "--log-json",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default="on",
+    show_default=True,
+    help="Keep JSON logs (on). 'off' is reserved for future console formatting; per-job pipeline.txt is always written.",
+)
+@click.option(
+    "--debug-dump",
+    is_flag=True,
+    default=False,
+    help="Write extra debug artifacts under Output/<job>/analysis/ (best-effort).",
+)
 def run(
     video: Path | None,
     batch_spec: str | None,
@@ -698,6 +718,9 @@ def run(
     dry_run: bool,
     verbose: bool,
     debug: bool,
+    log_level: str,
+    log_json: str,
+    debug_dump: bool,
 ) -> None:
     """
     Run pipeline-v2 on VIDEO.
@@ -1063,6 +1086,20 @@ def run(
     # Enforce OFFLINE_MODE / ALLOW_EGRESS policy early.
     install_egress_policy()
 
+    # Log level override (best-effort).
+    try:
+        from anime_v2.utils.log import set_log_level
+
+        eff = str(log_level or "").upper().strip()
+        if debug:
+            eff = "DEBUG"
+        elif verbose:
+            eff = "INFO"
+        if eff:
+            set_log_level(eff)
+    except Exception:
+        pass
+
     mode = mode.lower()
     chosen_model = str(asr_model_name).strip() if asr_model_name else MODE_TO_MODEL[mode]
     chosen_device = _select_device(device)
@@ -1081,6 +1118,29 @@ def run(
     stem = video.stem
     out_dir = output_dir_for(video)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if bool(debug_dump):
+        try:
+            from config.settings import get_safe_config_report
+            from anime_v2.utils.io import write_json
+
+            analysis_dir = out_dir / "analysis"
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            write_json(
+                analysis_dir / "debug_dump.json",
+                {
+                    "safe_config_report": get_safe_config_report(),
+                    "args": {
+                        "log_level": str(log_level),
+                        "log_json": str(log_json),
+                        "debug": bool(debug),
+                        "verbose": bool(verbose),
+                        "resume": bool(resume),
+                    },
+                },
+            )
+        except Exception:
+            pass
 
     wav_path = out_dir / "audio.wav"
     srt_out = out_dir / f"{stem}.srt"
@@ -1105,6 +1165,31 @@ def run(
         tgt_lang,
         (not no_translate),
     )
+
+    # Per-job logs (in addition to global app log)
+    job_logger = None
+    stage_durations: dict[str, float] = {}
+    try:
+        from anime_v2.utils.ffmpeg_safe import set_ffmpeg_log_dir
+        from anime_v2.utils.job_logs import JobLogger
+
+        job_logger = JobLogger(job_dir=out_dir, job_id=stem)
+        set_ffmpeg_log_dir(job_logger.paths.ffmpeg_dir)
+        job_logger.event(stage="start", level="info", msg="job_start", video=str(video), out_dir=str(out_dir))
+    except Exception:
+        job_logger = None
+
+    # Job context + stage manifests (resume-safe).
+    try:
+        from anime_v2.jobs.context import make_job_context
+        from anime_v2.jobs.manifests import can_resume_stage, file_fingerprint, write_stage_manifest
+
+        job_ctx = make_job_context(job_id=stem, job_dir=out_dir)
+    except Exception:
+        job_ctx = None
+        can_resume_stage = None  # type: ignore[assignment]
+        file_fingerprint = None  # type: ignore[assignment]
+        write_stage_manifest = None  # type: ignore[assignment]
 
     # Tier-3C streaming mode: chunked pipeline with per-chunk MP4s (+ optional stitch).
     # Backwards compat: --realtime enables streaming mode.
@@ -1169,12 +1254,48 @@ def run(
     extracted: Path | None = None
     t_stage = time.perf_counter()
     try:
-        extracted = audio_extractor.extract(video=video, out_dir=out_dir, wav_out=wav_path)
+        if job_logger is not None:
+            job_logger.event(stage="audio", level="info", msg="stage_start")
+        if resume and job_ctx is not None and can_resume_stage is not None and file_fingerprint is not None:
+            inputs = {"video": file_fingerprint(video)}
+            params = {"wav_out": str(wav_path.name)}
+            if can_resume_stage(
+                job_dir=out_dir,
+                stage="audio",
+                inputs=inputs,
+                params=params,
+                expected_outputs=[wav_path],
+            ):
+                extracted = wav_path
+                logger.info("[v2] audio_extractor: resume hit → %s", extracted)
+            else:
+                extracted = audio_extractor.extract(video=video, out_dir=out_dir, wav_out=wav_path)
+                if write_stage_manifest is not None and extracted and Path(extracted).exists():
+                    write_stage_manifest(
+                        job_dir=out_dir,
+                        stage="audio",
+                        inputs=inputs,
+                        params=params,
+                        outputs={"audio_wav": str(Path(extracted).resolve())},
+                    )
+        else:
+            extracted = audio_extractor.extract(video=video, out_dir=out_dir, wav_out=wav_path)
         logger.info(
             "[v2] audio_extractor: ok path=%s (%.2fs)", extracted, time.perf_counter() - t_stage
         )
+        stage_durations["audio"] = float(time.perf_counter() - t_stage)
+        if job_logger is not None:
+            job_logger.event(
+                stage="audio",
+                level="info",
+                msg="stage_ok",
+                duration_s=stage_durations["audio"],
+                audio_wav=str(extracted),
+            )
     except Exception as ex:
         logger.exception("[v2] audio_extractor failed: %s", ex)
+        if job_logger is not None:
+            job_logger.event(stage="audio", level="error", msg="stage_failed", error=str(ex))
         logger.error("[v2] Done. Output: (failed early)")
         return
 
@@ -1460,17 +1581,66 @@ def run(
     t_stage = time.perf_counter()
     trans_meta_path = srt_out.with_suffix(".json")
     try:
+        if job_logger is not None:
+            job_logger.event(stage="transcribe", level="info", msg="stage_start")
         want_words = str(align_mode or "").lower() == "word"
-        transcribe(
-            audio_path=extracted,
-            srt_out=srt_out,
-            device=chosen_device,
-            model_name=chosen_model,
-            task="transcribe",
-            src_lang=src_lang,
-            tgt_lang=tgt_lang,
-            word_timestamps=want_words,
-        )
+        did_transcribe = True
+        if (
+            resume
+            and job_ctx is not None
+            and can_resume_stage is not None
+            and file_fingerprint is not None
+            and extracted is not None
+            and Path(extracted).exists()
+        ):
+            inputs = {"audio_wav": file_fingerprint(Path(extracted))}
+            params = {
+                "model": str(chosen_model),
+                "device": str(chosen_device),
+                "task": "transcribe",
+                "src_lang": str(src_lang),
+                "tgt_lang": str(tgt_lang),
+                "word_timestamps": bool(want_words),
+            }
+            if can_resume_stage(
+                job_dir=out_dir,
+                stage="transcribe",
+                inputs=inputs,
+                params=params,
+                expected_outputs=[srt_out, trans_meta_path],
+            ):
+                did_transcribe = False
+                logger.info("[v2] transcription: resume hit → %s", srt_out)
+        if did_transcribe:
+            transcribe(
+                audio_path=extracted,
+                srt_out=srt_out,
+                device=chosen_device,
+                model_name=chosen_model,
+                task="transcribe",
+                src_lang=src_lang,
+                tgt_lang=tgt_lang,
+                word_timestamps=want_words,
+            )
+            if write_stage_manifest is not None and file_fingerprint is not None:
+                with suppress(Exception):
+                    write_stage_manifest(
+                        job_dir=out_dir,
+                        stage="transcribe",
+                        inputs={"audio_wav": file_fingerprint(Path(extracted))},
+                        params={
+                            "model": str(chosen_model),
+                            "device": str(chosen_device),
+                            "task": "transcribe",
+                            "src_lang": str(src_lang),
+                            "tgt_lang": str(tgt_lang),
+                            "word_timestamps": bool(want_words),
+                        },
+                        outputs={
+                            "srt": str(srt_out.resolve()),
+                            "meta": str(trans_meta_path.resolve()),
+                        },
+                    )
         meta = {}
         try:
             meta = read_json(trans_meta_path, default={})  # type: ignore[assignment]
@@ -1484,8 +1654,20 @@ def run(
             time.perf_counter() - t_stage,
             srt_out,
         )
+        stage_durations["transcribe"] = float(time.perf_counter() - t_stage)
+        if job_logger is not None:
+            job_logger.event(
+                stage="transcribe",
+                level="info",
+                msg="stage_ok",
+                duration_s=stage_durations["transcribe"],
+                srt=str(srt_out),
+                meta=str(trans_meta_path),
+            )
     except Exception as ex:
         logger.exception("[v2] transcription failed (continuing): %s", ex)
+        if job_logger is not None:
+            job_logger.event(stage="transcribe", level="error", msg="stage_failed_continue", error=str(ex))
         cues = []
 
     # Optional subtitle format conversions for source transcript
@@ -2093,6 +2275,22 @@ def run(
             return
 
     logger.info("[v2] Done in %.2fs", time.perf_counter() - t0)
+    if job_logger is not None:
+        # Minimal end-of-job summary. (More detailed per-stage timing is best-effort.)
+        try:
+            job_logger.write_summary(
+                {
+                    "job_id": stem,
+                    "video": str(video),
+                    "out_dir": str(out_dir),
+                    "wall_time_s": float(time.perf_counter() - t0),
+                    "stage_durations_s": stage_durations,
+                }
+            )
+        except Exception:
+            pass
+        with suppress(Exception):
+            job_logger.event(stage="end", level="info", msg="job_done", wall_time_s=float(time.perf_counter() - t0))
 
     # Tier-3A: optional lip-sync plugin (default off)
     try:

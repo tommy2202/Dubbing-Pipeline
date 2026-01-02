@@ -1,8 +1,6 @@
 import pathlib
 import time
 
-import whisper
-
 from anime_v1.utils import checkpoints, logger
 
 _model_cache: dict[str, object] = {}
@@ -12,6 +10,13 @@ def _load(model_size: str):
     model_size = (model_size or "small").lower()
     if model_size in _model_cache:
         return _model_cache[model_size]
+    try:
+        import whisper  # type: ignore
+    except Exception as ex:
+        raise RuntimeError(
+            "Whisper is not installed. Install `openai-whisper` (or use the v2 pipeline) "
+            "or rely on the Vosk fallback if configured."
+        ) from ex
     try:
         logger.info("Loading Whisper-%s …", model_size)
         _model_cache[model_size] = whisper.load_model(model_size)

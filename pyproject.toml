@@ -38,6 +38,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+v1 = [
+  # anime-v1 legacy CLI/UI optional deps (kept out of default install)
+  "pydub>=0.25.1",
+  "vosk>=0.3.45",
+  "gradio>=4.0.0",
+]
 diarization = [
   "numpy>=1.24",
   "pyannote.audio>=3.1.0",

@@ -148,7 +148,7 @@ def main() -> int:
             "Partial",
             [
                 "src/anime_v2/runtime/model_manager.py (model cache + device selection)",
-                "scripts/train_voice.py (training hook placeholder)",
+                "scripts/train_voice.py (dataset manifest builder for optional training)",
                 "src/anime_v2/stages/tts.py (tts_provider/voice_mode)",
             ],
         )

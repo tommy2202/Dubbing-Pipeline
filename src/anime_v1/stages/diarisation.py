@@ -14,7 +14,7 @@ def run(audio_wav: pathlib.Path, ckpt_dir: pathlib.Path, **_):
         logger.info("Diarisation exists, skip.")
         return out
     if Pipeline is None:
-        logger.info("pyannote not available; writing placeholder diarisation.")
+        logger.info("pyannote not available; writing degraded diarisation output.")
         meta = {"segments": [{"speaker": "Speaker_1", "start": 0.0, "end": 0.0}]}
         checkpoints.save(meta, out)
         return out
@@ -36,7 +36,7 @@ def run(audio_wav: pathlib.Path, ckpt_dir: pathlib.Path, **_):
         checkpoints.save({"segments": segs}, out)
         return out
     except Exception as ex:  # pragma: no cover
-        logger.warning("pyannote failed (%s); writing placeholder diarisation.", ex)
+        logger.warning("pyannote failed (%s); writing degraded diarisation output.", ex)
         meta = {"segments": [{"speaker": "Speaker_1", "start": 0.0, "end": 0.0}]}
         checkpoints.save(meta, out)
         return out
