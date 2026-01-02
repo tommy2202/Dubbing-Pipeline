@@ -411,6 +411,22 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     show_default=True,
 )
 @click.option(
+    "--pg",
+    "pg_mode",
+    type=click.Choice(["off", "pg13", "pg"], case_sensitive=False),
+    default="off",
+    show_default=True,
+    help="Per-run PG mode applied after translation/style, before timing-fit/TTS/subs.",
+)
+@click.option(
+    "--pg-policy",
+    "pg_policy_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    show_default=False,
+    help="Optional JSON policy overrides for PG filter (offline, deterministic).",
+)
+@click.option(
     "--voice-mode",
     type=click.Choice(["clone", "preset", "single"], case_sensitive=False),
     default=str(get_settings().voice_mode),
@@ -572,6 +588,8 @@ def run(
     music_threshold: float,
     op_ed_detect: str,
     op_ed_seconds: int,
+    pg_mode: str,
+    pg_policy_path: Path | None,
     voice_mode: str,
     voice_ref_dir: Path | None,
     voice_store_dir: Path | None,
@@ -848,6 +866,8 @@ def run(
                     music_threshold=music_threshold,
                     op_ed_detect=op_ed_detect,
                     op_ed_seconds=op_ed_seconds,
+                    pg_mode=pg_mode,
+                    pg_policy_path=str(pg_policy_path) if pg_policy_path else None,
                     print_config=False,
                     dry_run=False,
                     verbose=verbose,
@@ -1030,6 +1050,8 @@ def run(
             music_threshold=float(music_threshold),
             op_ed_detect=(str(op_ed_detect).lower() == "on"),
             op_ed_seconds=int(op_ed_seconds),
+            pg=str(pg_mode).lower(),
+            pg_policy_path=Path(pg_policy_path).resolve() if pg_policy_path else None,
         )
         return
 
@@ -1465,6 +1487,21 @@ def run(
                 logger.warning("[v2] align: skipped/failed (no-translate) (%s)", ex)
 
             # Keep segments for downstream (TTS windowing)
+            if str(pg_mode).lower() != "off":
+                try:
+                    from anime_v2.text.pg_filter import apply_pg_filter_to_segments
+
+                    analysis_dir = out_dir / "analysis"
+                    analysis_dir.mkdir(parents=True, exist_ok=True)
+                    segments_for_mt, _ = apply_pg_filter_to_segments(
+                        segments_for_mt,
+                        pg=str(pg_mode).lower(),
+                        pg_policy_path=Path(pg_policy_path).resolve() if pg_policy_path else None,
+                        report_path=(analysis_dir / "pg_filter_report.json"),
+                        job_id=str(out_dir.name),
+                    )
+                except Exception:
+                    logger.exception("pg_filter_failed_continue")
             write_json(
                 translated_json,
                 {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": segments_for_mt},
@@ -1517,6 +1554,23 @@ def run(
                 )
             except Exception as ex:
                 logger.warning("[v2] align: skipped/failed (%s)", ex)
+
+            # Tier-Next C: per-run PG mode (opt-in; OFF by default).
+            if str(pg_mode).lower() != "off":
+                try:
+                    from anime_v2.text.pg_filter import apply_pg_filter_to_segments
+
+                    analysis_dir = out_dir / "analysis"
+                    analysis_dir.mkdir(parents=True, exist_ok=True)
+                    translated_segments, _ = apply_pg_filter_to_segments(
+                        translated_segments,
+                        pg=str(pg_mode).lower(),
+                        pg_policy_path=Path(pg_policy_path).resolve() if pg_policy_path else None,
+                        report_path=(analysis_dir / "pg_filter_report.json"),
+                        job_id=str(out_dir.name),
+                    )
+                except Exception:
+                    logger.exception("pg_filter_failed_continue")
 
             # Optional timing-aware translation fit (Tier-1 B).
             if timing_fit:

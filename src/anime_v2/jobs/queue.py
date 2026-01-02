@@ -860,6 +860,28 @@ class JobQueue:
                         ss["text"] = tgt_text
                         out_segments.append(ss)
 
+                    # Tier-Next C: apply PG mode to transcript-edited text (so edits can't bypass PG).
+                    try:
+                        curj = self.store.get(job_id)
+                        rt2 = dict((curj.runtime or {}) if curj else runtime)
+                        eff_pg = str(rt2.get("pg") or "off").strip().lower()
+                        eff_pg_policy = str(rt2.get("pg_policy_path") or "").strip()
+                        if eff_pg != "off":
+                            from anime_v2.text.pg_filter import apply_pg_filter_to_segments
+
+                            analysis_dir = work_dir / "analysis"
+                            analysis_dir.mkdir(parents=True, exist_ok=True)
+                            report_p = analysis_dir / "pg_filter_report.json"
+                            out_segments, _ = apply_pg_filter_to_segments(
+                                out_segments,
+                                pg=eff_pg,
+                                pg_policy_path=(Path(eff_pg_policy).resolve() if eff_pg_policy else None),
+                                report_path=report_p,
+                                job_id=str(job_id),
+                            )
+                    except Exception:
+                        pass
+
                     out_json = work_dir / "translated.edited.json"
                     write_json(
                         out_json,
@@ -914,6 +936,33 @@ class JobQueue:
                     translated_segments = translate_segments(
                         segments_for_mt, src_lang=job.src_lang, tgt_lang=job.tgt_lang, cfg=cfg
                     )
+                    # Tier-Next C: per-job PG mode (opt-in; OFF by default), before timing-fit/TTS/subs.
+                    try:
+                        curj = self.store.get(job_id)
+                        rt2 = dict((curj.runtime or {}) if curj else runtime)
+                        eff_pg = str(rt2.get("pg") or "off").strip().lower()
+                        eff_pg_policy = str(rt2.get("pg_policy_path") or "").strip()
+                        if eff_pg != "off":
+                            from anime_v2.text.pg_filter import apply_pg_filter_to_segments
+
+                            analysis_dir = work_dir / "analysis"
+                            analysis_dir.mkdir(parents=True, exist_ok=True)
+                            base_analysis_dir = base_dir / "analysis"
+                            base_analysis_dir.mkdir(parents=True, exist_ok=True)
+                            report_p = analysis_dir / "pg_filter_report.json"
+                            translated_segments, _ = apply_pg_filter_to_segments(
+                                translated_segments,
+                                pg=eff_pg,
+                                pg_policy_path=(Path(eff_pg_policy).resolve() if eff_pg_policy else None),
+                                report_path=report_p,
+                                job_id=str(job_id),
+                            )
+                            with suppress(Exception):
+                                from anime_v2.utils.io import atomic_copy
+
+                                atomic_copy(report_p, base_analysis_dir / "pg_filter_report.json")
+                    except Exception:
+                        self.store.append_log(job_id, f"[{now_utc()}] pg_filter failed; continuing")
                     # Optional timing-aware translation fit (Tier-1 B).
                     if bool(getattr(settings, "timing_fit", False)):
                         try:

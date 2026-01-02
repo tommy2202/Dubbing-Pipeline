@@ -174,6 +174,8 @@ def run_streaming(
     music_threshold: float = 0.70,
     op_ed_detect: bool = False,
     op_ed_seconds: int = 90,
+    pg: str = "off",
+    pg_policy_path: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """
@@ -253,6 +255,7 @@ def run_streaming(
 
     results: list[StreamChunkResult] = []
     mp4s: list[Path] = []
+    pg_reports: list[dict[str, Any]] = []
 
     # NOTE: keep concurrency at 1 by default; higher values are best-effort and may be memory-heavy.
     if stream_concurrency and int(stream_concurrency) > 1:
@@ -321,6 +324,22 @@ def run_streaming(
                         translated = translate_segments(
                             segs_for_mt, src_lang=src_lang, tgt_lang=tgt_lang, cfg=cfg
                         )
+
+                # Tier-Next C: per-run PG mode (opt-in; OFF by default), before timing-fit/TTS/subs.
+                if str(pg).lower() != "off":
+                    try:
+                        from anime_v2.text.pg_filter import apply_pg_filter_to_segments
+
+                        translated, rep = apply_pg_filter_to_segments(
+                            translated,
+                            pg=str(pg).lower(),
+                            pg_policy_path=Path(pg_policy_path).resolve() if pg_policy_path else None,
+                            report_path=None,
+                            job_id=str(out_dir.name),
+                        )
+                        pg_reports.append({"chunk_idx": int(ch.idx), "report": rep})
+                    except Exception:
+                        logger.exception("stream_pg_filter_failed_continue", idx=ch.idx)
 
                 # 3c) Optional timing-fit (Tier-1B) inside the chunk.
                 if timing_fit:
@@ -532,6 +551,15 @@ def run_streaming(
         "wall_time_s": time.perf_counter() - t0,
     }
     atomic_write_text(manifest_path, json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    # Per-job PG filter report (best-effort) for streaming runs.
+    if str(pg).lower() != "off":
+        with suppress(Exception):
+            analysis_dir = out_dir / "analysis"
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            from anime_v2.utils.io import write_json as _wj
+
+            _wj(analysis_dir / "pg_filter_report.json", {"version": 1, "chunks": pg_reports})
 
     final_out = None
     if str(stream_output).lower() == "final" and mp4s:

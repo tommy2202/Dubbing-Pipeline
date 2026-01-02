@@ -1,0 +1,39 @@
+{
+  "created_at": 1767329933.4703522,
+  "pg": "pg13",
+  "policy_id": "pg13",
+  "segments": [
+    {
+      "changed": false,
+      "segment_id": 1,
+      "trigger_count": 0,
+      "triggers": []
+    },
+    {
+      "changed": true,
+      "segment_id": 2,
+      "trigger_count": 2,
+      "triggers": [
+        {
+          "category": "profanity",
+          "count": 1,
+          "replacement": "substitute",
+          "rule_id": "profanity_substitute",
+          "term_hash": "31506a8448a7"
+        },
+        {
+          "category": "profanity",
+          "count": 1,
+          "replacement": "substitute",
+          "rule_id": "profanity_substitute",
+          "term_hash": "85fc17f7069a"
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "segments_changed": 1,
+    "triggers": 2
+  },
+  "version": 1
+}

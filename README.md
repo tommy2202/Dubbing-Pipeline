@@ -194,6 +194,25 @@ Notes:
 - When Demucs separation is enabled (`--mix enhanced --separation demucs`), music preservation switches the bed to the **original audio** during detected music regions so vocals aren’t lost.
 - Detection is offline-first and uses lightweight heuristics by default. If optional deps are missing, it logs the chosen strategy and continues.
 
+### PG Mode (Tier‑Next C, session-only; optional)
+
+Opt-in **deterministic** text sanitization pass applied **after translation/style** and **before timing-fit, TTS, and target subtitles**. Default is **OFF** each run / each server restart.
+
+CLI:
+
+```bash
+anime-v2 Input/Test.mp4 --pg pg13
+anime-v2 Input/Test.mp4 --pg pg
+anime-v2 Input/Test.mp4 --pg pg13 --pg-policy /path/to/pg_policy.json
+```
+
+Web UI:
+- In the Upload Wizard, enable **PG Mode** and choose a level.
+- The selection is stored **per job** (not as a global server default).
+
+Artifacts / audit:
+- `Output/<job>/analysis/pg_filter_report.json` (does **not** include raw matched words; only hashed tokens + rule IDs)
+
 ### Timing Fit & Pacing (Tier‑1 B/C)
 
 Defaults preserve current behavior. To enable timing-aware translation fitting + segment pacing:

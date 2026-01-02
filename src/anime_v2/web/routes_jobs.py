@@ -385,6 +385,8 @@ async def create_job(
     device = "auto"
     src_lang = "auto"
     tgt_lang = "en"
+    pg = "off"
+    pg_policy_path = ""
     video_path: Path | None = None
     duration_s = 0.0
 
@@ -396,6 +398,8 @@ async def create_job(
         device = str(body.get("device") or device)
         src_lang = str(body.get("src_lang") or src_lang)
         tgt_lang = str(body.get("tgt_lang") or tgt_lang)
+        pg = str(body.get("pg") or pg)
+        pg_policy_path = str(body.get("pg_policy_path") or pg_policy_path)
         vp = body.get("video_path")
         if not isinstance(vp, str):
             raise HTTPException(status_code=400, detail="Missing video_path")
@@ -411,6 +415,8 @@ async def create_job(
         device = str(form.get("device") or device)
         src_lang = str(form.get("src_lang") or src_lang)
         tgt_lang = str(form.get("tgt_lang") or tgt_lang)
+        pg = str(form.get("pg") or pg)
+        pg_policy_path = str(form.get("pg_policy_path") or pg_policy_path)
 
         file = form.get("file")
         vp = form.get("video_path")
@@ -526,6 +532,14 @@ async def create_job(
         log_path="",
         error=None,
     )
+    # Per-job (session) flags; NOT persisted as global defaults.
+    rt = dict(job.runtime or {})
+    pg_norm = str(pg or "off").strip().lower()
+    if pg_norm in {"pg13", "pg"}:
+        rt["pg"] = pg_norm
+        if pg_policy_path.strip():
+            rt["pg_policy_path"] = pg_policy_path.strip()
+    job.runtime = rt
     store.put(job)
     if idem_key:
         store.put_idempotency(idem_key, jid)
@@ -588,6 +602,8 @@ async def create_jobs_batch(
         tgt_lang: str,
         preset: dict[str, Any] | None,
         project: dict[str, Any] | None,
+        pg: str = "off",
+        pg_policy_path: str = "",
     ) -> str:
         # duration validation
         try:
@@ -640,6 +656,11 @@ async def create_jobs_batch(
                 "name": str(project.get("name") or ""),
                 "output_subdir": str(project.get("output_subdir") or ""),
             }
+        pg_norm = str(pg or "off").strip().lower()
+        if pg_norm in {"pg13", "pg"}:
+            rt["pg"] = pg_norm
+            if str(pg_policy_path or "").strip():
+                rt["pg_policy_path"] = str(pg_policy_path).strip()
         job.runtime = rt
         store.put(job)
         try:
@@ -690,6 +711,8 @@ async def create_jobs_batch(
             device = str(it.get("device") or (preset.get("device") if preset else "auto"))
             src_lang = str(it.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
             tgt_lang = str(it.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
+            pg = str(it.get("pg") or "off")
+            pg_policy_path = str(it.get("pg_policy_path") or "")
             # project output folder stored in runtime; validated here
             if project and project.get("output_subdir"):
                 project["output_subdir"] = _sanitize_output_subdir(
@@ -704,6 +727,8 @@ async def create_jobs_batch(
                     tgt_lang=tgt_lang,
                     preset=preset,
                     project=project,
+                    pg=pg,
+                    pg_policy_path=pg_policy_path,
                 )
             )
     else:
@@ -720,6 +745,8 @@ async def create_jobs_batch(
         device = str(form.get("device") or (preset.get("device") if preset else "auto"))
         src_lang = str(form.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
         tgt_lang = str(form.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
+        pg = str(form.get("pg") or "off")
+        pg_policy_path = str(form.get("pg_policy_path") or "")
 
         files = form.getlist("files") if hasattr(form, "getlist") else []
         if not files:
@@ -763,6 +790,8 @@ async def create_jobs_batch(
                     tgt_lang=tgt_lang,
                     preset=preset,
                     project=project,
+                    pg=pg,
+                    pg_policy_path=pg_policy_path,
                 )
             )
 
