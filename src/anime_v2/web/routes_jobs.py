@@ -387,6 +387,7 @@ async def create_job(
     tgt_lang = "en"
     pg = "off"
     pg_policy_path = ""
+    qa = False
     video_path: Path | None = None
     duration_s = 0.0
 
@@ -400,6 +401,7 @@ async def create_job(
         tgt_lang = str(body.get("tgt_lang") or tgt_lang)
         pg = str(body.get("pg") or pg)
         pg_policy_path = str(body.get("pg_policy_path") or pg_policy_path)
+        qa = bool(body.get("qa") or False)
         vp = body.get("video_path")
         if not isinstance(vp, str):
             raise HTTPException(status_code=400, detail="Missing video_path")
@@ -417,6 +419,7 @@ async def create_job(
         tgt_lang = str(form.get("tgt_lang") or tgt_lang)
         pg = str(form.get("pg") or pg)
         pg_policy_path = str(form.get("pg_policy_path") or pg_policy_path)
+        qa = str(form.get("qa") or "").strip() not in {"", "0", "false", "off"}
 
         file = form.get("file")
         vp = form.get("video_path")
@@ -539,6 +542,8 @@ async def create_job(
         rt["pg"] = pg_norm
         if pg_policy_path.strip():
             rt["pg_policy_path"] = pg_policy_path.strip()
+    if bool(qa):
+        rt["qa"] = True
     job.runtime = rt
     store.put(job)
     if idem_key:
@@ -604,6 +609,7 @@ async def create_jobs_batch(
         project: dict[str, Any] | None,
         pg: str = "off",
         pg_policy_path: str = "",
+        qa: bool = False,
     ) -> str:
         # duration validation
         try:
@@ -661,6 +667,8 @@ async def create_jobs_batch(
             rt["pg"] = pg_norm
             if str(pg_policy_path or "").strip():
                 rt["pg_policy_path"] = str(pg_policy_path).strip()
+        if bool(qa):
+            rt["qa"] = True
         job.runtime = rt
         store.put(job)
         try:
@@ -713,6 +721,7 @@ async def create_jobs_batch(
             tgt_lang = str(it.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
             pg = str(it.get("pg") or "off")
             pg_policy_path = str(it.get("pg_policy_path") or "")
+            qa = bool(it.get("qa") or False)
             # project output folder stored in runtime; validated here
             if project and project.get("output_subdir"):
                 project["output_subdir"] = _sanitize_output_subdir(
@@ -729,6 +738,7 @@ async def create_jobs_batch(
                     project=project,
                     pg=pg,
                     pg_policy_path=pg_policy_path,
+                    qa=qa,
                 )
             )
     else:
@@ -747,6 +757,7 @@ async def create_jobs_batch(
         tgt_lang = str(form.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
         pg = str(form.get("pg") or "off")
         pg_policy_path = str(form.get("pg_policy_path") or "")
+        qa = str(form.get("qa") or "").strip() not in {"", "0", "false", "off"}
 
         files = form.getlist("files") if hasattr(form, "getlist") else []
         if not files:
@@ -792,6 +803,7 @@ async def create_jobs_batch(
                     project=project,
                     pg=pg,
                     pg_policy_path=pg_policy_path,
+                    qa=qa,
                 )
             )
 
@@ -1521,6 +1533,8 @@ async def job_files(
     mkv = None
     hls = None
     lipsync = None
+    qa_summary = None
+    qa_top_md = None
 
     for cand in [
         base_dir / f"{stem}.dub.mp4",
@@ -1587,6 +1601,8 @@ async def job_files(
         "lipsync_mp4": None,
         "mp4": None,
         "mkv": None,
+        "qa_summary": None,
+        "qa_top_issues": None,
     }
     if hls is not None:
         data["hls_manifest"] = {"url": rel_url(hls), "path": str(hls)}
@@ -1596,6 +1612,22 @@ async def job_files(
         data["lipsync_mp4"] = {"url": rel_url(lipsync), "path": str(lipsync)}
     if mkv is not None:
         data["mkv"] = {"url": rel_url(mkv), "path": str(mkv)}
+
+    # QA artifacts (best-effort)
+    try:
+        cand = base_dir / "qa" / "summary.json"
+        if cand.exists():
+            qa_summary = cand
+        cand2 = base_dir / "qa" / "top_issues.md"
+        if cand2.exists():
+            qa_top_md = cand2
+    except Exception:
+        qa_summary = None
+        qa_top_md = None
+    if qa_summary is not None:
+        data["qa_summary"] = {"url": rel_url(qa_summary), "path": str(qa_summary)}
+    if qa_top_md is not None:
+        data["qa_top_issues"] = {"url": rel_url(qa_top_md), "path": str(qa_top_md)}
     return data
 
 

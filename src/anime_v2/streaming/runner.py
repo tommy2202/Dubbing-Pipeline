@@ -176,6 +176,7 @@ def run_streaming(
     op_ed_seconds: int = 90,
     pg: str = "off",
     pg_policy_path: Path | None = None,
+    qa: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """
@@ -560,6 +561,13 @@ def run_streaming(
             from anime_v2.utils.io import write_json as _wj
 
             _wj(analysis_dir / "pg_filter_report.json", {"version": 1, "chunks": pg_reports})
+
+    # Tier-Next D: optional QA scoring (offline-only; writes reports, does not change outputs)
+    if bool(qa):
+        with suppress(Exception):
+            from anime_v2.qa.scoring import score_job
+
+            score_job(out_dir, enabled=True, write_outputs=True)
 
     final_out = None
     if str(stream_output).lower() == "final" and mp4s:

@@ -1493,6 +1493,18 @@ class JobQueue:
             except Exception:
                 pass
 
+            # Tier-Next D: optional QA scoring (offline-only; writes reports, does not change outputs)
+            try:
+                curj = self.store.get(job_id)
+                rt2 = dict((curj.runtime or {}) if curj else runtime)
+                if bool(rt2.get("qa")):
+                    from anime_v2.qa.scoring import score_job
+
+                    score_job(base_dir, enabled=True, write_outputs=True)
+                    self.store.append_log(job_id, f"[{now_utc()}] qa: ok")
+            except Exception:
+                self.store.append_log(job_id, f"[{now_utc()}] qa failed; continuing")
+
             self.store.update(
                 job_id,
                 state=JobState.DONE,

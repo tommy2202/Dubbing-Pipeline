@@ -427,6 +427,14 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     help="Optional JSON policy overrides for PG filter (offline, deterministic).",
 )
 @click.option(
+    "--qa",
+    "qa_mode",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default="off",
+    show_default=True,
+    help="Run offline quality checks after pipeline (writes Output/<job>/qa/*).",
+)
+@click.option(
     "--voice-mode",
     type=click.Choice(["clone", "preset", "single"], case_sensitive=False),
     default=str(get_settings().voice_mode),
@@ -590,6 +598,7 @@ def run(
     op_ed_seconds: int,
     pg_mode: str,
     pg_policy_path: Path | None,
+    qa_mode: str,
     voice_mode: str,
     voice_ref_dir: Path | None,
     voice_store_dir: Path | None,
@@ -868,6 +877,7 @@ def run(
                     op_ed_seconds=op_ed_seconds,
                     pg_mode=pg_mode,
                     pg_policy_path=str(pg_policy_path) if pg_policy_path else None,
+                    qa_mode=qa_mode,
                     print_config=False,
                     dry_run=False,
                     verbose=verbose,
@@ -1052,6 +1062,7 @@ def run(
             op_ed_seconds=int(op_ed_seconds),
             pg=str(pg_mode).lower(),
             pg_policy_path=Path(pg_policy_path).resolve() if pg_policy_path else None,
+            qa=(str(qa_mode).lower() == "on"),
         )
         return
 
@@ -1866,12 +1877,23 @@ def run(
 
     logger.info("[v2] Done. Output: %s", dub_mkv)
 
+    # Tier-Next D: optional QA scoring (offline-only; writes reports, does not change outputs)
+    if str(qa_mode).lower() == "on":
+        try:
+            from anime_v2.qa.scoring import score_job
+
+            score_job(out_dir, enabled=True, write_outputs=True)
+        except Exception:
+            logger.exception("qa_failed_continue")
+
 # Public entrypoint (project.scripts -> anime_v2.cli:cli)
 from anime_v2.review.cli import review as review  # noqa: E402
+from anime_v2.qa.cli import qa as qa  # noqa: E402
 
 cli = DefaultGroup(name="anime-v2", help="anime-v2 CLI (run + review)")  # type: ignore[assignment]
 cli.add_command(run)
 cli.add_command(review)
+cli.add_command(qa)
 
 
 if __name__ == "__main__":  # pragma: no cover

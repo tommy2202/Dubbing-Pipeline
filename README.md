@@ -213,6 +213,31 @@ Web UI:
 Artifacts / audit:
 - `Output/<job>/analysis/pg_filter_report.json` (does **not** include raw matched words; only hashed tokens + rule IDs)
 
+### Quality Checks (Tier‑Next D, optional)
+
+Offline scoring and checks that produce **actionable** per-segment issues (drift/overlap, speaking rate, clipping, low confidence, speaker flips, music overlap).
+
+Enable during a run (does not change media outputs, only writes reports):
+
+```bash
+anime-v2 Input/Test.mp4 --qa on
+```
+
+Run QA on an existing job directory:
+
+```bash
+anime-v2 qa run Output/<job> --top 20
+anime-v2 qa run Output/<job> --fail-only
+```
+
+Artifacts:
+- `Output/<job>/qa/segment_scores.jsonl`
+- `Output/<job>/qa/summary.json`
+- `Output/<job>/qa/top_issues.md`
+
+Web UI:
+- Job page includes a **Quality** tab when QA reports exist (or after enabling QA on submit).
+
 ### Timing Fit & Pacing (Tier‑1 B/C)
 
 Defaults preserve current behavior. To enable timing-aware translation fitting + segment pacing:

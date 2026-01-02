@@ -235,6 +235,17 @@
           Applies after translation/style rules and before timing-fit/TTS/subtitles. Default is OFF on restart.
         </div>
       </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">Quality checks</div>
+        <label class="mt-3 flex items-center gap-3 text-sm text-slate-300" for="qaEnabled">
+          <input id="qaEnabled" type="checkbox" class="h-5 w-5" name="qa" value="1" />
+          <span>Run QA scoring (writes Output/&lt;job&gt;/qa/*)</span>
+        </label>
+        <div class="mt-2 text-xs text-slate-500">
+          Offline-only; does not change outputs. Useful with Review Loop to find segments to edit/lock.
+        </div>
+      </div>
     </div>
 
     <!-- Step 3 -->

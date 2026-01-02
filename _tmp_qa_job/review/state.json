@@ -1,0 +1,15 @@
+{
+  "job": {},
+  "segments": [
+    {
+      "audio_path_current": "_tmp_qa_job/review/audio/1_v1.wav",
+      "chosen_text": "hello world",
+      "end": 1.0,
+      "segment_id": 1,
+      "speaker": "A",
+      "start": 0.0,
+      "status": "locked"
+    }
+  ],
+  "version": 1
+}

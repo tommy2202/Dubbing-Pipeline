@@ -91,6 +91,54 @@
     </div>
   </div>
 
+  <!-- Quality -->
+  <div class="mt-4" x-show="activeTab==='quality'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-300">Quality</div>
+      <template x-if="!qaSummary">
+        <div class="mt-3 text-sm text-slate-500">
+          No QA report yet. Enable it on submit (QA checkbox) or run:
+          <code class="text-slate-300">anime-v2 qa run &lt;job&gt;</code>
+        </div>
+      </template>
+      <template x-if="qaSummary">
+        <div class="mt-3 text-sm text-slate-200 space-y-2">
+          <div>
+            <span class="text-slate-500">Score:</span>
+            <span class="font-semibold" x-text="(qaSummary.score || 0).toFixed(1) + '/100'"></span>
+          </div>
+          <div class="text-xs text-slate-500">
+            <span x-text="'fail=' + (qaSummary.counts?.fail || 0) + ' warn=' + (qaSummary.counts?.warn || 0) + ' info=' + (qaSummary.counts?.info || 0)"></span>
+          </div>
+          <div class="mt-3">
+            <div class="text-sm text-slate-300">Top issues</div>
+            <template x-if="Array.isArray(qaSummary.top_issues) && qaSummary.top_issues.length">
+              <div class="mt-2 space-y-2">
+                <template x-for="it in qaSummary.top_issues" :key="(it.segment_id||'') + ':' + (it.check_id||'')">
+                  <div class="rounded border border-slate-800 bg-slate-950/30 p-3 text-sm">
+                    <div class="text-slate-200">
+                      <span class="text-slate-500">seg</span>
+                      <span x-text="it.segment_id"></span>
+                      <span class="text-slate-500">·</span>
+                      <span class="text-slate-300" x-text="it.severity"></span>
+                      <span class="text-slate-500">·</span>
+                      <code class="text-slate-300" x-text="it.check_id"></code>
+                    </div>
+                    <div class="mt-1 text-slate-200" x-text="it.message || ''"></div>
+                    <div class="mt-1 text-xs text-slate-500" x-text="'Suggested: ' + (it.suggested_action || '')"></div>
+                  </div>
+                </template>
+              </div>
+            </template>
+            <template x-if="(!qaSummary.top_issues || !qaSummary.top_issues.length) && qaTopMd">
+              <pre class="mt-2 whitespace-pre-wrap text-xs text-slate-300" x-text="qaTopMd"></pre>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
   <!-- Transcript -->
   <div class="mt-4" x-show="activeTab==='transcript'" x-cloak>
     {% include "partials/transcript_editor.html" %}
@@ -271,6 +319,7 @@
       activeTab: "overview",
       tabs: [
         { key: "overview", label: "Overview" },
+        { key: "quality", label: "Quality" },
         { key: "transcript", label: "Transcript" },
         { key: "voice", label: "Voice Map" },
         { key: "logs", label: "Logs" },
@@ -278,6 +327,9 @@
       ],
       setActive(tab) {
         this.activeTab = tab;
+        if (tab === "quality") {
+          if (!this.qaLoaded) this.loadQA();
+        }
         if (tab === "artifacts") {
           // ensure files loaded and player initialized
           if (!this.files) this.loadFiles();
@@ -288,6 +340,9 @@
       voiceSaved: false,
       voiceError: "",
       files: null,
+      qaLoaded: false,
+      qaSummary: null,
+      qaTopMd: "",
       hasPlayer: false,
       playing: false,
       muted: false,
@@ -297,6 +352,7 @@
         await this.refresh();
         await this.loadVoiceMap();
         await this.loadFiles();
+        await this.loadQA();
         try {
           const m = document.getElementById("main");
           if (m) m.focus();
@@ -319,6 +375,26 @@
           this.hasPlayer = !!(this.files && ((this.files.hls_manifest && this.files.hls_manifest.url) || (this.files.mp4 && this.files.mp4.url)));
           // init player if artifacts tab active
           if (this.activeTab === "artifacts") this.initPlayer();
+        } catch (e) {}
+      },
+      async loadQA() {
+        this.qaLoaded = true;
+        this.qaSummary = null;
+        this.qaTopMd = "";
+        try {
+          if (!this.files) {
+            await this.loadFiles();
+          }
+          const sum = this.files && this.files.qa_summary ? this.files.qa_summary.url : null;
+          if (sum) {
+            const r = await fetch(sum, { credentials: "include" });
+            if (r.ok) this.qaSummary = await r.json();
+          }
+          const md = this.files && this.files.qa_top_issues ? this.files.qa_top_issues.url : null;
+          if (md) {
+            const r2 = await fetch(md, { credentials: "include" });
+            if (r2.ok) this.qaTopMd = await r2.text();
+          }
         } catch (e) {}
       },
       initPlayer() {
