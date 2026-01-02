@@ -60,12 +60,6 @@ def _select_device(device: str) -> str:
         return "cpu"
 
 
-MODE_TO_MODEL: dict[str, str] = {
-    "high": "large-v3",
-    "medium": "medium",
-    "low": "small",
-}
-
 
 def _parse_srt_to_cues(srt_path: Path) -> list[dict]:
     from anime_v2.utils.cues import parse_srt_to_cues
@@ -690,7 +684,35 @@ class JobQueue:
 
             # c) transcription.transcribe (~0.60)
             mode = (job.mode or "medium").lower()
-            model_name = MODE_TO_MODEL.get(mode, "medium")
+            try:
+                from anime_v2.modes import resolve_effective_settings
+
+                base = {
+                    "diarizer": str(getattr(settings, "diarizer", "auto")),
+                    "speaker_smoothing": bool(getattr(settings, "speaker_smoothing", False)),
+                    "voice_memory": bool(getattr(settings, "voice_memory", False)),
+                    "voice_mode": str(getattr(settings, "voice_mode", "clone")),
+                    "music_detect": bool(getattr(settings, "music_detect", False)),
+                    "separation": str(getattr(settings, "separation", "off")),
+                    "mix_mode": str(getattr(settings, "mix_mode", "legacy")),
+                    "timing_fit": bool(getattr(settings, "timing_fit", False)),
+                    "pacing": bool(getattr(settings, "pacing", False)),
+                    "qa": bool(rt2.get("qa") or False) if isinstance(rt2, dict) else False,
+                    "director": bool(getattr(settings, "director", False)),
+                    "multitrack": bool(getattr(settings, "multitrack", False)),
+                }
+                overrides: dict[str, Any] = {}
+                # job-level override for ASR model isn't currently a first-class field; keep mode-based selection.
+                eff = resolve_effective_settings(mode=mode, base=base, overrides=overrides)
+                model_name = str(eff.asr_model)
+                # Apply mode-driven diarizer (not persisted; only affects this run)
+                eff_diar = str(eff.diarizer)
+                if eff_diar == "off":
+                    rt2 = dict(rt2) if isinstance(rt2, dict) else {}
+                    rt2["diarizer"] = "off"
+                    self.store.update(job_id, runtime=rt2)
+            except Exception:
+                model_name = "medium"
             device = _select_device(job.device)
             srt_out = work_dir / f"{video_path.stem}.srt"
             # Persist a stable copy in Output/<stem>/ for inspection / playback.

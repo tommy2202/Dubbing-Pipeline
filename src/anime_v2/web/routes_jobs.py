@@ -572,6 +572,40 @@ async def create_job(
     if bool(director):
         rt["director"] = True
         rt["director_strength"] = float(director_strength)
+
+    # Store requested + effective settings summary (best-effort; no secrets).
+    try:
+        from anime_v2.modes import resolve_effective_settings
+        from anime_v2.config import get_settings as _gs
+
+        s = _gs()
+        base = {
+            "diarizer": str(getattr(s, "diarizer", "auto")),
+            "speaker_smoothing": bool(getattr(s, "speaker_smoothing", False)),
+            "voice_memory": bool(getattr(s, "voice_memory", False)),
+            "voice_mode": str(getattr(s, "voice_mode", "clone")),
+            "music_detect": bool(getattr(s, "music_detect", False)),
+            "separation": str(getattr(s, "separation", "off")),
+            "mix_mode": str(getattr(s, "mix_mode", "legacy")),
+            "timing_fit": bool(getattr(s, "timing_fit", False)),
+            "pacing": bool(getattr(s, "pacing", False)),
+            "qa": False,
+            "director": bool(getattr(s, "director", False)),
+            "multitrack": bool(getattr(s, "multitrack", False)),
+            "voice_mode": str(getattr(s, "voice_mode", "clone")),
+        }
+        overrides: dict[str, Any] = {}
+        if bool(qa):
+            overrides["qa"] = True
+        if bool(speaker_smoothing):
+            overrides["speaker_smoothing"] = True
+        if bool(director):
+            overrides["director"] = True
+        eff = resolve_effective_settings(mode=str(mode), base=base, overrides=overrides)
+        rt["requested_mode"] = str(mode)
+        rt["effective_settings"] = eff.to_dict()
+    except Exception:
+        pass
     job.runtime = rt
     store.put(job)
     if idem_key:

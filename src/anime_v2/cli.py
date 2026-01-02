@@ -25,12 +25,6 @@ from anime_v2.utils.paths import output_dir_for
 from anime_v2.utils.subtitles import write_vtt
 from anime_v2.utils.time import format_srt_timestamp
 
-MODE_TO_MODEL: dict[str, str] = {
-    "high": "large-v3",
-    "medium": "medium",
-    "low": "small",
-}
-
 
 class DefaultGroup(click.Group):
     """
@@ -182,7 +176,7 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 )
 @click.option(
     "--diarizer",
-    type=click.Choice(["auto", "pyannote", "speechbrain", "heuristic"], case_sensitive=False),
+    type=click.Choice(["auto", "pyannote", "speechbrain", "heuristic", "off"], case_sensitive=False),
     default="auto",
     show_default=True,
 )
@@ -1101,7 +1095,77 @@ def run(
         pass
 
     mode = mode.lower()
-    chosen_model = str(asr_model_name).strip() if asr_model_name else MODE_TO_MODEL[mode]
+    # Canonical mode resolver (mode defaults -> explicit overrides -> hardware fallbacks).
+    eff = None
+    try:
+        ctx = click.get_current_context(silent=True)
+    except Exception:
+        ctx = None
+
+    def _is_explicit(param: str) -> bool:
+        if ctx is None:
+            return False
+        try:
+            src = ctx.get_parameter_source(param)  # type: ignore[attr-defined]
+            return str(src).lower().endswith("commandline")
+        except Exception:
+            return False
+
+    overrides: dict[str, object] = {}
+    if _is_explicit("asr_model_name") and asr_model_name:
+        overrides["asr_model"] = str(asr_model_name).strip()
+    if _is_explicit("diarizer"):
+        overrides["diarizer"] = str(diarizer).lower()
+    if _is_explicit("speaker_smoothing"):
+        overrides["speaker_smoothing"] = (str(speaker_smoothing).lower() == "on")
+    if _is_explicit("voice_memory"):
+        overrides["voice_memory"] = (str(voice_memory).lower() == "on")
+    if _is_explicit("voice_mode"):
+        overrides["voice_mode"] = str(voice_mode).lower()
+    if _is_explicit("music_detect"):
+        overrides["music_detect"] = (str(music_detect).lower() == "on")
+    if _is_explicit("separation"):
+        overrides["separation"] = str(separation).lower()
+    if _is_explicit("mix_mode"):
+        overrides["mix_mode"] = str(mix_mode).lower()
+    if _is_explicit("timing_fit"):
+        overrides["timing_fit"] = bool(timing_fit)
+    if _is_explicit("pacing"):
+        overrides["pacing"] = bool(pacing)
+    if _is_explicit("qa_mode"):
+        overrides["qa"] = (str(qa_mode).lower() == "on")
+    if _is_explicit("director_mode"):
+        overrides["director"] = (str(director_mode).lower() == "on")
+    if _is_explicit("multitrack"):
+        overrides["multitrack"] = (str(multitrack).lower() == "on")
+
+    base = {
+        "diarizer": str(diarizer).lower(),
+        "speaker_smoothing": (str(speaker_smoothing).lower() == "on"),
+        "voice_memory": (str(voice_memory).lower() == "on"),
+        "voice_mode": str(voice_mode).lower(),
+        "music_detect": (str(music_detect).lower() == "on"),
+        "separation": str(separation).lower(),
+        "mix_mode": str(mix_mode).lower(),
+        "timing_fit": bool(timing_fit),
+        "pacing": bool(pacing),
+        "qa": (str(qa_mode).lower() == "on"),
+        "director": (str(director_mode).lower() == "on"),
+        "multitrack": (str(multitrack).lower() == "on"),
+    }
+    try:
+        from anime_v2.modes import log_effective_settings_summary, resolve_effective_settings
+
+        eff = resolve_effective_settings(mode=mode, base=base, overrides=overrides)
+        log_effective_settings_summary(eff)
+    except Exception:
+        eff = None
+
+    chosen_model = (
+        str(asr_model_name).strip()
+        if asr_model_name
+        else (str(eff.asr_model) if eff is not None else "medium")
+    )
     chosen_device = _select_device(device)
 
     # Provider selection aliases (keep backwards compatibility with existing flags).
@@ -1141,6 +1205,22 @@ def run(
             )
         except Exception:
             pass
+
+    # Persist effective settings summary (best-effort) for this job.
+    try:
+        if eff is not None:
+            analysis_dir = out_dir / "analysis"
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            write_json(analysis_dir / "effective_settings.json", eff.to_dict())
+            if job_logger is not None:
+                job_logger.event(
+                    stage="start",
+                    level="info",
+                    msg="effective_settings_written",
+                    path=str(analysis_dir / "effective_settings.json"),
+                )
+    except Exception:
+        pass
 
     wav_path = out_dir / "audio.wav"
     srt_out = out_dir / f"{stem}.srt"

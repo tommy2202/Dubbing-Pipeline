@@ -17,7 +17,7 @@ Notes:
 | **Separation (Demucs)** | ON (if installed) | OFF | OFF |
 | **Mix mode** | `enhanced` (ducking+loudnorm+limiter) | current default | `legacy` / minimal |
 | **Timing-fit** | ON | OFF by default (opt-in) | OFF |
-| **Pacing** | ON | ON | minimal (pad/trim only) |
+| **Pacing** | ON | OFF by default (opt-in) | minimal (pad/trim only) |
 | **QA scoring** | ON | OFF by default (opt-in) | OFF |
 | **Director mode** | ON | OFF | OFF |
 | **Expressive/prosody** | OFF by default (opt-in) | OFF | OFF |

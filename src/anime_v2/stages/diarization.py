@@ -201,10 +201,14 @@ def diarize(audio_path: str, device: str, cfg: DiarizeConfig) -> list[dict]:
     if not p.exists():
         return []
 
+    choice = (cfg.diarizer or "auto").lower()
+    if choice == "off":
+        logger.info("diarize disabled")
+        return []
+
     # Base VAD segments to filter music-only windows
     speech = detect_speech_segments(p, cfg.vad)
 
-    choice = (cfg.diarizer or "auto").lower()
     tried = []
 
     def want_pyannote() -> bool:
