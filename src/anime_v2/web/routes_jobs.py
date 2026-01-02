@@ -238,6 +238,18 @@ def _file_range_response(request: Request, path: Path, *, media_type: str) -> Re
     return Response(content=chunk, status_code=206, headers=headers, media_type=media_type)
 
 
+def _stream_manifest_path(base_dir: Path) -> Path:
+    return (base_dir / "stream" / "manifest.json").resolve()
+
+
+def _stream_chunk_mp4_path(base_dir: Path, idx: int) -> Path | None:
+    """
+    idx is 1-based chunk index.
+    """
+    p = (base_dir / "stream" / f"chunk_{int(idx):03d}.mp4").resolve()
+    return p if p.exists() else None
+
+
 def _fmt_ts_srt(seconds: float) -> str:
     s = max(0.0, float(seconds))
     hh = int(s // 3600)
@@ -1556,6 +1568,44 @@ async def job_files(
     if mkv is not None:
         data["mkv"] = {"url": rel_url(mkv), "path": str(mkv)}
     return data
+
+
+@router.get("/api/jobs/{id}/stream/manifest")
+async def job_stream_manifest(
+    request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    p = _stream_manifest_path(base_dir)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="stream manifest not found")
+    from anime_v2.utils.io import read_json
+
+    data = read_json(p, default={})
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="invalid manifest")
+    return data
+
+
+@router.get("/api/jobs/{id}/stream/chunks/{chunk_idx}")
+async def job_stream_chunk(
+    request: Request,
+    id: str,
+    chunk_idx: int,
+    _: Identity = Depends(require_scope("read:job")),
+) -> Response:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    p = _stream_chunk_mp4_path(base_dir, int(chunk_idx))
+    if p is None:
+        raise HTTPException(status_code=404, detail="chunk not found")
+    return _file_range_response(request, p, media_type="video/mp4")
 
 
 @router.get("/api/jobs/{id}/qrcode")

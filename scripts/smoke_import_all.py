@@ -40,6 +40,8 @@ def main() -> int:
             "anime_v2.plugins.lipsync.wav2lip_plugin",
             "anime_v2.expressive.prosody",
             "anime_v2.expressive.policy",
+            "anime_v2.streaming.chunker",
+            "anime_v2.streaming.runner",
             "anime_v2.jobs.queue",
             "anime_v2.realtime",
             "anime_v2.server",

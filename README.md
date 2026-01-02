@@ -310,6 +310,36 @@ anime-v2 Input/Test.mp4 --timing-fit --pacing --expressive source-audio --expres
 anime-v2 Input/Test.mp4 --realtime --chunk-seconds 20 --chunk-overlap 2 --stitch
 ```
 
+### Streaming Mode (Tier‑3 C, optional)
+
+Chunked dubbing mode that produces playable per-chunk MP4s under `Output/<job>/stream/` plus a manifest. **Off by default**.
+
+Enable (segments output):
+
+```bash
+anime-v2 Input/Test.mp4 --stream on --chunk-seconds 10 --overlap-seconds 1 --stream-output segments
+```
+
+Enable (stitched final MP4):
+
+```bash
+anime-v2 Input/Test.mp4 --stream on --chunk-seconds 10 --overlap-seconds 1 --stream-output final
+```
+
+Artifacts:
+- `Output/<job>/chunks/` (mono16k chunk wavs)
+- `Output/<job>/stream/manifest.json`
+- `Output/<job>/stream/chunk_001.mp4`, `chunk_002.mp4`, ...
+- `Output/<job>/stream/stream.final.mp4` (when `--stream-output final`)
+
+API (when using `anime-v2-web`):
+- `GET /api/jobs/{id}/stream/manifest`
+- `GET /api/jobs/{id}/stream/chunks/{n}`
+
+Notes:
+- `--realtime` remains as a backwards-compatible alias for chunked mode.
+- Streaming mode is offline-first; it may fall back to silence chunks in degraded environments.
+
 ### Preflight / dry-run
 
 ```bash

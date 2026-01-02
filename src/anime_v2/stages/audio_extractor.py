@@ -41,7 +41,7 @@ def run(
         return wav
 
     wav.parent.mkdir(parents=True, exist_ok=True)
-    extract_audio_mono_16k(video, wav, timeout_s=120)
+    extract_audio_mono_16k(src=video, dst=wav, timeout_s=120)
     if job_id:
         with suppress(Exception):
             write_ckpt(

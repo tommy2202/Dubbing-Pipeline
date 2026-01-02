@@ -348,6 +348,29 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 @click.option("--realtime/--no-realtime", default=False, show_default=True)
 @click.option("--chunk-seconds", type=float, default=20.0, show_default=True)
 @click.option("--chunk-overlap", type=float, default=2.0, show_default=True)
+@click.option(
+    "--stream",
+    "stream_mode",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default="off",
+    show_default=True,
+    help="Tier-3C streaming mode (chunked). Alias: --realtime",
+)
+@click.option(
+    "--overlap-seconds",
+    "overlap_seconds",
+    type=float,
+    default=None,
+    help="Alias for --chunk-overlap",
+)
+@click.option(
+    "--stream-output",
+    type=click.Choice(["segments", "final"], case_sensitive=False),
+    default="segments",
+    show_default=True,
+    help="Streaming output mode: per-chunk MP4s or stitched final MP4",
+)
+@click.option("--stream-concurrency", type=int, default=1, show_default=True)
 @click.option("--stitch/--no-stitch", default=True, show_default=True)
 @click.option(
     "--voice-mode",
@@ -501,6 +524,10 @@ def run(
     realtime: bool,
     chunk_seconds: float,
     chunk_overlap: float,
+    stream_mode: str,
+    overlap_seconds: float | None,
+    stream_output: str,
+    stream_concurrency: int,
     stitch: bool,
     voice_mode: str,
     voice_ref_dir: Path | None,
@@ -768,6 +795,10 @@ def run(
                     realtime=realtime,
                     chunk_seconds=chunk_seconds,
                     chunk_overlap=chunk_overlap,
+                    stream_mode=stream_mode,
+                    overlap_seconds=overlap_seconds,
+                    stream_output=stream_output,
+                    stream_concurrency=int(stream_concurrency),
                     stitch=stitch,
                     print_config=False,
                     dry_run=False,
@@ -908,11 +939,16 @@ def run(
         (not no_translate),
     )
 
-    # Realtime (pseudo-streaming) mode: chunked pipeline with per-chunk artifacts.
-    if realtime:
-        from anime_v2.realtime import realtime_dub
+    # Tier-3C streaming mode: chunked pipeline with per-chunk MP4s (+ optional stitch).
+    # Backwards compat: --realtime enables streaming mode.
+    eff_stream = (str(stream_mode or "off").lower() == "on") or bool(realtime)
+    if overlap_seconds is not None:
+        chunk_overlap = float(overlap_seconds)
+    if eff_stream:
+        from anime_v2.streaming.runner import run_streaming
 
-        realtime_dub(
+        out_mode = "final" if bool(stitch) else str(stream_output or "segments").lower()
+        run_streaming(
             video=video,
             out_dir=out_dir,
             device=chosen_device,
@@ -923,14 +959,19 @@ def run(
             mt_lowconf_thresh=float(mt_lowconf_thresh),
             glossary=glossary,
             style=style,
+            stream=True,
             chunk_seconds=float(chunk_seconds),
-            chunk_overlap=float(chunk_overlap),
-            stitch=bool(stitch),
-            subs_choice=(subs or "both").lower(),
-            subs_format=(subs_format or "srt").lower(),
-            align_mode=(align_mode or "stretch").lower(),
-            emotion_mode=emotion_mode,
-            expressive=expressive_mode,
+            overlap_seconds=float(chunk_overlap),
+            stream_output=out_mode,
+            stream_concurrency=int(stream_concurrency),
+            timing_fit=bool(timing_fit),
+            pacing=bool(pacing),
+            pacing_min_ratio=float(pacing_min_stretch),
+            pacing_max_ratio=float(pacing_max_stretch),
+            timing_tolerance=float(tolerance),
+            align_mode=str(align_mode or "stretch").lower(),
+            emotion_mode=str(emotion_mode),
+            expressive=str(expressive_mode),
             expressive_strength=float(expressive_strength),
             expressive_debug=bool(expressive_debug),
             speech_rate=float(speech_rate),
