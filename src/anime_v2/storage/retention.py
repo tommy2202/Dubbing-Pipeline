@@ -136,6 +136,8 @@ def _important_intermediates(job_dir: Path) -> list[Path]:
     out = []
     out.extend(list(job_dir.glob("*.srt")))
     out.extend(list(job_dir.glob("*.vtt")))
+    out.extend(list((job_dir / "subs").glob("*.srt")))
+    out.extend(list((job_dir / "subs").glob("*.vtt")))
     out.extend([job_dir / "translated.json", job_dir / "diarization.json"])
     out.extend(list((job_dir / "qa").glob("*")))
     out.extend(list((job_dir / "analysis").glob("*.json")))

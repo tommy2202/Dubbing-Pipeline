@@ -882,6 +882,29 @@ class JobQueue:
                     atomic_copy(srt_out.with_suffix(".json"), srt_public.with_suffix(".json"))
             except Exception:
                 pass
+
+            # Feature E: formatted source subtitles under Output/<job>/subs/src.(srt|vtt) (best-effort).
+            try:
+                from anime_v2.subs.formatting import write_formatted_subs_variant
+
+                proj_name = ""
+                try:
+                    curj = self.store.get(job_id)
+                    rt2 = dict((curj.runtime or {}) if curj else runtime)
+                    proj_name = str(rt2.get("project_name") or "").strip()
+                except Exception:
+                    proj_name = ""
+                src_blocks = []
+                for c in _parse_srt_to_cues(srt_public if srt_public.exists() else srt_out):
+                    if isinstance(c, dict):
+                        src_blocks.append(
+                            {"start": float(c.get("start", 0.0)), "end": float(c.get("end", 0.0)), "text": str(c.get("text") or "")}
+                        )
+                write_formatted_subs_variant(
+                    job_dir=base_dir, variant="src", blocks=src_blocks, project=(proj_name or None)
+                )
+            except Exception:
+                pass
             # Prefer rich segment metadata (avg_logprob) when available.
             cues: list[dict] = []
             try:
@@ -1248,6 +1271,11 @@ class JobQueue:
                                     atomic_copy(out_jsonl, base_analysis_dir / "style_guide_applied.jsonl")
                     except Exception:
                         self.store.append_log(job_id, f"[{now_utc()}] style_guide failed; continuing")
+
+                    # Snapshot for subtitle variants (literal translation, before PG + timing-fit).
+                    translated_segments_literal = [dict(s) for s in translated_segments if isinstance(s, dict)]
+                    translated_segments_pg = None
+
                     # Tier-Next C: per-job PG mode (opt-in; OFF by default), before timing-fit/TTS/subs.
                     try:
                         curj = self.store.get(job_id)
@@ -1273,6 +1301,7 @@ class JobQueue:
                                 from anime_v2.utils.io import atomic_copy
 
                                 atomic_copy(report_p, base_analysis_dir / "pg_filter_report.json")
+                            translated_segments_pg = [dict(s) for s in translated_segments if isinstance(s, dict)]
                     except Exception:
                         self.store.append_log(job_id, f"[{now_utc()}] pg_filter failed; continuing")
                     # Optional timing-aware translation fit (Tier-1 B).
@@ -1319,6 +1348,53 @@ class JobQueue:
                     ]
                     _write_srt(srt_lines, translated_srt)
                     subs_srt_path = translated_srt
+
+                    # Feature E: formatted subtitle variants under Output/<job>/subs/
+                    try:
+                        from anime_v2.subs.formatting import write_formatted_subs_variant
+
+                        proj_name = ""
+                        try:
+                            curj = self.store.get(job_id)
+                            rt2 = dict((curj.runtime or {}) if curj else runtime)
+                            proj_name = str(rt2.get("project_name") or "").strip()
+                        except Exception:
+                            proj_name = ""
+
+                        write_formatted_subs_variant(
+                            job_dir=base_dir,
+                            variant="tgt_literal",
+                            blocks=[
+                                {"start": float(s.get("start", 0.0)), "end": float(s.get("end", 0.0)), "text": str(s.get("text") or "")}
+                                for s in translated_segments_literal
+                                if isinstance(s, dict)
+                            ],
+                            project=(proj_name or None),
+                        )
+                        if translated_segments_pg is not None:
+                            write_formatted_subs_variant(
+                                job_dir=base_dir,
+                                variant="tgt_pg",
+                                blocks=[
+                                    {"start": float(s.get("start", 0.0)), "end": float(s.get("end", 0.0)), "text": str(s.get("text") or "")}
+                                    for s in translated_segments_pg
+                                    if isinstance(s, dict)
+                                ],
+                                project=(proj_name or None),
+                            )
+                        if bool(getattr(settings, "timing_fit", False)):
+                            write_formatted_subs_variant(
+                                job_dir=base_dir,
+                                variant="tgt_fit",
+                                blocks=[
+                                    {"start": float(s.get("start", 0.0)), "end": float(s.get("end", 0.0)), "text": str(s.get("text") or "")}
+                                    for s in translated_segments
+                                    if isinstance(s, dict)
+                                ],
+                                project=(proj_name or None),
+                            )
+                    except Exception:
+                        pass
                     self.store.update(job_id, progress=0.75, message="Translation done")
                 except Exception as ex:
                     self.store.append_log(job_id, f"[{now_utc()}] translate failed: {ex}")

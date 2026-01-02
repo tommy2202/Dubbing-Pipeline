@@ -252,6 +252,27 @@ def score_job(
     music_regions = _load_music_regions(job_dir)
     tts_manifest = _find_latest_tts_manifest(job_dir)
 
+    # Feature E: subtitle constraint warnings (pre-format; best-effort)
+    subs_pre_by_seg: dict[int, list[str]] = {}
+    try:
+        summ = read_json(job_dir / "analysis" / "subs_formatting_summary.json", default={})
+        variants = summ.get("variants", {}) if isinstance(summ, dict) else {}
+        if isinstance(variants, dict):
+            for vname, row in variants.items():
+                if not isinstance(row, dict):
+                    continue
+                stats = row.get("stats", {}) if isinstance(row.get("stats"), dict) else {}
+                bad = stats.get("pre_problem_blocks") if isinstance(stats, dict) else None
+                if isinstance(bad, list):
+                    for sid in bad:
+                        try:
+                            sid_i = int(sid)
+                        except Exception:
+                            continue
+                        subs_pre_by_seg.setdefault(sid_i, []).append(str(vname))
+    except Exception:
+        subs_pre_by_seg = {}
+
     # Configurable thresholds (safe defaults)
     drift_warn_ratio = 1.10
     drift_fail_ratio = 1.25
@@ -317,6 +338,20 @@ def score_job(
 
         issues: list[QAIssue] = []
         metrics: dict[str, Any] = {"duration_s": dur}
+
+        # subtitle pre-format constraint warning (informational but actionable)
+        if sid in subs_pre_by_seg:
+            variants = sorted(set(subs_pre_by_seg.get(sid) or []))
+            issues.append(
+                QAIssue(
+                    check_id="subtitle_constraints_pre_format",
+                    severity="warn",
+                    impact=0.04,
+                    message="Subtitle text exceeded formatting constraints before formatting.",
+                    suggested_action="Shorten or simplify this line; consider timing-fit or manual edit + regen + lock.",
+                    details={"variants": variants},
+                )
+            )
 
         # speaking rate
         wc = _word_count(text)

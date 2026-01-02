@@ -1870,6 +1870,23 @@ def run(
         except Exception as ex:
             logger.warning("[v2] vtt export failed (src): %s", ex)
 
+    # Feature E: formatted subtitle variants under Output/<job>/subs/ (best-effort; does not affect mux defaults)
+    if subs_choice in {"src", "both"}:
+        try:
+            from anime_v2.subs.formatting import write_formatted_subs_variant
+
+            src_blocks = []
+            for c in _parse_srt_to_cues(srt_out):
+                if isinstance(c, dict):
+                    src_blocks.append(
+                        {"start": float(c.get("start", 0.0)), "end": float(c.get("end", 0.0)), "text": str(c.get("text") or "")}
+                    )
+            write_formatted_subs_variant(
+                job_dir=out_dir, variant="src", blocks=src_blocks, project=str(project_name or "") or None
+            )
+        except Exception as ex:
+            logger.warning("[v2] subs formatting failed (src): %s", ex)
+
     # Build speaker-timed segments.
     # Prefer diarization utterances (preserve diarization timing) and assign text/logprob from transcription overlaps.
     diar_utts = sorted(
@@ -2137,6 +2154,10 @@ def run(
                 except Exception:
                     logger.exception("style_guide_failed_continue")
 
+            # Snapshot for subtitle variants (literal translation, before PG + timing-fit).
+            translated_segments_literal = [dict(s) for s in translated_segments if isinstance(s, dict)]
+            translated_segments_pg = None
+
             # Tier-Next C: per-run PG mode (opt-in; OFF by default).
             if str(pg_mode).lower() != "off":
                 try:
@@ -2151,6 +2172,7 @@ def run(
                         report_path=(analysis_dir / "pg_filter_report.json"),
                         job_id=str(out_dir.name),
                     )
+                    translated_segments_pg = [dict(s) for s in translated_segments if isinstance(s, dict)]
                 except Exception:
                     logger.exception("pg_filter_failed_continue")
 
@@ -2198,6 +2220,62 @@ def run(
             ]
             _write_srt_from_lines(srt_lines, translated_srt)
             subs_srt_path = translated_srt
+
+            # Feature E: write formatted subtitle variants under Output/<job>/subs/
+            try:
+                from anime_v2.subs.formatting import write_formatted_subs_variant
+
+                if subs_choice in {"tgt", "both"}:
+                    # literal translation subs
+                    write_formatted_subs_variant(
+                        job_dir=out_dir,
+                        variant="tgt_literal",
+                        blocks=[
+                            {
+                                "start": float(s.get("start", 0.0)),
+                                "end": float(s.get("end", 0.0)),
+                                "text": str(s.get("text") or ""),
+                            }
+                            for s in translated_segments_literal
+                            if isinstance(s, dict)
+                        ],
+                        project=str(project_name or "") or None,
+                    )
+                    # PG-applied subs (if enabled)
+                    if translated_segments_pg is not None:
+                        write_formatted_subs_variant(
+                            job_dir=out_dir,
+                            variant="tgt_pg",
+                            blocks=[
+                                {
+                                    "start": float(s.get("start", 0.0)),
+                                    "end": float(s.get("end", 0.0)),
+                                    "text": str(s.get("text") or ""),
+                                }
+                                for s in translated_segments_pg
+                                if isinstance(s, dict)
+                            ],
+                            project=str(project_name or "") or None,
+                        )
+                    # timing-fit subs (if enabled)
+                    if bool(timing_fit):
+                        write_formatted_subs_variant(
+                            job_dir=out_dir,
+                            variant="tgt_fit",
+                            blocks=[
+                                {
+                                    "start": float(s.get("start", 0.0)),
+                                    "end": float(s.get("end", 0.0)),
+                                    "text": str(s.get("text") or ""),
+                                }
+                                for s in translated_segments
+                                if isinstance(s, dict)
+                            ],
+                            project=str(project_name or "") or None,
+                        )
+            except Exception as ex:
+                logger.warning("[v2] subs formatting failed (tgt variants): %s", ex)
+
             if subs_choice in {"tgt", "both"} and subs_fmt in {"vtt", "both"}:
                 try:
                     _write_vtt_from_lines(

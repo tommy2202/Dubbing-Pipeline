@@ -1880,6 +1880,30 @@ async def job_files(
     except Exception:
         pass
 
+    # Subtitle variants under Output/<job>/subs/ (best-effort)
+    try:
+        subs_dir = base_dir / "subs"
+        if subs_dir.exists():
+            for p in sorted(subs_dir.glob("*.srt")) + sorted(subs_dir.glob("*.vtt")):
+                if not p.exists():
+                    continue
+                try:
+                    st = p.stat()
+                    files.append(
+                        {
+                            "kind": "subs",
+                            "name": p.name,
+                            "path": str(p),
+                            "url": rel_url(p),
+                            "size_bytes": int(st.st_size),
+                            "mtime": float(st.st_mtime),
+                        }
+                    )
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
     data: dict[str, Any] = {
         "files": files,
         "hls_manifest": None,
