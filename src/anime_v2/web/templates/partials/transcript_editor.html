@@ -41,7 +41,9 @@
 
   <div class="mt-4 space-y-3">
     <template x-for="seg in items" :key="seg.index">
-      <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+      <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3"
+           :id="'seg-' + String(seg.index)"
+           :class="(focusSeg && Number(seg.index)===Number(focusSeg)) ? 'ring-2 ring-emerald-600/70' : ''">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="text-xs font-mono text-slate-400">
             #<span x-text="seg.index"></span>
@@ -106,6 +108,7 @@
       totalPages: 1,
       version: null,
       items: [],
+      focusSeg: null,
       dirty: {}, // index -> patch
       saving: false,
       synthRunning: false,
@@ -113,7 +116,22 @@
       toast: "",
       _debounce: null,
       async init() {
-        await this.loadPage(1);
+        try {
+          const u = new URL(window.location.href);
+          const seg = u.searchParams.get("seg");
+          const n = seg ? Number(seg) : null;
+          if (n && Number.isFinite(n) && n > 0) this.focusSeg = Math.floor(n);
+        } catch (e) {}
+        const p0 = (this.focusSeg && this.perPage) ? Math.max(1, Math.ceil(this.focusSeg / this.perPage)) : 1;
+        await this.loadPage(p0);
+        if (this.focusSeg) {
+          setTimeout(() => {
+            try {
+              const el = document.getElementById("seg-" + String(this.focusSeg));
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+            } catch (e) {}
+          }, 120);
+        }
       },
       hasFlag(seg, flag) {
         const f = seg.flags;

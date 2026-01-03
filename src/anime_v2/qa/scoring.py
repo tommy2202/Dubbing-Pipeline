@@ -103,6 +103,30 @@ def _char_count(text: str) -> int:
     return len([c for c in t if not c.isspace()])
 
 
+def _median(xs: list[float]) -> float:
+    if not xs:
+        return 0.0
+    ys = sorted(float(x) for x in xs)
+    n = len(ys)
+    mid = n // 2
+    if n % 2 == 1:
+        return float(ys[mid])
+    return float((ys[mid - 1] + ys[mid]) / 2.0)
+
+
+def _tts_line_for_segment(tts_manifest: dict[str, Any] | None, seg_id: int) -> dict[str, Any] | None:
+    if not isinstance(tts_manifest, dict):
+        return None
+    lines = tts_manifest.get("lines")
+    if not isinstance(lines, list):
+        return None
+    idx = int(seg_id) - 1
+    if idx < 0 or idx >= len(lines):
+        return None
+    ln = lines[idx]
+    return ln if isinstance(ln, dict) else None
+
+
 def _severity_rank(sev: str) -> int:
     s = str(sev).lower().strip()
     return {"fail": 3, "warn": 2, "info": 1}.get(s, 0)
@@ -252,6 +276,16 @@ def score_job(
     music_regions = _load_music_regions(job_dir)
     tts_manifest = _find_latest_tts_manifest(job_dir)
 
+    # Precompute translation length distribution for outlier detection.
+    seg_char_counts: list[float] = []
+    for s in segments:
+        if not isinstance(s, dict):
+            continue
+        t = str(s.get("text") or "").strip()
+        if t:
+            seg_char_counts.append(float(_char_count(t)))
+    median_cc = _median(seg_char_counts)
+
     # Feature E: subtitle constraint warnings (pre-format; best-effort)
     subs_pre_by_seg: dict[int, list[str]] = {}
     try:
@@ -284,6 +318,13 @@ def score_job(
     peak_fail = 0.999
     asr_lowconf_warn = -0.80  # avg logprob approx
     asr_lowconf_fail = -1.05
+    rewrite_heavy_ratio_warn = 0.25
+    rewrite_heavy_ratio_fail = 0.40
+    rewrite_heavy_passes_warn = 3
+    rewrite_heavy_passes_fail = 4
+    pacing_near_limit_frac = 0.98
+    translation_outlier_ratio_warn = 2.2
+    translation_outlier_ratio_fail = 3.0
 
     # Project profile overrides (best-effort; deterministic)
     try:
@@ -302,6 +343,17 @@ def score_job(
             peak_fail = float(th.get("peak_fail", peak_fail))
             asr_lowconf_warn = float(th.get("asr_lowconf_warn", asr_lowconf_warn))
             asr_lowconf_fail = float(th.get("asr_lowconf_fail", asr_lowconf_fail))
+            rewrite_heavy_ratio_warn = float(th.get("rewrite_heavy_ratio_warn", rewrite_heavy_ratio_warn))
+            rewrite_heavy_ratio_fail = float(th.get("rewrite_heavy_ratio_fail", rewrite_heavy_ratio_fail))
+            rewrite_heavy_passes_warn = int(th.get("rewrite_heavy_passes_warn", rewrite_heavy_passes_warn))
+            rewrite_heavy_passes_fail = int(th.get("rewrite_heavy_passes_fail", rewrite_heavy_passes_fail))
+            pacing_near_limit_frac = float(th.get("pacing_near_limit_frac", pacing_near_limit_frac))
+            translation_outlier_ratio_warn = float(
+                th.get("translation_outlier_ratio_warn", translation_outlier_ratio_warn)
+            )
+            translation_outlier_ratio_fail = float(
+                th.get("translation_outlier_ratio_fail", translation_outlier_ratio_fail)
+            )
     except Exception:
         pass
 
@@ -358,6 +410,32 @@ def score_job(
         cc = _char_count(text)
         metrics["word_count"] = wc
         metrics["char_count"] = cc
+
+        # translation length outlier (relative to median)
+        if median_cc > 0 and cc > 0:
+            ratio = float(cc) / float(median_cc) if median_cc else 1.0
+            if ratio >= float(translation_outlier_ratio_fail) and cc >= 120:
+                issues.append(
+                    QAIssue(
+                        check_id="translation_length_outlier",
+                        severity="fail",
+                        impact=0.14,
+                        message="Translated line is extremely long relative to the episode median.",
+                        suggested_action="Open segment editor; reduce style rules; consider timing-fit or manual tightening.",
+                        details={"char_count": cc, "median_char_count": median_cc, "ratio": ratio},
+                    )
+                )
+            elif ratio >= float(translation_outlier_ratio_warn) and cc >= 90:
+                issues.append(
+                    QAIssue(
+                        check_id="translation_length_outlier",
+                        severity="warn",
+                        impact=0.07,
+                        message="Translated line is unusually long relative to the episode median.",
+                        suggested_action="Open segment editor; consider minor rewrite or timing-fit.",
+                        details={"char_count": cc, "median_char_count": median_cc, "ratio": ratio},
+                    )
+                )
         if dur >= 0.25 and text.strip():
             wps = float(wc) / dur if wc else 0.0
             cps = float(cc) / dur if cc else 0.0
@@ -550,6 +628,88 @@ def score_job(
             # fallback: can't measure drift/clipping without wav
             metrics["audio_path"] = None
 
+        # rewrite-heavy timing-fit (text shortened a lot or max passes reached)
+        try:
+            pre = str(seg.get("text_pre_fit") or "").strip()
+            post = str(seg.get("text") or "").strip()
+            tf = seg.get("timing_fit")
+            passes = int(tf.get("passes") or 0) if isinstance(tf, dict) else 0
+            if pre and post and len(pre) > 0:
+                ratio = max(0.0, float(len(pre) - len(post)) / float(len(pre)))
+                if ratio >= float(rewrite_heavy_ratio_fail) or passes >= int(rewrite_heavy_passes_fail):
+                    issues.append(
+                        QAIssue(
+                            check_id="rewrite_heavy",
+                            severity="fail",
+                            impact=0.16,
+                            message="Timing-fit required heavy rewriting (risk of meaning loss).",
+                            suggested_action="Open segment editor; reduce style rules; increase tolerance if safe.",
+                            details={
+                                "pre_len": len(pre),
+                                "post_len": len(post),
+                                "rewrite_ratio": ratio,
+                                "passes": passes,
+                            },
+                        )
+                    )
+                elif ratio >= float(rewrite_heavy_ratio_warn) or passes >= int(rewrite_heavy_passes_warn):
+                    issues.append(
+                        QAIssue(
+                            check_id="rewrite_heavy",
+                            severity="warn",
+                            impact=0.08,
+                            message="Timing-fit applied multiple passes or substantial shortening.",
+                            suggested_action="Open segment editor; consider a more natural rewrite or raise tolerance slightly.",
+                            details={
+                                "pre_len": len(pre),
+                                "post_len": len(post),
+                                "rewrite_ratio": ratio,
+                                "passes": passes,
+                            },
+                        )
+                    )
+        except Exception:
+            pass
+
+        # pacing-heavy (near stretch limits or hard trim)
+        try:
+            ln = _tts_line_for_segment(tts_manifest, sid)
+            pacing = ln.get("pacing") if isinstance(ln, dict) else None
+            if isinstance(pacing, dict) and bool(pacing.get("enabled")):
+                hard_trim = bool(pacing.get("hard_trim"))
+                atempo_ratio = _safe_float(pacing.get("atempo_ratio"))
+                min_r = _safe_float(pacing.get("min_ratio"), 0.88) or 0.88
+                max_r = _safe_float(pacing.get("max_ratio"), 1.18) or 1.18
+                near = float(pacing_near_limit_frac)
+                near_limit = False
+                if atempo_ratio is not None:
+                    if atempo_ratio >= float(max_r) * near or atempo_ratio <= float(min_r) / max(near, 1e-6):
+                        near_limit = True
+                if hard_trim:
+                    issues.append(
+                        QAIssue(
+                            check_id="pacing_heavy",
+                            severity="fail",
+                            impact=0.18,
+                            message="Pacing hit last-resort hard trim to fit the segment window.",
+                            suggested_action="Open segment editor; shorten text; increase tolerance only if safe; regenerate then lock.",
+                            details={"hard_trim": True, "atempo_ratio": atempo_ratio, "min_ratio": min_r, "max_ratio": max_r},
+                        )
+                    )
+                elif near_limit:
+                    issues.append(
+                        QAIssue(
+                            check_id="pacing_heavy",
+                            severity="warn",
+                            impact=0.10,
+                            message="Pacing is near stretch limits (risk of artifacts or unnatural delivery).",
+                            suggested_action="Open segment editor; consider a rewrite; adjust pacing/stretch limits if needed.",
+                            details={"atempo_ratio": atempo_ratio, "min_ratio": min_r, "max_ratio": max_r},
+                        )
+                    )
+        except Exception:
+            pass
+
         # compute segment score
         score = 100.0
         for iss in issues:
@@ -608,7 +768,20 @@ def score_job(
         "segments": int(len(seg_rows)),
         "counts": dict(by_sev),
         "top_issues": [
-            {"segment_id": sid, **iss.to_dict()} for sid, iss in issues_sorted
+            {
+                "segment_id": sid,
+                **iss.to_dict(),
+                "fix": {
+                    "ui_url": f"/ui/jobs/{job_dir.name}?tab=transcript&seg={int(sid)}",
+                    "cli": [
+                        f"anime-v2 review show {job_dir.name} {int(sid)}",
+                        f"anime-v2 review edit {job_dir.name} {int(sid)} --text \"...\"",
+                        f"anime-v2 review regen {job_dir.name} {int(sid)}",
+                        f"anime-v2 review lock {job_dir.name} {int(sid)}",
+                    ],
+                },
+            }
+            for sid, iss in issues_sorted
         ],
         "wall_time_s": float(time.perf_counter() - t0),
     }

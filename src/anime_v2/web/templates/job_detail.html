@@ -136,6 +136,12 @@
                     </div>
                     <div class="mt-1 text-slate-200" x-text="it.message || ''"></div>
                     <div class="mt-1 text-xs text-slate-500" x-text="'Suggested: ' + (it.suggested_action || '')"></div>
+                    <div class="mt-2">
+                      <a class="inline-flex items-center rounded bg-emerald-700/30 hover:bg-emerald-700/40 border border-emerald-700/60 px-3 py-2 text-xs text-emerald-200"
+                         :href="('/ui/jobs/' + encodeURIComponent(jobId) + '?tab=transcript&seg=' + encodeURIComponent(it.segment_id))">
+                        Fix
+                      </a>
+                    </div>
                   </div>
                 </template>
               </div>
@@ -363,6 +369,14 @@
         await this.loadVoiceMap();
         await this.loadFiles();
         await this.loadQA();
+        // deep-link to a tab (and optionally a segment)
+        try {
+          const u = new URL(window.location.href);
+          const tab = (u.searchParams.get("tab") || "").toLowerCase();
+          if (tab && this.tabs.some(t => t.key === tab)) {
+            this.activeTab = tab;
+          }
+        } catch (e) {}
         try {
           const m = document.getElementById("main");
           if (m) m.focus();

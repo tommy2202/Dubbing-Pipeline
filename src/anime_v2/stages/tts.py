@@ -855,6 +855,10 @@ def run(
                 target_dur = max(0.05, float(line["end"]) - float(line["start"]))
                 actual_dur = measure_wav_seconds(clip)
                 actions: list[dict] = []
+                atempo_ratio_used: float | None = None
+                tts_speed_used: float | None = None
+                did_hard_trim = False
+                did_pad = False
 
                 # Too long: 1) try TTS speed control (best-effort, only for XTTS engine)
                 if actual_dur > target_dur * (1.0 + eff_tol):
@@ -864,6 +868,7 @@ def run(
                         try:
                             raw2 = raw_clip.with_suffix(".speed.raw.wav")
                             actions.append({"kind": "tts_speed", "speed": float(speed)})
+                            tts_speed_used = float(speed)
                             # Prefer preset path for speed-control re-synth (clone w/ speed is model-dependent)
                             _retry_wrap(
                                 "xtts_speed",
@@ -889,6 +894,7 @@ def run(
                     ratio = float(actual_dur) / float(target_dur)
                     ratio = max(float(eff_pacing_min), min(float(eff_pacing_max), float(ratio)))
                     actions.append({"kind": "atempo", "ratio": float(ratio)})
+                    atempo_ratio_used = float(ratio)
                     stretched = clip.with_suffix(".pacing.stretch.wav")
                     stretched = time_stretch_wav(
                         clip,
@@ -930,6 +936,7 @@ def run(
                 # 4) hard cap if still too long
                 if actual_dur > target_dur * (1.0 + eff_tol):
                     actions.append({"kind": "hard_trim"})
+                    did_hard_trim = True
                     capped = clip.with_suffix(".pacing.cap.wav")
                     clip = pad_or_trim_wav(clip, capped, target_dur, timeout_s=120)
                     actual_dur = measure_wav_seconds(clip)
@@ -943,9 +950,27 @@ def run(
                 # 5) pad if too short
                 if actual_dur < target_dur * (1.0 - eff_tol):
                     actions.append({"kind": "pad"})
+                    did_pad = True
                     padded = clip.with_suffix(".pacing.pad.wav")
                     clip = pad_or_trim_wav(clip, padded, target_dur, timeout_s=120)
                     actual_dur = measure_wav_seconds(clip)
+
+                # Persist pacing summary into the line for QA/reporting (small + deterministic).
+                with suppress(Exception):
+                    line["pacing"] = {
+                        "enabled": True,
+                        "target_s": float(target_dur),
+                        "actual_s": float(actual_dur),
+                        "ratio": (float(actual_dur) / float(target_dur)) if target_dur > 0 else None,
+                        "min_ratio": float(eff_pacing_min),
+                        "max_ratio": float(eff_pacing_max),
+                        "tolerance": float(eff_tol),
+                        "actions": [str(a.get("kind") or "") for a in actions if isinstance(a, dict)],
+                        "atempo_ratio": float(atempo_ratio_used) if atempo_ratio_used is not None else None,
+                        "tts_speed": float(tts_speed_used) if tts_speed_used is not None else None,
+                        "hard_trim": bool(did_hard_trim),
+                        "padded": bool(did_pad),
+                    }
                 if eff_debug:
                     try:
                         seg_dir = out_dir / "segments"
