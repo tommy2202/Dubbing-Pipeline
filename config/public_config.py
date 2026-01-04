@@ -169,6 +169,20 @@ class PublicConfig(BaseSettings):
     allow_egress: bool = Field(default=True, alias="ALLOW_EGRESS")
     allow_hf_egress: bool = Field(default=False, alias="ALLOW_HF_EGRESS")
 
+    # --- notifications (optional; private/self-hosted) ---
+    # When enabled, the server will POST to a self-hosted ntfy instance on job completion/failure.
+    # This is opt-in and safe to leave unconfigured; defaults preserve current behavior.
+    ntfy_enabled: bool = Field(default=False, alias="NTFY_ENABLED")
+    ntfy_base_url: str = Field(default="", alias="NTFY_BASE_URL")  # e.g. http://127.0.0.1:8081
+    ntfy_topic: str = Field(default="", alias="NTFY_TOPIC")  # choose a random topic
+    ntfy_tls_insecure: bool = Field(default=False, alias="NTFY_TLS_INSECURE")
+    ntfy_timeout_sec: float = Field(default=5.0, alias="NTFY_TIMEOUT_SEC")
+    ntfy_retries: int = Field(default=3, alias="NTFY_RETRIES")
+
+    # Optional public base URL used to generate absolute links in notifications/QRs.
+    # If unset, notifications will omit the click URL.
+    public_base_url: str = Field(default="", alias="PUBLIC_BASE_URL")
+
     # --- pipeline defaults ---
     whisper_model: str = Field(default="medium", alias="WHISPER_MODEL")
 

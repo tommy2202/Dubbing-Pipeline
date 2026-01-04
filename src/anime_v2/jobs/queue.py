@@ -2174,6 +2174,9 @@ class JobQueue:
                 output_srt=str(subs_srt_path) if subs_srt_path else "",
                 work_dir=str(base_dir),
             )
+            # Optional: job-finish notification (best-effort, no impact on pipeline success).
+            with suppress(Exception):
+                await self._notify_job_finished(job_id, state="DONE")
             # Clear resynth flag after completion.
             with suppress(Exception):
                 curj = self.store.get(job_id)
@@ -2194,6 +2197,9 @@ class JobQueue:
         except Exception as ex:
             self.store.append_log(job_id, f"[{now_utc()}] failed: {ex}")
             self.store.update(job_id, state=JobState.FAILED, message="Failed", error=str(ex))
+            # Optional: job-finish notification (best-effort).
+            with suppress(Exception):
+                await self._notify_job_finished(job_id, state="FAILED")
             jobs_finished.labels(state="FAILED").inc()
             pipeline_job_failed_total.inc()
         finally:
@@ -2207,3 +2213,63 @@ class JobQueue:
             with suppress(Exception):
                 if sched is not None:
                     sched.on_job_done(job_id)
+
+    async def _notify_job_finished(self, job_id: str, *, state: str) -> None:
+        """
+        Best-effort private notification hook (ntfy).
+        Must never throw or affect job outcome.
+        """
+        settings = get_settings()
+        if not bool(getattr(settings, "ntfy_enabled", False)):
+            return
+
+        job = self.store.get(job_id)
+        if job is None:
+            return
+
+        # Privacy mode: if configured or if retention is minimal (data minimization), redact filenames.
+        rt = dict(job.runtime or {})
+        privacy_mode = str(rt.get("privacy_mode") or "").strip().lower()
+        if not privacy_mode:
+            try:
+                policy = str(rt.get("cache_policy") or getattr(settings, "cache_policy", "full")).strip().lower()
+                privacy_mode = "minimal" if policy == "minimal" else ""
+            except Exception:
+                privacy_mode = ""
+        privacy_on = privacy_mode not in {"", "0", "false", "off", "none"}
+
+        try:
+            from pathlib import Path as _Path
+
+            filename = _Path(str(job.video_path or "")).name
+        except Exception:
+            filename = ""
+
+        title = "Dubbing job finished" if privacy_on else (filename or "Dubbing job finished")
+        msg = f"Status: {state}\nJob: {job_id}"
+
+        # Click URL (optional): requires PUBLIC_BASE_URL to be configured.
+        base = str(getattr(settings, "public_base_url", "") or "").strip().rstrip("/")
+        click = f"{base}/ui/jobs/{job_id}" if base else None
+
+        tags = ["anime-v2", str(state).lower()]
+        prio = 4 if str(state).upper() == "FAILED" else 3
+
+        # Run sync notifier in a thread to avoid blocking the async worker.
+        import asyncio as _asyncio
+
+        def _send() -> bool:
+            from anime_v2.notify.ntfy import notify as _notify
+
+            return _notify(
+                event=f"job.{str(state).lower()}",
+                title=title,
+                message=msg,
+                url=click,
+                tags=tags,
+                priority=prio,
+                user_id=str(job.owner_id or "") or None,
+                job_id=str(job_id),
+            )
+
+        await _asyncio.to_thread(_send)

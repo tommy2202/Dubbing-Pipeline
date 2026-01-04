@@ -23,3 +23,6 @@ outputs/
 _tmp*/
 *.db
 Input/uploads/
+
+# ntfy local/private config (do not commit)
+docker/ntfy/server.yml

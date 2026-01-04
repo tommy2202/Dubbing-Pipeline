@@ -51,3 +51,11 @@ class SecretConfig(BaseSettings):
     turn_url: str | None = Field(default=None, alias="TURN_URL")
     turn_username: str | None = Field(default=None, alias="TURN_USERNAME")
     turn_password: str | None = Field(default=None, alias="TURN_PASSWORD")
+
+    # Notifications (optional; private/self-hosted ntfy)
+    # Supported formats (examples):
+    # - NTFY_AUTH=token:yourtoken
+    # - NTFY_AUTH=Bearer yourtoken
+    # - NTFY_AUTH=userpass:username:password
+    # - NTFY_AUTH=username:password
+    ntfy_auth: SecretStr | None = Field(default=None, alias="NTFY_AUTH")

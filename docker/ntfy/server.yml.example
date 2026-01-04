@@ -1,0 +1,23 @@
+# ntfy server config (private self-host)
+#
+# Copy this file to `server.yml` before starting docker-compose.
+# Do NOT commit `server.yml` with real hints/URLs if you consider them sensitive.
+#
+# Docs: https://docs.ntfy.sh/config/
+
+# Bind inside the container; host exposure is controlled by docker-compose port binding.
+listen-http: ":80"
+
+# Persist data inside volumes (see docker-compose.yml).
+cache-file: "/var/cache/ntfy/cache.db"
+
+# Enable auth and deny by default.
+# Create users/tokens via:
+#   docker compose -f docker/ntfy/docker-compose.yml exec ntfy ntfy user add <user>
+#   docker compose -f docker/ntfy/docker-compose.yml exec ntfy ntfy token add <user>
+auth-file: "/var/lib/ntfy/auth.db"
+auth-default-access: "deny-all"
+
+# Optional: if you want absolute URLs in the ntfy UI.
+# base-url: "http://127.0.0.1:8081"
+

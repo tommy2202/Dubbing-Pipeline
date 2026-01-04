@@ -1,0 +1,25 @@
+services:
+  ntfy:
+    image: binwiederhier/ntfy:v2.11.0
+    command: ["serve"]
+    restart: unless-stopped
+    # Private by default: bind only to localhost on the host.
+    # To bind to a Tailscale/private interface instead, change 127.0.0.1 to your tailnet IP.
+    ports:
+      - "127.0.0.1:8081:80"
+    volumes:
+      # Copy `server.yml.example` -> `server.yml` before starting.
+      - ./server.yml:/etc/ntfy/server.yml:ro
+      # Persist cache/db and auth file.
+      - ntfy_cache:/var/cache/ntfy
+      - ntfy_data:/var/lib/ntfy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ntfy_cache:
+  ntfy_data:
+
