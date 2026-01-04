@@ -418,22 +418,54 @@ def run_streaming(
                 # 3c) Optional timing-fit (Tier-1B) inside the chunk.
                 if timing_fit:
                     with suppress(Exception):
-                        from anime_v2.timing.fit_text import fit_translation_to_time
+                        from anime_v2.timing.rewrite_provider import append_rewrite_jsonl, fit_with_rewrite_provider
 
                         for seg in translated:
                             try:
                                 tgt_s = max(0.0, float(seg["end"]) - float(seg["start"]))
                                 pre = str(seg.get("text") or "")
-                                fitted, stats = fit_translation_to_time(
-                                    pre,
-                                    tgt_s,
+                                req_terms: list[str] = []
+                                ga = seg.get("glossary_applied")
+                                if isinstance(ga, list):
+                                    for it in ga:
+                                        if isinstance(it, dict):
+                                            t = str(it.get("tgt") or "").strip()
+                                            if t:
+                                                req_terms.append(t)
+
+                                # In streaming mode, we can pass the accumulated context hint (already maintained).
+                                ctx_hint = ""
+                                with suppress(Exception):
+                                    ctx_hint = ctx.build_translation_hint()
+
+                                fitted, stats, attempt = fit_with_rewrite_provider(
+                                    provider_name=str(getattr(s, "rewrite_provider", "heuristic")).lower(),
+                                    endpoint=(str(getattr(s, "rewrite_endpoint", "") or "").strip() or None),
+                                    model_path=getattr(s, "rewrite_model", None),
+                                    strict=bool(getattr(s, "rewrite_strict", True)),
+                                    text=pre,
+                                    target_seconds=tgt_s,
                                     tolerance=float(timing_tolerance),
                                     wps=float(getattr(s, "timing_wps", 2.7)),
-                                    max_passes=4,
+                                    constraints={"required_terms": req_terms},
+                                    context={"context_hint": ctx_hint, "speaker": str(seg.get("speaker") or "")},
                                 )
                                 seg["text_pre_fit"] = pre
                                 seg["text"] = fitted
                                 seg["timing_fit"] = stats.to_dict()
+                                with suppress(Exception):
+                                    analysis_dir = chunk_base / "analysis"
+                                    analysis_dir.mkdir(parents=True, exist_ok=True)
+                                    append_rewrite_jsonl(
+                                        analysis_dir / "rewrite_provider.jsonl",
+                                        {
+                                            "chunk_idx": int(ch.idx),
+                                            "segment_id": int(seg.get("segment_id") or 0),
+                                            "start": float(seg.get("start", 0.0)),
+                                            "end": float(seg.get("end", 0.0)),
+                                            **attempt.to_dict(),
+                                        },
+                                    )
                             except Exception:
                                 continue
 

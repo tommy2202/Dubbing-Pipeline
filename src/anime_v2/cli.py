@@ -308,6 +308,34 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 )
 @click.option("--timing-debug", is_flag=True, default=False, help="Write per-segment debug JSON")
 @click.option(
+    "--rewrite-provider",
+    type=click.Choice(["heuristic", "local_llm"], case_sensitive=False),
+    default=str(get_settings().rewrite_provider),
+    show_default=True,
+    help="Feature M: optional offline rewrite provider for timing-fit (default heuristic).",
+)
+@click.option(
+    "--rewrite-endpoint",
+    type=str,
+    default=(str(get_settings().rewrite_endpoint) if getattr(get_settings(), "rewrite_endpoint", None) else ""),
+    show_default=False,
+    help="Feature M: local LLM HTTP endpoint (localhost only), e.g. http://127.0.0.1:8080/completion",
+)
+@click.option(
+    "--rewrite-model",
+    "rewrite_model_path",
+    type=click.Path(path_type=Path),
+    default=(Path(get_settings().rewrite_model) if getattr(get_settings(), "rewrite_model", None) else None),
+    show_default=False,
+    help="Feature M: local model path for transformers provider (optional; requires extra deps).",
+)
+@click.option(
+    "--rewrite-strict/--no-rewrite-strict",
+    default=bool(get_settings().rewrite_strict),
+    show_default=True,
+    help="Feature M: enforce deterministic-ish generation settings when using local LLM.",
+)
+@click.option(
     "--emit",
     default=str(get_settings().emit_formats),
     show_default=True,
@@ -727,6 +755,10 @@ def run(
     wps: float,
     tolerance: float,
     timing_debug: bool,
+    rewrite_provider: str,
+    rewrite_endpoint: str,
+    rewrite_model_path: Path | None,
+    rewrite_strict: bool,
     emit: str,
     emotion_mode: str,
     expressive_mode: str,
@@ -2251,22 +2283,52 @@ def run(
             # Optional timing-aware translation fit (Tier-1 B).
             if timing_fit:
                 try:
-                    from anime_v2.timing.fit_text import fit_translation_to_time
+                    from anime_v2.timing.rewrite_provider import append_rewrite_jsonl, fit_with_rewrite_provider
 
+                    analysis_dir = out_dir / "analysis"
+                    analysis_dir.mkdir(parents=True, exist_ok=True)
+                    rewrite_jsonl = analysis_dir / "rewrite_provider.jsonl"
                     for seg in translated_segments:
                         try:
                             tgt_s = max(0.0, float(seg["end"]) - float(seg["start"]))
                             pre = str(seg.get("text") or "")
-                            fitted, stats = fit_translation_to_time(
-                                pre,
-                                tgt_s,
+                            # constraints: preserve glossary-required terms when possible
+                            req_terms: list[str] = []
+                            ga = seg.get("glossary_applied")
+                            if isinstance(ga, list):
+                                for it in ga:
+                                    if isinstance(it, dict):
+                                        t = str(it.get("tgt") or "").strip()
+                                        if t:
+                                            req_terms.append(t)
+
+                            fitted, stats, attempt = fit_with_rewrite_provider(
+                                provider_name=str(rewrite_provider).lower(),
+                                endpoint=(str(rewrite_endpoint).strip() or None),
+                                model_path=(Path(rewrite_model_path).resolve() if rewrite_model_path else None),
+                                strict=bool(rewrite_strict),
+                                text=pre,
+                                target_seconds=tgt_s,
                                 tolerance=float(tolerance),
                                 wps=float(wps),
-                                max_passes=4,
+                                constraints={"required_terms": req_terms},
+                                context={
+                                    "context_hint": "",
+                                    "speaker": str(seg.get("speaker") or ""),
+                                },
                             )
                             seg["text_pre_fit"] = pre
                             seg["text"] = fitted
                             seg["timing_fit"] = stats.to_dict()
+                            append_rewrite_jsonl(
+                                rewrite_jsonl,
+                                {
+                                    "segment_id": int(seg.get("segment_id") or 0),
+                                    "start": float(seg.get("start", 0.0)),
+                                    "end": float(seg.get("end", 0.0)),
+                                    **attempt.to_dict(),
+                                },
+                            )
                         except Exception:
                             continue
                 except Exception as ex:

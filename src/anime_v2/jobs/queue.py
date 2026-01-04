@@ -1307,20 +1307,55 @@ class JobQueue:
                     # Optional timing-aware translation fit (Tier-1 B).
                     if bool(getattr(settings, "timing_fit", False)):
                         try:
-                            from anime_v2.timing.fit_text import fit_translation_to_time
+                            from anime_v2.timing.rewrite_provider import append_rewrite_jsonl, fit_with_rewrite_provider
 
                             wps = float(getattr(settings, "timing_wps", 2.7))
                             tol = float(getattr(settings, "timing_tolerance", 0.10))
+                            analysis_dir = work_dir / "analysis"
+                            analysis_dir.mkdir(parents=True, exist_ok=True)
+                            rewrite_jsonl = analysis_dir / "rewrite_provider.jsonl"
                             for seg in translated_segments:
                                 try:
                                     tgt_s = max(0.0, float(seg["end"]) - float(seg["start"]))
                                     pre = str(seg.get("text") or "")
-                                    fitted, stats = fit_translation_to_time(
-                                        pre, tgt_s, tolerance=tol, wps=wps, max_passes=4
+                                    req_terms: list[str] = []
+                                    ga = seg.get("glossary_applied")
+                                    if isinstance(ga, list):
+                                        for it in ga:
+                                            if isinstance(it, dict):
+                                                t = str(it.get("tgt") or "").strip()
+                                                if t:
+                                                    req_terms.append(t)
+
+                                    fitted, stats, attempt = fit_with_rewrite_provider(
+                                        provider_name=str(getattr(settings, "rewrite_provider", "heuristic")).lower(),
+                                        endpoint=(
+                                            str(getattr(settings, "rewrite_endpoint", "") or "").strip() or None
+                                        ),
+                                        model_path=getattr(settings, "rewrite_model", None),
+                                        strict=bool(getattr(settings, "rewrite_strict", True)),
+                                        text=pre,
+                                        target_seconds=tgt_s,
+                                        tolerance=tol,
+                                        wps=wps,
+                                        constraints={"required_terms": req_terms},
+                                        context={
+                                            "context_hint": "",
+                                            "speaker": str(seg.get("speaker") or ""),
+                                        },
                                     )
                                     seg["text_pre_fit"] = pre
                                     seg["text"] = fitted
                                     seg["timing_fit"] = stats.to_dict()
+                                    append_rewrite_jsonl(
+                                        rewrite_jsonl,
+                                        {
+                                            "segment_id": int(seg.get("segment_id") or 0),
+                                            "start": float(seg.get("start", 0.0)),
+                                            "end": float(seg.get("end", 0.0)),
+                                            **attempt.to_dict(),
+                                        },
+                                    )
                                 except Exception:
                                     continue
                         except Exception:

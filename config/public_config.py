@@ -193,6 +193,12 @@ class PublicConfig(BaseSettings):
     timing_debug: bool = Field(default=False, alias="TIMING_DEBUG")
     subs_use_fitted_text: bool = Field(default=True, alias="SUBS_USE_FITTED_TEXT")
 
+    # Feature M: optional offline rewrite/transcreation provider (OFF by default).
+    rewrite_provider: str = Field(default="heuristic", alias="REWRITE_PROVIDER")  # heuristic|local_llm
+    rewrite_endpoint: str | None = Field(default=None, alias="REWRITE_ENDPOINT")  # localhost only
+    rewrite_model: Path | None = Field(default=None, alias="REWRITE_MODEL")  # local path (optional)
+    rewrite_strict: bool = Field(default=True, alias="REWRITE_STRICT")
+
     tts_model: str = Field(
         default="tts_models/multilingual/multi-dataset/xtts_v2", alias="TTS_MODEL"
     )
