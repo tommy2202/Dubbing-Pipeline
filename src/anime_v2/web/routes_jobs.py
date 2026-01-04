@@ -22,6 +22,7 @@ from fastapi.responses import PlainTextResponse, Response
 from sse_starlette.sse import EventSourceResponse  # type: ignore
 
 from anime_v2.api.deps import Identity, require_role, require_scope
+from anime_v2.api.middleware import audit_event
 from anime_v2.api.models import AuthStore, Role
 from anime_v2.api.security import decode_token
 from anime_v2.config import get_settings
@@ -326,6 +327,12 @@ def _append_transcript_version(base_dir: Path, entry: dict[str, Any]) -> None:
 async def create_job(
     request: Request, ident: Identity = Depends(require_scope("submit:job"))
 ) -> dict[str, str]:
+    audit_event(
+        "job.submit_attempt",
+        request=request,
+        user_id=ident.user.id,
+        meta={"kind": ident.kind},
+    )
     # Idempotency-Key: return existing job when present and not expired.
     # Supports header or multipart form field `idempotency_key` (for HTML forms).
     idem_key = (request.headers.get("idempotency-key") or "").strip()
@@ -616,6 +623,19 @@ async def create_job(
         pass
     job.runtime = rt
     store.put(job)
+    audit_event(
+        "job.submit",
+        request=request,
+        user_id=ident.user.id,
+        meta={
+            "job_id": jid,
+            "duration_s": float(duration_s),
+            "mode": str(mode),
+            "device": str(device),
+            "src_lang": str(src_lang),
+            "tgt_lang": str(tgt_lang),
+        },
+    )
     if idem_key:
         store.put_idempotency(idem_key, jid)
     try:
@@ -1011,6 +1031,7 @@ async def put_job_overrides(
         from anime_v2.review.overrides import save_overrides
 
         save_overrides(base_dir, body)
+        audit_event("overrides.save", request=request, user_id=_.user.id, meta={"job_id": id})
         return {"ok": True}
     except Exception as ex:
         raise HTTPException(status_code=400, detail=f"Failed to save overrides: {ex}") from ex
@@ -1029,6 +1050,7 @@ async def apply_job_overrides(
         from anime_v2.review.overrides import apply_overrides
 
         rep = apply_overrides(base_dir)
+        audit_event("overrides.apply", request=request, user_id=_.user.id, meta={"job_id": id})
         return {"ok": True, "report": rep.to_dict()}
     except Exception as ex:
         raise HTTPException(status_code=400, detail=f"Failed to apply overrides: {ex}") from ex
@@ -1537,6 +1559,12 @@ async def put_job_transcript(
     rt = dict(job.runtime or {})
     rt["transcript_version"] = st["version"]
     store.update(id, runtime=rt)
+    audit_event(
+        "transcript.update",
+        request=request,
+        user_id=_.user.id,
+        meta={"job_id": id, "updates": int(len(applied)), "version": int(st["version"])},
+    )
     return {"ok": True, "version": st["version"]}
 
 
@@ -1580,6 +1608,12 @@ async def set_speaker_overrides_from_ui(
                 sp.pop(str(idx), None)
         ov["speaker_overrides"] = sp
         save_overrides(base_dir, ov)
+        audit_event(
+            "overrides.speaker",
+            request=request,
+            user_id=_.user.id,
+            meta={"job_id": id, "updates": int(len(updates))},
+        )
         return {"ok": True}
     except Exception as ex:
         raise HTTPException(status_code=400, detail=f"Failed to update speaker overrides: {ex}") from ex
@@ -1664,6 +1698,12 @@ async def post_job_review_edit(
 
     try:
         edit_segment(base_dir, int(segment_id), text=text)
+        audit_event(
+            "review.edit",
+            request=request,
+            user_id=_.user.id,
+            meta={"job_id": id, "segment_id": int(segment_id)},
+        )
         return {"ok": True}
     except Exception as ex:
         raise HTTPException(status_code=400, detail=str(ex)) from ex
@@ -1685,6 +1725,12 @@ async def post_job_review_regen(
 
     try:
         p = regen_segment(base_dir, int(segment_id))
+        audit_event(
+            "review.regen",
+            request=request,
+            user_id=_.user.id,
+            meta={"job_id": id, "segment_id": int(segment_id)},
+        )
         return {"ok": True, "audio_path": str(p)}
     except Exception as ex:
         raise HTTPException(status_code=400, detail=str(ex)) from ex
@@ -1706,6 +1752,12 @@ async def post_job_review_lock(
 
     try:
         lock_segment(base_dir, int(segment_id))
+        audit_event(
+            "review.lock",
+            request=request,
+            user_id=_.user.id,
+            meta={"job_id": id, "segment_id": int(segment_id)},
+        )
         return {"ok": True}
     except Exception as ex:
         raise HTTPException(status_code=400, detail=str(ex)) from ex
@@ -1727,6 +1779,12 @@ async def post_job_review_unlock(
 
     try:
         unlock_segment(base_dir, int(segment_id))
+        audit_event(
+            "review.unlock",
+            request=request,
+            user_id=_.user.id,
+            meta={"job_id": id, "segment_id": int(segment_id)},
+        )
         return {"ok": True}
     except Exception as ex:
         raise HTTPException(status_code=400, detail=str(ex)) from ex
@@ -2002,25 +2060,65 @@ async def job_qrcode(request: Request, id: str, _: Identity = Depends(require_sc
 @router.websocket("/ws/jobs/{id}")
 async def ws_job(websocket: WebSocket, id: str):
     await websocket.accept()
-    token = websocket.query_params.get("token") or ""
-    if not token:
-        await websocket.close(code=1008)
-        return
+    s = get_settings()
+    allow_legacy = bool(getattr(s, "allow_legacy_token_login", False))
 
-    # Authenticate: JWT access token OR dp_ API key in token param.
+    # Authenticate:
+    # - Prefer headers/cookies (mobile-safe)
+    # - Allow legacy ?token= only when explicitly enabled AND peer is private (unsafe on public networks)
     auth_store: AuthStore | None = getattr(websocket.app.state, "auth_store", None)
     if auth_store is None:
         await websocket.close(code=1011)
         return
     ok = False
     try:
-        if token.startswith("dp_"):
+        token = ""
+        # 1) Authorization header bearer
+        auth = websocket.headers.get("authorization") or ""
+        if auth.lower().startswith("bearer "):
+            token = auth.split(" ", 1)[1].strip()
+        # 2) X-Api-Key header (optional)
+        if not token and bool(getattr(s, "enable_api_keys", True)):
+            token = (websocket.headers.get("x-api-key") or "").strip()
+        # 3) Signed session cookie (web UI mode)
+        if not token:
+            cookie = websocket.headers.get("cookie") or ""
+            sess = ""
+            for part in cookie.split(";"):
+                if "=" not in part:
+                    continue
+                k, v = part.split("=", 1)
+                if k.strip() == "session":
+                    sess = v.strip()
+                    break
+            if sess:
+                try:
+                    from itsdangerous import BadSignature, URLSafeTimedSerializer  # type: ignore
+
+                    ser = URLSafeTimedSerializer(s.session_secret.get_secret_value(), salt="session")
+                    token = str(ser.loads(sess, max_age=60 * 60 * 24 * 7))
+                except BadSignature:
+                    token = ""
+        # 4) Legacy query token (unsafe) - gated
+        if not token and allow_legacy:
+            try:
+                import ipaddress
+
+                peer = websocket.client.host if websocket.client else ""
+                ip = ipaddress.ip_address(peer) if peer else None
+                if ip and (ip.is_private or ip.is_loopback):
+                    token = websocket.query_params.get("token") or ""
+            except Exception:
+                token = ""
+
+        if not token:
+            ok = False
+        elif token.startswith("dp_") and bool(getattr(s, "enable_api_keys", True)):
             parts = token.split("_", 2)
             if len(parts) == 3:
                 _, prefix, _ = parts
                 for k in auth_store.find_api_keys_by_prefix(prefix):
                     if verify_secret(k.key_hash, token):
-                        # require read scope
                         scopes = set(k.scopes or [])
                         if "admin:*" in scopes or "read:job" in scopes:
                             ok = True

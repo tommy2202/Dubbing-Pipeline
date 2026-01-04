@@ -154,6 +154,10 @@ class PublicConfig(BaseSettings):
     refresh_token_days: int = Field(default=7, alias="REFRESH_TOKEN_DAYS")
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")
     cookie_secure: bool = Field(default=False, alias="COOKIE_SECURE")
+    allow_legacy_token_login: bool = Field(
+        default=False, alias="ALLOW_LEGACY_TOKEN_LOGIN"
+    )  # UNSAFE on public networks
+    enable_api_keys: bool = Field(default=True, alias="ENABLE_API_KEYS")
 
     # --- egress/offline controls ---
     offline_mode: bool = Field(default=False, alias="OFFLINE_MODE")

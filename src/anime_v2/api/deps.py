@@ -40,8 +40,10 @@ def get_limiter(request: Request) -> RateLimiter:
 
 
 def current_identity(request: Request, store: AuthStore = Depends(get_store)) -> Identity:
+    s = get_settings()
+
     # 1) API key auth (automation): bypass CSRF but still RBAC/scopes
-    api_key = extract_api_key(request)
+    api_key = extract_api_key(request) if bool(getattr(s, "enable_api_keys", True)) else None
     if api_key:
         # format: dp_<prefix>_<secret>
         parts = api_key.split("_", 2)
@@ -58,10 +60,22 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
                 return Identity(kind="api_key", user=user, scopes=k.scopes, api_key_prefix=prefix)
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    # 2) Bearer access token (header or ?token=... for <video> tags)
-    token = extract_bearer(request) or (
-        request.query_params.get("token") if hasattr(request, "query_params") else None
-    )
+    # 2) Bearer access token (header); legacy `?token=...` is gated (unsafe on public networks).
+    token = extract_bearer(request)
+    if not token:
+        allow_legacy = bool(getattr(s, "allow_legacy_token_login", False))
+        if allow_legacy and hasattr(request, "query_params"):
+            # LAN-only safety: accept query token only from private/loopback peers.
+            try:
+                import ipaddress
+
+                peer = request.client.host if request.client else ""
+                ip = ipaddress.ip_address(peer) if peer else None
+                is_private = bool(ip and (ip.is_private or ip.is_loopback))
+            except Exception:
+                is_private = False
+            if is_private:
+                token = request.query_params.get("token")
     if token:
         data = decode_token(token, expected_typ="access")
         sub = str(data.get("sub") or "")
@@ -76,7 +90,6 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
     # 3) Optional signed session cookie (web UI mode)
     sess = request.cookies.get("session")
     if sess:
-        s = get_settings()
         try:
             from itsdangerous import BadSignature, URLSafeTimedSerializer  # type: ignore
 
@@ -90,8 +103,7 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
             set_user_id(user.id)
             scopes = data.get("scopes") if isinstance(data.get("scopes"), list) else []
             scopes = [str(x) for x in scopes]
-            # enforce CSRF for cookie sessions
-            verify_csrf(request)
+            # CSRF is enforced for cookie sessions on state-changing requests by require_role/require_scope.
             return Identity(kind="user", user=user, scopes=scopes)
         except BadSignature:
             raise HTTPException(status_code=401, detail="Invalid session") from None

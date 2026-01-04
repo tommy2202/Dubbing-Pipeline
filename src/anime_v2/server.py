@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
@@ -390,6 +390,12 @@ async def readyz(request: Request):
 async def home(request: Request, _: object = Depends(require_role(Role.viewer))):
     videos = _iter_videos()
     return TEMPLATES.TemplateResponse(request, "index.html", {"videos": videos})
+
+
+@app.get("/login")
+async def login_redirect() -> Response:
+    # Canonical UI login page (mobile-friendly). Keep /login for muscle memory.
+    return RedirectResponse(url="/ui/login", status_code=302)
 
 
 @app.get("/video/{job}")

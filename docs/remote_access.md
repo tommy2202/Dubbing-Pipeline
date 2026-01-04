@@ -7,6 +7,17 @@ This repo is **offline-first** and is designed to run safely without exposing yo
 - **Optional**: `REMOTE_ACCESS_MODE=cloudflare` + **Cloudflare Access JWT validation** at the origin
 - **Avoid**: exposing `HOST=0.0.0.0` + port-forwarding without allowlists/auth
 
+### Authentication (recommended)
+- Use the built-in login UI at:
+  - `/login` (alias) or `/ui/login` (canonical)
+- For browser UI sessions:
+  - enable “session cookie” login (default in the UI)
+  - CSRF is required for state-changing requests
+- **Legacy “token in URL” (`?token=...`) is OFF by default** and only available when:
+  - `ALLOW_LEGACY_TOKEN_LOGIN=1` **and**
+  - the client is on a private/loopback network
+  - This is labeled unsafe on public networks and the UI shows a warning banner.
+
 ---
 
 ## Option A (primary): Tailscale

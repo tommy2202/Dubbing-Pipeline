@@ -79,6 +79,27 @@ Canonical audit: `docs/feature_audit.md`.
 python3 -m pip install -e .
 ```
 
+---
+
+## Web UI authentication (mobile-safe)
+
+- **Login page**: `/login` (alias) or `/ui/login` (canonical).
+- **Browser sessions**:
+  - `POST /api/auth/login` supports `session=true` to set a signed `session` cookie (recommended for UI).
+  - CSRF is enforced for state-changing requests via the `csrf` cookie + `X-CSRF-Token` header.
+- **API clients**:
+  - use `Authorization: Bearer <access_token>` from the login response JSON.
+  - Optional scoped API keys can be managed by admins under `/keys/*` (can be disabled via `ENABLE_API_KEYS=0`).
+- **Legacy (unsafe) token-in-URL**:
+  - Disabled by default.
+  - Can be enabled for LAN-only quick use with:
+
+```bash
+export ALLOW_LEGACY_TOKEN_LOGIN=1
+```
+
+This is **unsafe on public networks** (tokens can leak via history/screenshots/referrers).
+
 Optional extras (recommended on a real machine with enough disk/RAM):
 
 ```bash

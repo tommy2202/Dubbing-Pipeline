@@ -6,9 +6,15 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from anime_v2.api.middleware import audit_event
 from anime_v2.api.models import AuthStore, Role
+from anime_v2.api.security import verify_csrf
+from anime_v2.api.auth.refresh_tokens import (
+    RefreshTokenError,
+    issue_and_store_refresh_token,
+    revoke_refresh_token_best_effort,
+    rotate_refresh_token,
+)
 from anime_v2.api.security import (
     create_access_token,
-    create_refresh_token,
     decode_token,
     issue_csrf_token,
 )
@@ -124,7 +130,6 @@ async def login(request: Request) -> Response:
         sub=user.id, role=user.role.value, scopes=scopes, minutes=s.access_token_minutes
     )
 
-    refresh = create_refresh_token(sub=user.id, days=s.refresh_token_days)
     csrf = issue_csrf_token()
     audit_event(
         "auth.login_ok",
@@ -136,7 +141,7 @@ async def login(request: Request) -> Response:
     resp = Response()
     resp.set_cookie(
         "refresh",
-        refresh,
+        issue_and_store_refresh_token(store=store, user_id=user.id, days=s.refresh_token_days),
         httponly=True,
         samesite="lax",
         secure=s.cookie_secure,
@@ -203,15 +208,29 @@ async def refresh(request: Request) -> Response:
             meta={"reason": "missing_refresh_cookie"},
         )
         raise HTTPException(status_code=401, detail="Missing refresh token")
-    data = decode_token(rt, expected_typ="refresh")
-    sub = str(data.get("sub") or "")
+    # Cookie flow: require CSRF (double-submit)
+    verify_csrf(request)
+
     store = _get_store(request)
-    user = store.get_user(sub)
-    if user is None:
+    try:
+        rot = rotate_refresh_token(store=store, refresh_token=str(rt), days=get_settings().refresh_token_days)
+        user = store.get_user(rot.access_sub)
+        if user is None:
+            audit_event(
+                "auth.refresh_failed",
+                request=request,
+                user_id=None,
+                meta={"reason": "unknown_user"},
+            )
+            raise HTTPException(status_code=401, detail="Unknown user")
+    except RefreshTokenError as ex:
         audit_event(
-            "auth.refresh_failed", request=request, user_id=None, meta={"reason": "unknown_user"}
+            "auth.refresh_failed",
+            request=request,
+            user_id=None,
+            meta={"reason": str(ex)},
         )
-        raise HTTPException(status_code=401, detail="Unknown user")
+        raise HTTPException(status_code=401, detail="Invalid refresh token") from None
 
     s = get_settings()
     scopes = ["read:job"]
@@ -235,6 +254,15 @@ async def refresh(request: Request) -> Response:
         max_age=s.refresh_token_days * 86400,
         path="/",
     )
+    resp.set_cookie(
+        "refresh",
+        rot.new_refresh_token,
+        httponly=True,
+        samesite="lax",
+        secure=s.cookie_secure,
+        max_age=s.refresh_token_days * 86400,
+        path="/",
+    )
     resp.headers["content-type"] = "application/json"
     resp.body = (
         __import__("json")
@@ -247,7 +275,21 @@ async def refresh(request: Request) -> Response:
 
 
 @router.post("/logout")
-async def logout() -> Response:
+async def logout(request: Request) -> Response:
+    # Cookie flow: require CSRF (double-submit) when cookies are present.
+    # (Clients using pure Bearer tokens can ignore logout; they can just drop the token.)
+    verify_csrf(request)
+    store = _get_store(request)
+    rt = request.cookies.get("refresh") or ""
+    uid = None
+    if rt:
+        try:
+            data = decode_token(str(rt), expected_typ="refresh")
+            uid = str(data.get("sub") or "") or None
+        except Exception:
+            uid = None
+        revoke_refresh_token_best_effort(store=store, refresh_token=str(rt))
+    audit_event("auth.logout", request=request, user_id=uid, meta=None)
     resp = Response(content=b'{"ok":true}', media_type="application/json")
     resp.delete_cookie("refresh", path="/")
     resp.delete_cookie("csrf", path="/")
