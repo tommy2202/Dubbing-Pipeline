@@ -29,6 +29,9 @@ class JobStore:
     def _projects(self) -> SqliteDict:
         return SqliteDict(str(self.db_path), tablename="projects", autocommit=True)
 
+    def _uploads(self) -> SqliteDict:
+        return SqliteDict(str(self.db_path), tablename="uploads", autocommit=True)
+
     def put(self, job: Job) -> None:
         with self._lock, self._jobs() as db:
             db[job.id] = job.to_dict()
@@ -83,6 +86,8 @@ class JobStore:
     def tail_log(self, id: str, n: int = 200) -> str:
         job = self.get(id)
         if job is None:
+            return ""
+        if not job.log_path:
             return ""
         path = Path(job.log_path)
         if not path.exists():
@@ -171,3 +176,34 @@ class JobStore:
     def delete_project(self, project_id: str) -> None:
         with self._lock, self._projects() as db, suppress(Exception):
             del db[str(project_id)]
+
+    # --- resumable uploads (web/mobile) ---
+    def put_upload(self, upload_id: str, rec: dict[str, Any]) -> dict[str, Any]:
+        if not upload_id:
+            raise ValueError("upload_id required")
+        with self._lock, self._uploads() as db:
+            db[str(upload_id)] = dict(rec)
+            return dict(rec)
+
+    def get_upload(self, upload_id: str) -> dict[str, Any] | None:
+        if not upload_id:
+            return None
+        with self._lock, self._uploads() as db:
+            v = db.get(str(upload_id))
+        return dict(v) if isinstance(v, dict) else None
+
+    def update_upload(self, upload_id: str, **fields: Any) -> dict[str, Any] | None:
+        if not upload_id:
+            return None
+        with self._lock, self._uploads() as db:
+            raw = db.get(str(upload_id))
+            if not isinstance(raw, dict):
+                return None
+            raw = dict(raw)
+            raw.update(fields)
+            db[str(upload_id)] = raw
+            return dict(raw)
+
+    def delete_upload(self, upload_id: str) -> None:
+        with self._lock, self._uploads() as db, suppress(Exception):
+            del db[str(upload_id)]

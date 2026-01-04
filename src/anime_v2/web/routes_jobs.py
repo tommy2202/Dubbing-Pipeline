@@ -5,6 +5,7 @@ import hashlib
 import io
 import re
 import time
+import json as _json
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,9 @@ _ALLOWED_UPLOAD_MIME = {
     "application/octet-stream",  # some browsers
 }
 
+# Upload session locks (per upload_id) for concurrent chunk writes
+_UPLOAD_LOCKS: dict[str, asyncio.Lock] = {}
+
 
 def _now_iso() -> str:
     return now_utc()
@@ -57,6 +61,324 @@ def _new_short_id(prefix: str = "p_") -> str:
     import secrets
 
     return prefix + secrets.token_hex(8)
+
+
+def _upload_lock(upload_id: str) -> asyncio.Lock:
+    k = str(upload_id or "")
+    if not k:
+        # fallback, should not happen
+        return asyncio.Lock()
+    lk = _UPLOAD_LOCKS.get(k)
+    if lk is None:
+        lk = asyncio.Lock()
+        _UPLOAD_LOCKS[k] = lk
+    return lk
+
+
+def _safe_filename(name: str) -> str:
+    base = Path(str(name or "")).name.strip() or "upload.mp4"
+    base = base.replace("\x00", "")
+    # Keep it simple; allow common chars.
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", base)
+    if len(base) > 160:
+        base = base[:160]
+    return base
+
+
+def _sha256_hex(data: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(data)
+    return h.hexdigest()
+
+
+@router.post("/api/uploads/init")
+async def uploads_init(
+    request: Request, ident: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
+    """
+    Initialize a resumable upload session.
+
+    Body JSON:
+      - filename: str
+      - total_bytes: int
+      - mime: str (optional)
+    """
+    store = _get_store(request)
+    limits = get_limits()
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    filename = _safe_filename(str(body.get("filename") or "upload.mp4"))
+    try:
+        total = int(body.get("total_bytes") or 0)
+    except Exception:
+        total = 0
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="total_bytes required")
+    max_bytes = int(limits.max_upload_mb) * 1024 * 1024
+    if total > max_bytes:
+        raise HTTPException(status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)")
+
+    up_dir = _input_uploads_dir()
+    up_dir.mkdir(parents=True, exist_ok=True)
+    upload_id = _new_short_id("up_")
+    part_path = (up_dir / f"{upload_id}.part").resolve()
+    final_name = f"{upload_id}_{filename}"
+    final_path = (up_dir / final_name).resolve()
+    # Ensure under uploads dir
+    try:
+        part_path.relative_to(up_dir)
+        final_path.relative_to(up_dir)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid upload paths") from None
+
+    chunk_bytes = int(get_settings().upload_chunk_bytes)
+    chunk_bytes = max(256 * 1024, min(chunk_bytes, 20 * 1024 * 1024))
+    rec = {
+        "id": upload_id,
+        "owner_id": ident.user.id,
+        "filename": filename,
+        "total_bytes": int(total),
+        "chunk_bytes": int(chunk_bytes),
+        "part_path": str(part_path),
+        "final_path": str(final_path),
+        "received": {},  # idx -> {offset,size,sha256}
+        "received_bytes": 0,
+        "completed": False,
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }
+    store.put_upload(upload_id, rec)
+    audit_event(
+        "upload.init",
+        request=request,
+        user_id=ident.user.id,
+        meta={"upload_id": upload_id, "total_bytes": int(total), "filename": filename},
+    )
+    return {
+        "upload_id": upload_id,
+        "chunk_bytes": int(chunk_bytes),
+        "max_upload_mb": int(limits.max_upload_mb),
+    }
+
+
+@router.get("/api/uploads/{upload_id}")
+async def uploads_status(
+    request: Request, upload_id: str, ident: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    rec = store.get_upload(upload_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Not found")
+    if str(rec.get("owner_id") or "") != str(ident.user.id) and str(ident.user.role.value) != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return {
+        "upload_id": str(rec.get("id") or upload_id),
+        "total_bytes": int(rec.get("total_bytes") or 0),
+        "chunk_bytes": int(rec.get("chunk_bytes") or 0),
+        "received_bytes": int(rec.get("received_bytes") or 0),
+        "completed": bool(rec.get("completed")),
+        "received": rec.get("received") if isinstance(rec.get("received"), dict) else {},
+    }
+
+
+@router.post("/api/uploads/{upload_id}/chunk")
+async def uploads_chunk(
+    request: Request,
+    upload_id: str,
+    index: int,
+    offset: int,
+    ident: Identity = Depends(require_scope("submit:job")),
+) -> dict[str, Any]:
+    """
+    Upload a chunk (idempotent when index+sha match).
+
+    Query params:
+      - index: int (0-based)
+      - offset: int (byte offset)
+    Headers:
+      - X-Chunk-Sha256: hex sha256 of request body (required)
+    Body:
+      - raw bytes (application/octet-stream)
+    """
+    store = _get_store(request)
+    rec = store.get_upload(upload_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Not found")
+    if str(rec.get("owner_id") or "") != str(ident.user.id) and str(ident.user.role.value) != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if bool(rec.get("completed")):
+        return {"ok": True, "already_completed": True}
+
+    total = int(rec.get("total_bytes") or 0)
+    part_path = Path(str(rec.get("part_path") or "")).resolve()
+    if total <= 0 or not str(part_path):
+        raise HTTPException(status_code=400, detail="Invalid upload session")
+
+    body = await request.body()
+    sha = (request.headers.get("x-chunk-sha256") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise HTTPException(status_code=400, detail="Missing/invalid X-Chunk-Sha256")
+    if _sha256_hex(body) != sha:
+        raise HTTPException(status_code=400, detail="Chunk checksum mismatch")
+
+    if offset < 0 or offset >= total:
+        raise HTTPException(status_code=400, detail="offset out of bounds")
+    if (offset + len(body)) > total:
+        raise HTTPException(status_code=400, detail="chunk exceeds total_bytes")
+
+    idx = int(index)
+    if idx < 0:
+        raise HTTPException(status_code=400, detail="index out of bounds")
+
+    async with _upload_lock(upload_id):
+        # reload inside lock
+        rec2 = store.get_upload(upload_id) or rec
+        received = rec2.get("received")
+        if not isinstance(received, dict):
+            received = {}
+
+        prev = received.get(str(idx))
+        if isinstance(prev, dict) and str(prev.get("sha256") or "") == sha and int(prev.get("size") or 0) == len(body):
+            # already accepted
+            return {"ok": True, "received_bytes": int(rec2.get("received_bytes") or 0), "dedup": True}
+
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        # random-access write
+        with part_path.open("r+b" if part_path.exists() else "w+b") as f:
+            f.seek(int(offset))
+            f.write(body)
+
+        received[str(idx)] = {"offset": int(offset), "size": int(len(body)), "sha256": sha}
+        received_bytes = int(rec2.get("received_bytes") or 0)
+        received_bytes += int(len(body))
+        store.update_upload(
+            upload_id,
+            received=received,
+            received_bytes=int(received_bytes),
+            updated_at=_now_iso(),
+        )
+
+    # Audit at coarse granularity to avoid massive logs; include index/size only.
+    with suppress(Exception):
+        audit_event(
+            "upload.chunk",
+            request=request,
+            user_id=ident.user.id,
+            meta={"upload_id": upload_id, "index": int(idx), "size": int(len(body))},
+        )
+    return {"ok": True, "received_bytes": int(received_bytes)}
+
+
+@router.post("/api/uploads/{upload_id}/complete")
+async def uploads_complete(
+    request: Request, upload_id: str, ident: Identity = Depends(require_scope("submit:job"))
+) -> dict[str, Any]:
+    """
+    Finalize an upload: optionally verify whole-file sha256, then move to final_path.
+
+    Body JSON:
+      - final_sha256: str (optional)
+    """
+    store = _get_store(request)
+    rec = store.get_upload(upload_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Not found")
+    if str(rec.get("owner_id") or "") != str(ident.user.id) and str(ident.user.role.value) != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        body = {}
+    final_sha = str(body.get("final_sha256") or "").strip().lower()
+    if final_sha and not re.fullmatch(r"[0-9a-f]{64}", final_sha):
+        raise HTTPException(status_code=400, detail="Invalid final_sha256")
+
+    async with _upload_lock(upload_id):
+        rec2 = store.get_upload(upload_id) or rec
+        if bool(rec2.get("completed")):
+            return {"ok": True, "video_path": str(rec2.get("final_path") or "")}
+        total = int(rec2.get("total_bytes") or 0)
+        part_path = Path(str(rec2.get("part_path") or "")).resolve()
+        final_path = Path(str(rec2.get("final_path") or "")).resolve()
+        if total <= 0 or not part_path.exists():
+            raise HTTPException(status_code=400, detail="Upload missing data")
+
+        # Verify file size
+        st = part_path.stat()
+        if int(st.st_size) != int(total):
+            raise HTTPException(status_code=400, detail="Upload incomplete (size mismatch)")
+
+        if final_sha:
+            # Stream hash (avoid loading into memory)
+            h = hashlib.sha256()
+            with part_path.open("rb") as f:
+                while True:
+                    buf = f.read(1024 * 1024)
+                    if not buf:
+                        break
+                    h.update(buf)
+            if h.hexdigest() != final_sha:
+                raise HTTPException(status_code=400, detail="Final checksum mismatch")
+
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.replace(final_path)
+        store.update_upload(upload_id, completed=True, updated_at=_now_iso())
+
+    audit_event(
+        "upload.complete",
+        request=request,
+        user_id=ident.user.id,
+        meta={"upload_id": upload_id, "final_path": str(final_path.name)},
+    )
+    return {"ok": True, "video_path": str(final_path)}
+
+
+@router.get("/api/files")
+async def list_server_files(
+    request: Request,
+    dir: str | None = None,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    """
+    Server-local file picker (reliable fallback).
+    Lists only under APP_ROOT/Input by default.
+    """
+    root = _input_dir().resolve()
+    sub = (dir or "").strip().strip("/")
+    target = (root / sub).resolve()
+    try:
+        target.relative_to(root)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid dir") from None
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=404, detail="Not found")
+    items: list[dict[str, Any]] = []
+    # only one level; keep it cheap
+    for p in sorted(target.iterdir()):
+        if p.name.startswith("."):
+            continue
+        try:
+            if p.is_dir():
+                items.append({"type": "dir", "name": p.name, "path": str(p.relative_to(root)).replace("\\", "/")})
+            elif p.is_file():
+                if p.suffix.lower() not in {".mp4", ".mkv", ".mov", ".webm", ".m4v"}:
+                    continue
+                st = p.stat()
+                items.append(
+                    {
+                        "type": "file",
+                        "name": p.name,
+                        "path": str(p.relative_to(_app_root())).replace("\\", "/"),
+                        "size_bytes": int(st.st_size),
+                        "mtime": float(st.st_mtime),
+                    }
+                )
+        except Exception:
+            continue
+        if len(items) >= 200:
+            break
+    return {"root": str(root), "dir": str(target.relative_to(root)).replace("\\", "/"), "items": items}
 
 
 def _app_root() -> Path:
@@ -405,6 +727,7 @@ async def create_job(
     video_path: Path | None = None
     duration_s = 0.0
 
+    upload_id = ""
     if "application/json" in ctype:
         body = await request.json()
         if not isinstance(body, dict):
@@ -423,14 +746,22 @@ async def create_job(
         scene_detect = str(body.get("scene_detect") or scene_detect)
         director = bool(body.get("director") or False)
         director_strength = float(body.get("director_strength") or director_strength)
-        vp = body.get("video_path")
-        if not isinstance(vp, str):
-            raise HTTPException(status_code=400, detail="Missing video_path")
-        video_path = _sanitize_video_path(vp)
-        if not video_path.exists():
-            raise HTTPException(status_code=400, detail="video_path does not exist")
-        if not video_path.is_file():
-            raise HTTPException(status_code=400, detail="video_path must be a file")
+        upload_id = str(body.get("upload_id") or "").strip()
+        if upload_id:
+            urec = store.get_upload(upload_id)
+            if not urec or not bool(urec.get("completed")):
+                raise HTTPException(status_code=400, detail="upload_id not completed")
+            vp = str(urec.get("final_path") or "")
+            video_path = Path(vp)
+        else:
+            vp = body.get("video_path")
+            if not isinstance(vp, str):
+                raise HTTPException(status_code=400, detail="Missing video_path (or upload_id)")
+            video_path = _sanitize_video_path(vp)
+            if not video_path.exists():
+                raise HTTPException(status_code=400, detail="video_path does not exist")
+            if not video_path.is_file():
+                raise HTTPException(status_code=400, detail="video_path must be a file")
     else:
         # multipart/form-data
         form = parsed_form or await request.form()
@@ -451,10 +782,18 @@ async def create_job(
 
         file = form.get("file")
         vp = form.get("video_path")
-        if file is None and vp is None:
-            raise HTTPException(status_code=400, detail="Provide file or video_path")
+        upload_id = str(form.get("upload_id") or "").strip()
+        if file is None and vp is None and not upload_id:
+            raise HTTPException(status_code=400, detail="Provide file, upload_id, or video_path")
 
-        if vp is not None:
+        if upload_id:
+            urec = store.get_upload(upload_id)
+            if not urec or not bool(urec.get("completed")):
+                raise HTTPException(status_code=400, detail="upload_id not completed")
+            video_path = Path(str(urec.get("final_path") or ""))
+            if not video_path.exists():
+                raise HTTPException(status_code=400, detail="upload path missing")
+        elif vp is not None:
             # Allow both:
             # - explicit relative paths under APP_ROOT (e.g. "Input/Test.mp4")
             # - bare filenames relative to INPUT_DIR (e.g. "Test.mp4")
@@ -1280,6 +1619,14 @@ async def tail_logs(
     return PlainTextResponse(store.tail_log(id, n=n))
 
 
+@router.get("/api/jobs/{id}/logs")
+async def logs_alias(
+    request: Request, id: str, n: int = 200, _: Identity = Depends(require_scope("read:job"))
+) -> PlainTextResponse:
+    # Alias for mobile clients: tail-only.
+    return await tail_logs(request, id, n=n, _=_)
+
+
 @router.get("/api/jobs/{id}/logs/stream")
 async def stream_logs(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
@@ -1996,6 +2343,14 @@ async def job_files(
     if qa_top_md is not None:
         data["qa_top_issues"] = {"url": rel_url(qa_top_md), "path": str(qa_top_md)}
     return data
+
+
+@router.get("/api/jobs/{id}/outputs")
+async def job_outputs_alias(
+    request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    # Alias endpoint name expected by some mobile clients.
+    return await job_files(request, id, _=_)
 
 
 @router.get("/api/jobs/{id}/stream/manifest")

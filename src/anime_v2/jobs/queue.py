@@ -230,6 +230,14 @@ class JobQueue:
         else:
             base_dir = (out_root / video_path.stem).resolve()
         base_dir.mkdir(parents=True, exist_ok=True)
+        # Stable per-job pointer (best-effort) so mobile/API users can find artifacts under Output/jobs/<job_id>/...
+        # We keep the canonical base_dir at Output/<stem>/... for backwards compatibility.
+        with suppress(Exception):
+            jobs_dir = (out_root / "jobs" / job_id).resolve()
+            jobs_dir.mkdir(parents=True, exist_ok=True)
+            (jobs_dir / "target.txt").write_text(str(base_dir) + "\n", encoding="utf-8")
+            (jobs_dir / "job_id.txt").write_text(str(job_id) + "\n", encoding="utf-8")
+            (jobs_dir / "video.txt").write_text(str(video_path) + "\n", encoding="utf-8")
         # Temp artifacts live under Output/<stem>/work/<job_id>/...
         work_dir = (base_dir / "work" / job_id).resolve()
         work_dir.mkdir(parents=True, exist_ok=True)

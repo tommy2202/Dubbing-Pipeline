@@ -129,3 +129,16 @@ python3 scripts/verify_remote_mode.py
 
 It simulates allowed and disallowed client IPs and asserts the server returns 200/403 correctly.
 
+### Job submission verification (no real anime required)
+
+```bash
+python3 scripts/verify_job_submission.py
+```
+
+This verifies:
+- resumable upload init/chunk/complete
+- job creation referencing `upload_id`
+- polling job status
+- cancel job
+- `/api/jobs/{id}/outputs` + `/api/jobs/{id}/logs` aliases
+

@@ -53,6 +53,7 @@ class PublicConfig(BaseSettings):
     # Defaults match the repo's historical container layout: <APP_ROOT>/Input/uploads
     input_dir: Path | None = Field(default=None, alias="INPUT_DIR")
     input_uploads_dir: Path | None = Field(default=None, alias="INPUT_UPLOADS_DIR")
+    upload_chunk_bytes: int = Field(default=5 * 1024 * 1024, alias="UPLOAD_CHUNK_BYTES")
 
     # --- legacy (root `main.py`) paths ---
     uploads_dir: Path = Field(
