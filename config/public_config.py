@@ -94,6 +94,7 @@ class PublicConfig(BaseSettings):
     stream: bool = Field(default=False, alias="STREAM")  # off by default
     stream_chunk_seconds: float = Field(default=20.0, alias="STREAM_CHUNK_SECONDS")
     stream_overlap_seconds: float = Field(default=2.0, alias="STREAM_OVERLAP_SECONDS")
+    stream_context_seconds: float = Field(default=15.0, alias="STREAM_CONTEXT_SECONDS")
     stream_output: str = Field(default="segments", alias="STREAM_OUTPUT")  # segments|final
     stream_concurrency: int = Field(default=1, alias="STREAM_CONCURRENCY")
 

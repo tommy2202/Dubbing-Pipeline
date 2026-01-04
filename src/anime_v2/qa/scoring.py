@@ -132,6 +132,10 @@ def _severity_rank(sev: str) -> int:
     return {"fail": 3, "warn": 2, "info": 1}.get(s, 0)
 
 
+def _norm_text_simple(s: str) -> str:
+    return " ".join(str(s or "").strip().lower().split())
+
+
 def _iter_work_dirs(job_dir: Path) -> Iterable[Path]:
     """
     Best-effort: yield work dirs under Output/<job>/work/<job_id>/...
@@ -179,6 +183,57 @@ def _load_segments(job_dir: Path) -> tuple[list[dict[str, Any]], dict[int, dict[
                 ss.setdefault("segment_id", int(i))
                 out.append(ss)
             return out, review_by_id
+
+    # streaming fallback: aggregate per-chunk translated.json into absolute timeline segments
+    stream_manifest = job_dir / "stream" / "manifest.json"
+    if stream_manifest.exists():
+        man = read_json(stream_manifest, default={})
+        chunks = man.get("chunks") if isinstance(man, dict) else None
+        overlap_s = float(man.get("overlap_seconds", 0.0)) if isinstance(man, dict) else 0.0
+        if isinstance(chunks, list):
+            out: list[dict[str, Any]] = []
+            sid = 0
+            for ch in chunks:
+                if not isinstance(ch, dict):
+                    continue
+                tj = ch.get("translated_json")
+                if not tj:
+                    continue
+                try:
+                    ch_idx = int(ch.get("idx", 0))
+                    ch_start = float(ch.get("start_s", 0.0))
+                    ch_end = float(ch.get("end_s", ch_start))
+                except Exception:
+                    continue
+                data = read_json(Path(str(tj)), default={})
+                segs = data.get("segments") if isinstance(data, dict) else None
+                if not isinstance(segs, list) or not segs:
+                    continue
+                for j, s in enumerate(segs, 1):
+                    if not isinstance(s, dict):
+                        continue
+                    sid += 1
+                    ss = dict(s)
+                    ss["segment_id"] = int(sid)
+                    # rewrite to absolute timeline
+                    try:
+                        ss["start"] = float(ch_start) + float(ss.get("start", 0.0))
+                        ss["end"] = float(ch_start) + float(ss.get("end", ss["start"]))
+                    except Exception:
+                        ss["start"] = float(ch_start)
+                        ss["end"] = float(ch_start)
+                    # streaming provenance for boundary checks
+                    ss["stream_chunk_idx"] = int(ch_idx)
+                    ss["stream_local_idx"] = int(j)
+                    ss["stream_chunk_start_s"] = float(ch_start)
+                    ss["stream_chunk_end_s"] = float(ch_end)
+                    ss["stream_overlap_seconds"] = float(overlap_s)
+                    ss["stream_is_chunk_first"] = bool(j == 1)
+                    ss["stream_is_chunk_last"] = bool(j == len(segs))
+                    out.append(ss)
+            if out:
+                out.sort(key=lambda r: (float(r.get("start", 0.0)), float(r.get("end", 0.0))))
+                return out, review_by_id
 
     # fallback: review segments as source
     if review_by_id:
@@ -390,6 +445,59 @@ def score_job(
 
         issues: list[QAIssue] = []
         metrics: dict[str, Any] = {"duration_s": dur}
+
+        # streaming boundary coherence checks (Feature I; best-effort)
+        try:
+            if bool(seg.get("stream_is_chunk_first")) and i > 0:
+                prev = segments[i - 1]
+                if bool(prev.get("stream_is_chunk_last")) and int(prev.get("stream_chunk_idx") or -1) != int(
+                    seg.get("stream_chunk_idx") or -2
+                ):
+                    # Different chunk; treat as a boundary pair.
+                    t_prev = _norm_text_simple(str(prev.get("text") or ""))
+                    t_cur = _norm_text_simple(str(seg.get("text") or ""))
+                    if t_prev and t_cur and (t_prev == t_cur or (len(t_prev) > 10 and (t_prev in t_cur or t_cur in t_prev))):
+                        issues.append(
+                            QAIssue(
+                                check_id="stream_boundary_duplicate",
+                                severity="warn",
+                                impact=0.06,
+                                message="Possible duplicate line across a streaming chunk boundary.",
+                                suggested_action="Increase --stream-context-seconds and/or --chunk-overlap; review boundary segments and lock corrections.",
+                                details={
+                                    "prev_segment_id": int(prev.get("segment_id") or 0),
+                                    "prev_chunk_idx": int(prev.get("stream_chunk_idx") or -1),
+                                    "cur_chunk_idx": int(seg.get("stream_chunk_idx") or -1),
+                                },
+                            )
+                        )
+
+                    # missing content around boundary: a gap that spans the next chunk start
+                    try:
+                        prev_end = float(prev.get("end", 0.0))
+                        cur_start = float(start)
+                        ch_start = float(seg.get("stream_chunk_start_s", cur_start))
+                        gap = cur_start - prev_end
+                        if gap > 0.60 and prev_end <= ch_start <= cur_start:
+                            issues.append(
+                                QAIssue(
+                                    check_id="stream_boundary_gap",
+                                    severity="warn",
+                                    impact=0.06,
+                                    message="Potential missing content around streaming chunk boundary (gap between segments).",
+                                    suggested_action="Increase --chunk-overlap or re-run with --stream-context-seconds 0 if de-dup is too aggressive; spot-check boundary audio.",
+                                    details={
+                                        "gap_s": gap,
+                                        "boundary_s": ch_start,
+                                        "prev_end_s": prev_end,
+                                        "cur_start_s": cur_start,
+                                    },
+                                )
+                            )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         # subtitle pre-format constraint warning (informational but actionable)
         if sid in subs_pre_by_seg:

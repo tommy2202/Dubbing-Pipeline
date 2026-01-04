@@ -21,6 +21,9 @@ class TranslationConfig:
     whisper_model: str = field(default_factory=lambda: str(get_settings().whisper_model))
     audio_path: str | None = None
     device: str = "cpu"
+    # Streaming context bridging: best-effort prompt/hint for providers that support it.
+    # This MUST NOT contain secrets; it is derived from prior segment text.
+    context_hint: str | None = None
 
 
 def _read_glossary(path: str | None, *, show_id: str | None = None) -> list[tuple[str, str]]:
@@ -177,7 +180,7 @@ def _translate_nllb(text: str, src_lang: str, tgt_lang: str) -> str:
 
 
 def _whisper_translate(
-    audio_path: str, *, device: str, model_name: str, src_lang: str
+    audio_path: str, *, device: str, model_name: str, src_lang: str, context_hint: str | None = None
 ) -> list[dict]:
     try:
         import whisper  # type: ignore
@@ -186,7 +189,12 @@ def _whisper_translate(
     lang_opt = None if src_lang.lower() == "auto" else src_lang
     with egress_guard():
         model = whisper.load_model(model_name, device=device)
-        res = model.transcribe(audio_path, task="translate", language=lang_opt, verbose=False)
+        # Whisper supports a lightweight prompt for improved coherence across windows.
+        # (Used by streaming context bridging; offline-only.)
+        kw: dict[str, Any] = {"task": "translate", "language": lang_opt, "verbose": False}
+        if context_hint and str(context_hint).strip():
+            kw["initial_prompt"] = str(context_hint).strip()
+        res = model.transcribe(audio_path, **kw)
     segs = res.get("segments") or []
     out = []
     for s in segs:
@@ -235,7 +243,11 @@ def translate_segments(
             if not cfg.audio_path:
                 raise RuntimeError("audio_path not provided for whisper translate")
             whisper_segs = _whisper_translate(
-                cfg.audio_path, device=cfg.device, model_name=cfg.whisper_model, src_lang=src_lang
+                cfg.audio_path,
+                device=cfg.device,
+                model_name=cfg.whisper_model,
+                src_lang=src_lang,
+                context_hint=cfg.context_hint,
             )
             whisper_ok = True
         except Exception:

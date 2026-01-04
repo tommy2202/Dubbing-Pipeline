@@ -13,6 +13,7 @@ from anime_v2.stages.transcription import transcribe
 from anime_v2.stages.translation import TranslationConfig, translate_segments
 from anime_v2.stages.tts import _write_silence_wav
 from anime_v2.streaming.chunker import Chunk, split_audio_to_chunks
+from anime_v2.streaming.context import StreamContextBuffer
 from anime_v2.timing.pacing import pad_or_trim_wav
 from anime_v2.utils.ffmpeg_safe import run_ffmpeg
 from anime_v2.utils.io import atomic_write_text, read_json, write_json
@@ -158,6 +159,7 @@ def run_streaming(
     overlap_seconds: float,
     stream_output: str,  # segments|final
     stream_concurrency: int = 1,
+    stream_context_seconds: float = 15.0,
     timing_fit: bool = False,
     pacing: bool = False,
     pacing_min_ratio: float = 0.88,
@@ -270,6 +272,7 @@ def run_streaming(
     mp4s: list[Path] = []
     pg_reports: list[dict[str, Any]] = []
     style_guide_records: list[str] = []
+    ctx = StreamContextBuffer(context_seconds=float(stream_context_seconds))
 
     # NOTE: keep concurrency at 1 by default; higher values are best-effort and may be memory-heavy.
     if stream_concurrency and int(stream_concurrency) > 1:
@@ -321,6 +324,24 @@ def run_streaming(
                         }
                     )
 
+                # Streaming context bridging (Feature I): de-dup overlap-window segments and
+                # carry a best-effort translation hint into the next chunk.
+                if float(stream_context_seconds) > 0.0 and float(overlap_seconds) > 0.0:
+                    segs_for_mt, rep = ctx.dedup_src_segments(
+                        chunk_start_s=float(ch.start_s),
+                        src_segments=segs_for_mt,
+                        overlap_window_s=float(overlap_seconds),
+                    )
+                    if int(rep.dropped) > 0:
+                        logger.info(
+                            "stream_context_dedup",
+                            chunk_idx=int(ch.idx),
+                            dropped=int(rep.dropped),
+                            kept=int(rep.kept),
+                            overlap_seconds=float(overlap_seconds),
+                            context_seconds=float(stream_context_seconds),
+                        )
+
                 # 3b) MT
                 cfg = TranslationConfig(
                     mt_engine=str(mt_engine).lower(),
@@ -331,6 +352,7 @@ def run_streaming(
                     whisper_model=asr_model,
                     audio_path=str(ch.wav_path),
                     device=device,
+                    context_hint=ctx.build_translation_hint(),
                 )
                 translated = segs_for_mt
                 if str(tgt_lang).lower() != "en" or str(mt_engine).lower() != "whisper":
@@ -416,6 +438,14 @@ def run_streaming(
                                 continue
 
                 write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": translated})
+
+                # Update streaming context buffer using aligned src/translated segments.
+                with suppress(Exception):
+                    ctx.add_translated_segments(
+                        chunk_start_s=float(ch.start_s),
+                        src_segments=segs_for_mt,
+                        translated_segments=translated,
+                    )
 
                 # Simple target SRT for the chunk (best-effort)
                 with suppress(Exception):
@@ -598,6 +628,7 @@ def run_streaming(
         "audio": str(extracted),
         "chunk_seconds": float(chunk_seconds),
         "overlap_seconds": float(overlap_seconds),
+        "context_seconds": float(stream_context_seconds),
         "chunks_dir": str(chunks_dir),
         "stream_dir": str(stream_dir),
         "chunks": [r.to_dict() for r in results],

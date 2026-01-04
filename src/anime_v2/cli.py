@@ -355,6 +355,15 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     "--chunk-overlap", type=float, default=float(get_settings().stream_overlap_seconds), show_default=True
 )
 @click.option(
+    "--stream-context-seconds",
+    "stream_context_seconds",
+    type=float,
+    default=None,
+    show_default=False,
+    help="Streaming context bridging: carry last N seconds of translated text into the next chunk (best-effort). "
+    "Defaults: HIGH/MED ~15s, LOW 0s (unless explicitly set).",
+)
+@click.option(
     "--stream",
     "stream_mode",
     type=click.Choice(["off", "on"], case_sensitive=False),
@@ -687,6 +696,7 @@ def run(
     realtime: bool,
     chunk_seconds: float,
     chunk_overlap: float,
+    stream_context_seconds: float | None,
     stream_mode: str,
     overlap_seconds: float | None,
     stream_output: str,
@@ -1161,7 +1171,14 @@ def run(
         overrides["director"] = (str(director_mode).lower() == "on")
     if _is_explicit("multitrack"):
         overrides["multitrack"] = (str(multitrack).lower() == "on")
+    if _is_explicit("stream_context_seconds") and stream_context_seconds is not None:
+        overrides["stream_context_seconds"] = float(stream_context_seconds)
 
+    stream_context_seconds_eff = (
+        float(stream_context_seconds)
+        if stream_context_seconds is not None
+        else float(get_settings().stream_context_seconds)
+    )
     base = {
         "diarizer": str(diarizer).lower(),
         "speaker_smoothing": (str(speaker_smoothing).lower() == "on"),
@@ -1175,6 +1192,7 @@ def run(
         "qa": (str(qa_mode).lower() == "on"),
         "director": (str(director_mode).lower() == "on"),
         "multitrack": (str(multitrack).lower() == "on"),
+        "stream_context_seconds": float(stream_context_seconds_eff),
     }
     try:
         from anime_v2.modes import log_effective_settings_summary, resolve_effective_settings
@@ -1342,6 +1360,11 @@ def run(
         from anime_v2.streaming.runner import run_streaming
 
         out_mode = "final" if bool(stitch) else str(stream_output or "segments").lower()
+        ctx_s = (
+            float(stream_context_seconds)
+            if stream_context_seconds is not None
+            else (float(eff.stream_context_seconds) if eff is not None else float(stream_context_seconds_eff))
+        )
         run_streaming(
             video=video,
             out_dir=out_dir,
@@ -1360,6 +1383,7 @@ def run(
             overlap_seconds=float(chunk_overlap),
             stream_output=out_mode,
             stream_concurrency=int(stream_concurrency),
+            stream_context_seconds=float(ctx_s),
             timing_fit=bool(timing_fit),
             pacing=bool(pacing),
             pacing_min_ratio=float(pacing_min_stretch),

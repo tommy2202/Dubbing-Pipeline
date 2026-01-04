@@ -61,6 +61,7 @@ class EffectiveSettings:
     qa: bool
     director: bool
     multitrack: bool
+    stream_context_seconds: float
     # decision trace
     sources: dict[str, str]
     reasons: list[str]
@@ -83,6 +84,7 @@ class EffectiveSettings:
             "qa": self.qa,
             "director": self.director,
             "multitrack": self.multitrack,
+            "stream_context_seconds": float(self.stream_context_seconds),
             "sources": dict(self.sources),
             "reasons": list(self.reasons),
         }
@@ -138,6 +140,10 @@ def resolve_effective_settings(
     qa = bool(pick("qa", mode_default=(req == "high")))
     director = bool(pick("director", mode_default=(req == "high")))
     multitrack = bool(pick("multitrack", mode_default=(req == "high")))
+    stream_context_seconds = float(
+        pick("stream_context_seconds", mode_default=(float(base.get("stream_context_seconds", 15.0)) if req != "low" else 0.0))
+        or 0.0
+    )
 
     # ASR model: mode default unless explicitly overridden
     asr_override = overrides.get("asr_model")
@@ -196,6 +202,7 @@ def resolve_effective_settings(
         qa=bool(qa),
         director=bool(director),
         multitrack=bool(multitrack),
+        stream_context_seconds=float(max(0.0, stream_context_seconds)),
         sources=sources,
         reasons=reasons,
     )
@@ -221,6 +228,7 @@ def log_effective_settings_summary(eff: EffectiveSettings) -> None:
         qa=eff.qa,
         director=eff.director,
         multitrack=eff.multitrack,
+        stream_context_seconds=float(eff.stream_context_seconds),
         reasons=eff.reasons,
     )
 
