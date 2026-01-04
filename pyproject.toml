@@ -38,7 +38,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-v1 = [
+legacy = [
   # anime-v1 legacy CLI/UI optional deps (kept out of default install)
   "pydub>=0.25.1",
   "vosk>=0.3.45",

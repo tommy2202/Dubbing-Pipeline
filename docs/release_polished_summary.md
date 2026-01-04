@@ -8,7 +8,7 @@
   - Hardened `scripts/smoke_import_all.py` to import all major entrypoints/modules and print actionable tracebacks.
   - Made `anime_v1` import-safe by removing hard imports of optional deps at import time (lazy `whisper`/`pydub`).
 - **Dependency hygiene**:
-  - Added optional extra `v1` in `pyproject.toml`.
+  - Added optional legacy extra (`legacy`) in `pyproject.toml` for `anime_v1` UI deps.
   - Updated Docker constraints numpy pin to a modern 1.26.x compatible range for Python 3.10 images.
   - Added `scripts/verify_env.py` for required vs optional deps + feature availability reporting.
 - **Obsolete/duplicate cleanup**:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from dataclasses import dataclass
@@ -222,7 +223,7 @@ async def get_settings_me(
 
 @router.put("/api/settings")
 async def put_settings_me(
-    request: Request, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, ident: Identity = Depends(require_role(Role.operator))
 ) -> dict[str, Any]:
     body = await request.json()
     store = _get_user_settings_store(request)

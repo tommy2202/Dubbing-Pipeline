@@ -325,7 +325,7 @@ anime-v2 Input/Test.mp4 \
 If you need v1 CLI/UI dependencies:
 
 ```bash
-python3 -m pip install -e ".[v1]"
+python3 -m pip install -e ".[legacy]"
 ```
 
 ### Singing/Music Preservation (Tier‑Next A/B, optional)
