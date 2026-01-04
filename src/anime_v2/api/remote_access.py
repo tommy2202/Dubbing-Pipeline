@@ -382,6 +382,7 @@ async def remote_access_middleware(request: Request, call_next) -> Response:
     return resp
 
 
+
 def log_remote_access_boot_summary() -> None:
     s = get_settings()
     mode = str(getattr(s, "remote_access_mode", "off") or "off").strip().lower()

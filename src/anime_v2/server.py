@@ -234,6 +234,68 @@ app.include_router(webrtc_router)
 app.include_router(ui_router)
 
 
+def _is_https_request(request: Request) -> bool:
+    """
+    Determine HTTPS without trusting forwarded headers unless in Cloudflare mode.
+    """
+    try:
+        if str(request.url.scheme).lower() == "https":
+            return True
+    except Exception:
+        pass
+    s = get_settings()
+    mode = str(getattr(s, "remote_access_mode", "off") or "off").strip().lower()
+    trust = bool(getattr(s, "trust_proxy_headers", False)) and mode == "cloudflare"
+    if not trust:
+        return False
+    xf = (request.headers.get("x-forwarded-proto") or "").strip().lower()
+    if xf == "https":
+        return True
+    cfv = (request.headers.get("cf-visitor") or "").lower()
+    if "https" in cfv:
+        return True
+    return False
+
+
+def _csp_header_value() -> str:
+    """
+    CSP baseline for this UI.
+
+    Note: the UI currently relies on CDN-hosted Tailwind/HTMX/Alpine and video.js/hls.js.
+    """
+    return (
+        "default-src 'self'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'; "
+        "object-src 'none'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline' https://vjs.zencdn.net https://cdn.tailwindcss.com; "
+        "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com https://vjs.zencdn.net https://cdn.jsdelivr.net; "
+        "connect-src 'self'; "
+        "media-src 'self' blob: data:; "
+    )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("x-content-type-options", "nosniff")
+    resp.headers.setdefault("x-frame-options", "DENY")
+    resp.headers.setdefault("referrer-policy", "no-referrer")
+    resp.headers.setdefault(
+        "permissions-policy",
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+    )
+    ct = (resp.headers.get("content-type") or "").lower()
+    if "text/html" in ct:
+        resp.headers.setdefault("content-security-policy", _csp_header_value())
+    if _is_https_request(request):
+        resp.headers.setdefault("strict-transport-security", "max-age=31536000; includeSubDomains")
+    return resp
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     t0 = time.perf_counter()

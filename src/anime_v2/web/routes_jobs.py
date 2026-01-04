@@ -6,6 +6,7 @@ import io
 import re
 import time
 import json as _json
+import ipaddress
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ _ALLOWED_UPLOAD_MIME = {
     "video/webm",
     "application/octet-stream",  # some browsers
 }
+_ALLOWED_UPLOAD_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
 
 # Upload session locks (per upload_id) for concurrent chunk writes
 _UPLOAD_LOCKS: dict[str, asyncio.Lock] = {}
@@ -85,6 +87,55 @@ def _safe_filename(name: str) -> str:
     return base
 
 
+def _client_ip_for_limits(request: Request) -> str:
+    """
+    Proxy-safe client IP for rate limiting.
+    Only trusts forwarded headers in Cloudflare mode when peer is a trusted proxy subnet.
+    """
+    peer = request.client.host if request.client else ""
+    s = get_settings()
+    mode = str(getattr(s, "remote_access_mode", "off") or "off").strip().lower()
+    trust = bool(getattr(s, "trust_proxy_headers", False)) and mode == "cloudflare"
+    if not trust:
+        return peer or "unknown"
+
+    # Only accept forwarded headers if the immediate peer is trusted.
+    try:
+        trusted = str(getattr(s, "trusted_proxy_subnets", "") or "").strip()
+        nets = [
+            ipaddress.ip_network(x.strip(), strict=False)
+            for x in trusted.split(",")
+            if x.strip()
+        ]
+        if not nets:
+            # conservative: if not configured, do not trust
+            return peer or "unknown"
+        pip = ipaddress.ip_address(peer) if peer else None
+        if pip is None or not any(pip in n for n in nets):
+            return peer or "unknown"
+    except Exception:
+        return peer or "unknown"
+
+    # Cloudflare headers (preferred)
+    cf = (request.headers.get("cf-connecting-ip") or "").strip()
+    if cf:
+        return cf
+    # Fall back to X-Forwarded-For (first hop)
+    xff = (request.headers.get("x-forwarded-for") or "").strip()
+    if xff:
+        return xff.split(",")[0].strip()
+    return peer or "unknown"
+
+
+def _enforce_rate_limit(request: Request, *, key: str, limit: int, per_seconds: int) -> None:
+    rl: RateLimiter | None = getattr(request.app.state, "rate_limiter", None)
+    if rl is None:
+        rl = RateLimiter()
+        request.app.state.rate_limiter = rl
+    if not rl.allow(str(key), limit=int(limit), per_seconds=int(per_seconds)):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+
 def _sha256_hex(data: bytes) -> str:
     h = hashlib.sha256()
     h.update(data)
@@ -105,10 +156,26 @@ async def uploads_init(
     """
     store = _get_store(request)
     limits = get_limits()
+    # Moderate: init is lightweight but should not be spammed
+    _enforce_rate_limit(
+        request,
+        key=f"upload:init:user:{ident.user.id}",
+        limit=30,
+        per_seconds=60,
+    )
+    _enforce_rate_limit(
+        request,
+        key=f"upload:init:ip:{_client_ip_for_limits(request)}",
+        limit=60,
+        per_seconds=60,
+    )
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
     filename = _safe_filename(str(body.get("filename") or "upload.mp4"))
+    ext = Path(filename).suffix.lower()
+    if ext not in _ALLOWED_UPLOAD_EXTS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext or '(none)'}")
     try:
         total = int(body.get("total_bytes") or 0)
     except Exception:
@@ -118,6 +185,9 @@ async def uploads_init(
     max_bytes = int(limits.max_upload_mb) * 1024 * 1024
     if total > max_bytes:
         raise HTTPException(status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)")
+    mime = str(body.get("mime") or "").lower().strip()
+    if mime and mime not in _ALLOWED_UPLOAD_MIME:
+        raise HTTPException(status_code=400, detail=f"Unsupported upload content-type: {mime}")
 
     up_dir = _input_uploads_dir()
     up_dir.mkdir(parents=True, exist_ok=True)
@@ -202,6 +272,19 @@ async def uploads_chunk(
       - raw bytes (application/octet-stream)
     """
     store = _get_store(request)
+    # Chunking can be noisy; allow sustained uploads but prevent abuse.
+    _enforce_rate_limit(
+        request,
+        key=f"upload:chunk:user:{ident.user.id}",
+        limit=600,
+        per_seconds=60,
+    )
+    _enforce_rate_limit(
+        request,
+        key=f"upload:chunk:ip:{_client_ip_for_limits(request)}",
+        limit=1200,
+        per_seconds=60,
+    )
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
@@ -281,6 +364,18 @@ async def uploads_complete(
       - final_sha256: str (optional)
     """
     store = _get_store(request)
+    _enforce_rate_limit(
+        request,
+        key=f"upload:complete:user:{ident.user.id}",
+        limit=30,
+        per_seconds=60,
+    )
+    _enforce_rate_limit(
+        request,
+        key=f"upload:complete:ip:{_client_ip_for_limits(request)}",
+        limit=60,
+        per_seconds=60,
+    )
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
@@ -416,24 +511,16 @@ def _sanitize_video_path(p: str) -> Path:
     if not p or not _SAFE_PATH_RE.match(p):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid video_path")
 
-    root = _app_root()
     raw = Path(p)
-    if raw.is_absolute():
-        resolved = raw.resolve()
-        try:
-            resolved.relative_to(root)
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="video_path must be under APP_ROOT"
-            ) from None
-        return resolved
+    resolved = raw.resolve() if raw.is_absolute() else (_app_root() / raw).resolve()
 
-    resolved = (root / raw).resolve()
+    # File inputs are allowlisted to INPUT_DIR only (prevents arbitrary reads under APP_ROOT).
+    inp = _input_dir().resolve()
     try:
-        resolved.relative_to(root)
+        resolved.relative_to(inp)
     except Exception:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="video_path must be under APP_ROOT"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="video_path must be under INPUT_DIR"
         ) from None
     return resolved
 
@@ -530,8 +617,13 @@ def _review_audio_path(base_dir: Path, segment_id: int) -> Path | None:
             return None
         for s in segs:
             if isinstance(s, dict) and int(s.get("segment_id") or 0) == int(segment_id):
-                p = Path(str(s.get("audio_path_current") or ""))
-                return p if p.exists() else None
+                p = Path(str(s.get("audio_path_current") or "")).resolve()
+                # Prevent arbitrary file reads: audio must live under this job's output folder.
+                try:
+                    p.relative_to(Path(base_dir).resolve())
+                except Exception:
+                    return None
+                return p if p.exists() and p.is_file() else None
     except Exception:
         return None
     return None
@@ -699,6 +791,9 @@ async def create_job(
     who = ident.user.id if ident.kind == "user" else (ident.api_key_prefix or "unknown")
     if not rl.allow(f"jobs:submit:{who}", limit=10, per_seconds=60):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    ip = _client_ip_for_limits(request)
+    if not rl.allow(f"jobs:submit:ip:{ip}", limit=25, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     # Disk guard: refuse new jobs when storage is low.
     s = get_settings()
@@ -752,7 +847,12 @@ async def create_job(
             if not urec or not bool(urec.get("completed")):
                 raise HTTPException(status_code=400, detail="upload_id not completed")
             vp = str(urec.get("final_path") or "")
-            video_path = Path(vp)
+            up_root = _input_uploads_dir().resolve()
+            video_path = Path(vp).resolve()
+            try:
+                video_path.relative_to(up_root)
+            except Exception:
+                raise HTTPException(status_code=400, detail="upload_id path not allowed") from None
         else:
             vp = body.get("video_path")
             if not isinstance(vp, str):
@@ -790,7 +890,12 @@ async def create_job(
             urec = store.get_upload(upload_id)
             if not urec or not bool(urec.get("completed")):
                 raise HTTPException(status_code=400, detail="upload_id not completed")
-            video_path = Path(str(urec.get("final_path") or ""))
+            up_root = _input_uploads_dir().resolve()
+            video_path = Path(str(urec.get("final_path") or "")).resolve()
+            try:
+                video_path.relative_to(up_root)
+            except Exception:
+                raise HTTPException(status_code=400, detail="upload_id path not allowed") from None
             if not video_path.exists():
                 raise HTTPException(status_code=400, detail="upload path missing")
         elif vp is not None:
@@ -821,10 +926,10 @@ async def create_job(
             up_dir = _input_uploads_dir()
             up_dir.mkdir(parents=True, exist_ok=True)
             jid = new_id()
-            ext = ".mp4"
             name = getattr(upload, "filename", "") or ""
-            if "." in name:
-                ext = "." + name.rsplit(".", 1)[-1][:8]
+            ext = (("." + name.rsplit(".", 1)[-1]) if "." in name else ".mp4").lower()[:8]
+            if ext not in _ALLOWED_UPLOAD_EXTS:
+                raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
             dest = up_dir / f"{jid}{ext}"
             max_bytes = int(limits.max_upload_mb) * 1024 * 1024
             written = 0
@@ -848,6 +953,9 @@ async def create_job(
             video_path = dest
 
     assert video_path is not None
+    # Extension allowlist (defense-in-depth)
+    if video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
     # Validate duration using ffprobe (no user-controlled args).
     try:
         duration_s = float(ffprobe_duration_seconds(video_path))
@@ -1018,6 +1126,19 @@ async def create_jobs_batch(
     store = _get_store(request)
     scheduler = _get_scheduler(request)
     limits = get_limits()
+    # Batch submit is expensive; keep it tighter.
+    _enforce_rate_limit(
+        request,
+        key=f"jobs:batch:user:{ident.user.id}",
+        limit=5,
+        per_seconds=60,
+    )
+    _enforce_rate_limit(
+        request,
+        key=f"jobs:batch:ip:{_client_ip_for_limits(request)}",
+        limit=10,
+        per_seconds=60,
+    )
 
     # Disk guard once per batch
     s = get_settings()
@@ -1217,10 +1338,10 @@ async def create_jobs_batch(
                 raise HTTPException(
                     status_code=400, detail=f"Unsupported upload content-type: {ctype_u}"
                 )
-            ext = ".mp4"
             name = getattr(upload, "filename", "") or ""
-            if "." in name:
-                ext = "." + name.rsplit(".", 1)[-1][:8]
+            ext = (("." + name.rsplit(".", 1)[-1]) if "." in name else ".mp4").lower()[:8]
+            if ext not in _ALLOWED_UPLOAD_EXTS:
+                raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
             tmp_id = new_id()
             dest = up_dir / f"{tmp_id}{ext}"
             max_bytes = int(limits.max_upload_mb) * 1024 * 1024
@@ -2128,6 +2249,12 @@ async def post_job_review_helper(
       - text: (optional) current text
     """
     store = _get_store(request)
+    _enforce_rate_limit(
+        request,
+        key=f"review:helper:user:{_.user.id}",
+        limit=120,
+        per_seconds=60,
+    )
     job = store.get(id)
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
@@ -2210,6 +2337,12 @@ async def post_job_review_edit(
     _: Identity = Depends(require_scope("submit:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
+    _enforce_rate_limit(
+        request,
+        key=f"review:edit:user:{_.user.id}",
+        limit=120,
+        per_seconds=60,
+    )
     job = store.get(id)
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
@@ -2239,6 +2372,12 @@ async def post_job_review_regen(
     _: Identity = Depends(require_scope("submit:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
+    _enforce_rate_limit(
+        request,
+        key=f"review:regen:user:{_.user.id}",
+        limit=60,
+        per_seconds=60,
+    )
     job = store.get(id)
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
@@ -2266,6 +2405,12 @@ async def post_job_review_lock(
     _: Identity = Depends(require_scope("submit:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
+    _enforce_rate_limit(
+        request,
+        key=f"review:lock:user:{_.user.id}",
+        limit=120,
+        per_seconds=60,
+    )
     job = store.get(id)
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
@@ -2293,6 +2438,12 @@ async def post_job_review_unlock(
     _: Identity = Depends(require_scope("submit:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
+    _enforce_rate_limit(
+        request,
+        key=f"review:unlock:user:{_.user.id}",
+        limit=120,
+        per_seconds=60,
+    )
     job = store.get(id)
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")

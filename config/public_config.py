@@ -356,6 +356,8 @@ class PublicConfig(BaseSettings):
     webrtc_stun: str = Field(default="stun:stun.l.google.com:19302", alias="WEBRTC_STUN")
     webrtc_idle_timeout_s: int = Field(default=300, alias="WEBRTC_IDLE_TIMEOUT_S")
     webrtc_max_pcs_per_ip: int = Field(default=2, alias="WEBRTC_MAX_PCS_PER_IP")
+    # Do NOT expose TURN credentials to clients unless explicitly enabled.
+    webrtc_expose_turn_credentials: bool = Field(default=False, alias="WEBRTC_EXPOSE_TURN_CREDENTIALS")
 
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in (self.cors_origins or "").split(",") if o.strip()]

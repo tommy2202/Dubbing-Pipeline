@@ -79,6 +79,10 @@ async def login(request: Request) -> Response:
     else:
         session = bool(session_val)
 
+    # Brute-force protection: also limit by username (best-effort, avoids user enumeration by using same error msg).
+    if username and not rl.allow(f"auth:login:user:{username.lower()}", limit=5, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
     store = _get_store(request)
     user = store.get_user_by_username(username)
     if user is None:

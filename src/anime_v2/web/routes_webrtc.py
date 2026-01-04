@@ -8,13 +8,14 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from anime_v2.api.deps import require_scope
 from anime_v2.config import get_settings
 from anime_v2.jobs.models import JobState
 from anime_v2.utils.log import logger
+from anime_v2.utils.ratelimit import RateLimiter
 
 router = APIRouter()
 
@@ -35,9 +36,18 @@ def _ice_servers() -> list[dict]:
     turn_url = s.turn_url
     turn_user = s.turn_username
     turn_pass = s.turn_password
-    if turn_url and turn_user and turn_pass:
+    # Avoid leaking TURN secrets by default; only include if explicitly enabled.
+    if bool(getattr(s, "webrtc_expose_turn_credentials", False)) and turn_url and turn_user and turn_pass:
         servers.append({"urls": [turn_url], "username": turn_user, "credential": turn_pass})
     return servers
+
+
+def _get_rl(request: Request) -> RateLimiter:
+    rl = getattr(request.app.state, "rate_limiter", None)
+    if rl is None:
+        rl = RateLimiter()
+        request.app.state.rate_limiter = rl
+    return rl
 
 
 def _resolve_job_media_path(request: Request, job_id: str, video_path: str | None = None) -> Path:
@@ -113,9 +123,8 @@ async def _idle_watch(token: str) -> None:
 
 
 @router.post("/webrtc/offer")
-async def webrtc_offer(request: Request) -> dict:
-    # read-only access required
-    require_scope("read:job")(request)  # type: ignore[misc]
+async def webrtc_offer(request: Request, _: object = Depends(require_scope("read:job"))) -> dict:
+    # auth required (cookie/bearer/api-key), CSRF enforced by require_scope for cookie flows.
 
     # Lazy import so local installs don't break if aiortc/av aren't installed.
     try:
@@ -140,6 +149,10 @@ async def webrtc_offer(request: Request) -> dict:
     )
 
     ip = request.client.host if request.client else "unknown"
+    # Rate limit offers (per IP) to avoid resource exhaustion.
+    rl = _get_rl(request)
+    if not rl.allow(f"webrtc:offer:ip:{ip}", limit=10, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     async with _peers_lock:
         active_for_ip = sum(1 for p in _peers.values() if p.ip == ip)
@@ -223,6 +236,7 @@ async def webrtc_offer(request: Request) -> dict:
 
 @router.get("/webrtc/demo", response_class=HTMLResponse)
 async def webrtc_demo(request: Request) -> HTMLResponse:
+    # Demo page is protected.
     require_scope("read:job")(request)  # type: ignore[misc]
     store = _get_store(request)
     jobs = [j for j in store.list(limit=100) if j.state == JobState.DONE and j.output_mkv]
