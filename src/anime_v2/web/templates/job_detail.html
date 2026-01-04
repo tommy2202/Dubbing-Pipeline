@@ -25,6 +25,18 @@
               @click="doAction('cancel')" :disabled="!job || !['QUEUED','RUNNING','PAUSED'].includes(job.state) {% if user and user.role and user.role.value == 'viewer' %} || true {% endif %}">
         Cancel
       </button>
+      {% if user and user.role and user.role.value in ["operator","admin"] %}
+      <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+              @click="doAction(job && job.runtime && job.runtime.archived ? 'unarchive' : 'archive')">
+        <span x-text="(job && job.runtime && job.runtime.archived) ? 'Unarchive' : 'Archive'"></span>
+      </button>
+      {% endif %}
+      {% if user and user.role and user.role.value == "admin" %}
+      <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-sm text-red-100"
+              @click="doDelete()">
+        Delete
+      </button>
+      {% endif %}
     </div>
   </div>
 
@@ -479,10 +491,26 @@
               <div>
                 <span class="text-slate-500">Master (MKV):</span>
                 <a class="underline" :href="files.mkv.url" target="_blank" rel="noreferrer" download>download</a>
+                <a class="underline ml-3" :href="vlcLink(files.mkv.url)">Open in VLC</a>
                 <span class="text-xs text-slate-500 ml-2">(best quality; some mobile browsers won't play)</span>
               </div>
             </template>
             <div><span class="text-slate-500">SRT:</span> <span class="break-all" x-text="job?.output_srt || ''"></span></div>
+
+            <template x-if="files && Array.isArray(files.files)">
+              <div class="mt-3">
+                <div class="text-sm text-slate-300">Downloads</div>
+                <div class="mt-2 space-y-1 text-sm">
+                  <template x-for="f in files.files.filter(x => x && (x.kind==='audio_track' || x.kind==='subs'))" :key="f.kind + ':' + f.name">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-xs rounded border border-slate-800 bg-slate-900/40 px-2 py-1" x-text="f.kind"></span>
+                      <a class="underline" :href="f.url" target="_blank" rel="noreferrer" x-text="f.name"></a>
+                      <a class="underline ml-2" x-show="f.kind==='audio_track'" :href="vlcLink(f.url)" x-cloak>Open in VLC</a>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -610,12 +638,31 @@
           this.job = await r.json();
         } catch (e) {}
       },
+      async doAction(action) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const url = "/api/jobs/" + encodeURIComponent(this.jobId) + "/" + String(action || "");
+          const r = await fetch(url, { method: "POST", credentials: "include", headers: { "X-CSRF-Token": csrf } });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            window.showToast((d && d.detail) ? d.detail : ("Action failed (" + r.status + ")"), "error");
+            return;
+          }
+          await this.refresh();
+          window.showToast(String(action) + " OK", "success");
+        } catch (e) {}
+      },
       async loadFiles() {
         try {
           const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/files", { credentials: "include" });
           if (!r.ok) return;
           this.files = await r.json();
-          this.hasPlayer = !!(this.files && ((this.files.hls_manifest && this.files.hls_manifest.url) || (this.files.mp4 && this.files.mp4.url)));
+          this.hasPlayer = !!(this.files && (
+            (this.files.mobile_hls_manifest && this.files.mobile_hls_manifest.url) ||
+            (this.files.mobile_mp4 && this.files.mobile_mp4.url) ||
+            (this.files.hls_manifest && this.files.hls_manifest.url) ||
+            (this.files.mp4 && this.files.mp4.url)
+          ));
           // init player if artifacts tab active
           if (this.activeTab === "artifacts") this.initPlayer();
         } catch (e) {}
@@ -668,22 +715,29 @@
         try {
           const vjs = window.videojs ? window.videojs(playerEl, { controls: true, playbackRates: [0.5, 1, 1.25, 1.5, 2] }) : null;
           this._vjs = vjs || null;
-          if (this.files.hls_manifest && this.files.hls_manifest.url) {
-            const src = this.files.hls_manifest.url;
-            // Prefer native/VHS; fall back to hls.js when needed.
+          // Auto-select best playback for phone browsers:
+          // - iOS: prefer HLS when available, else mobile MP4
+          // - others: prefer mobile MP4, then HLS, then MP4
+          const ua = String(navigator.userAgent || "");
+          const isIOS = /iPad|iPhone|iPod/.test(ua);
+          const hlsUrl = (this.files.mobile_hls_manifest && this.files.mobile_hls_manifest.url) ? this.files.mobile_hls_manifest.url
+                       : ((this.files.hls_manifest && this.files.hls_manifest.url) ? this.files.hls_manifest.url : "");
+          const mobileMp4 = (this.files.mobile_mp4 && this.files.mobile_mp4.url) ? this.files.mobile_mp4.url : "";
+          const mp4Url = (this.files.mp4 && this.files.mp4.url) ? this.files.mp4.url : "";
+          let src = "";
+          let typ = "";
+          if (isIOS && hlsUrl) { src = hlsUrl; typ = "application/x-mpegURL"; }
+          else if (mobileMp4) { src = mobileMp4; typ = "video/mp4"; }
+          else if (isIOS && hlsUrl) { src = hlsUrl; typ = "application/x-mpegURL"; }
+          else if (mp4Url) { src = mp4Url; typ = "video/mp4"; }
+          else if (hlsUrl) { src = hlsUrl; typ = "application/x-mpegURL"; }
+          if (src) {
             if (vjs) {
-              vjs.src({ src: src, type: "application/x-mpegURL" });
-            } else if (window.Hls && window.Hls.isSupported()) {
-              const hls = new window.Hls();
-              hls.loadSource(src);
-              hls.attachMedia(playerEl);
+              vjs.src({ src: src, type: typ });
             } else {
               playerEl.src = src;
+              playerEl.type = typ;
             }
-          } else if (this.files.mp4 && this.files.mp4.url) {
-            const src = this.files.mp4.url;
-            if (vjs) vjs.src({ src: src, type: "video/mp4" });
-            else playerEl.src = src;
           }
           if (vjs) {
             vjs.on("play", () => { this.playing = true; });
@@ -734,6 +788,19 @@
           const el = document.getElementById("player");
           if (!el) return;
           el.playbackRate = r;
+        } catch (e) {}
+      },
+      async doDelete() {
+        try {
+          if (!confirm("Delete this job and its artifacts? This cannot be undone.")) return;
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId), { method: "DELETE", credentials: "include", headers: { "X-CSRF-Token": csrf } });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            window.showToast((d && d.detail) ? d.detail : ("Delete failed (" + r.status + ")"), "error");
+            return;
+          }
+          window.location = "/ui/dashboard";
         } catch (e) {}
       },
       async loadVoiceMap() {

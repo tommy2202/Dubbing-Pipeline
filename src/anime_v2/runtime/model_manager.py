@@ -210,3 +210,29 @@ class ModelManager:
                 )
 
         logger.info("model_prewarm_done", device=dev)
+
+    def state(self) -> list[dict[str, Any]]:
+        """
+        Return current in-process cache entries (safe for UI).
+        """
+        import time as _time
+
+        now = _time.monotonic()
+        with self._lock:
+            items = list(self._cache.values())
+        out: list[dict[str, Any]] = []
+        for e in items:
+            try:
+                out.append(
+                    {
+                        "kind": str(e.kind),
+                        "model_name": str(e.model_name),
+                        "device": str(e.device),
+                        "refcount": int(e.refcount),
+                        "last_used_s": float(max(0.0, now - float(e.last_used or 0.0))),
+                    }
+                )
+            except Exception:
+                continue
+        out.sort(key=lambda x: (x.get("kind", ""), x.get("model_name", ""), x.get("device", "")))
+        return out

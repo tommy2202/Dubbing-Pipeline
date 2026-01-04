@@ -290,6 +290,30 @@
           Offline-only; does not change outputs. Useful with Review Loop to find segments to edit/lock.
         </div>
       </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">Import subtitles / transcript (optional)</div>
+        <div class="mt-2 text-xs text-slate-500">
+          If provided, the server can skip ASR and/or translation. (Small files only.)
+        </div>
+        <div class="mt-3 grid gap-4 sm:grid-cols-2">
+          <div>
+            <label class="block text-sm text-slate-300" for="srcSrt">Source SRT (skip ASR)</label>
+            <input id="srcSrt" name="src_srt" type="file" accept=".srt,text/plain"
+                   class="mt-1 block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700" />
+          </div>
+          <div>
+            <label class="block text-sm text-slate-300" for="tgtSrt">Target SRT (skip translation)</label>
+            <input id="tgtSrt" name="tgt_srt" type="file" accept=".srt,text/plain"
+                   class="mt-1 block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700" />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="block text-sm text-slate-300" for="trJson">Transcript JSON (advanced)</label>
+            <input id="trJson" name="transcript_json" type="file" accept="application/json,.json"
+                   class="mt-1 block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700" />
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Step 3 -->
@@ -441,6 +465,24 @@
           pg: String(fd.get("pg") || "off"),
           qa: String(fd.get("qa") || "").trim() !== "",
         };
+
+        async function readSmallTextFile(inputId) {
+          const el = document.getElementById(inputId);
+          if (!el || !el.files || !el.files.length) return "";
+          const f = el.files[0];
+          if (f.size > (2 * 1024 * 1024)) throw new Error(inputId + " too large");
+          return await f.text();
+        }
+        try {
+          const srcTxt = await readSmallTextFile("srcSrt");
+          const tgtTxt = await readSmallTextFile("tgtSrt");
+          const jsTxt = await readSmallTextFile("trJson");
+          if (srcTxt) cfg.src_srt_text = srcTxt;
+          if (tgtTxt) cfg.tgt_srt_text = tgtTxt;
+          if (jsTxt) cfg.transcript_json_text = jsTxt;
+        } catch (e) {
+          throw e;
+        }
 
         // 1) init upload
         const initR = await fetch("/api/uploads/init", {

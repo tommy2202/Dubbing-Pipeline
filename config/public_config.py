@@ -359,6 +359,9 @@ class PublicConfig(BaseSettings):
     # runtime model manager / allocator
     prewarm_whisper: str = Field(default="", alias="PREWARM_WHISPER")  # comma-separated models
     prewarm_tts: str = Field(default="", alias="PREWARM_TTS")  # comma-separated models
+    # If enabled, the UI/API may trigger background model downloads/prewarm.
+    # OFF by default to avoid accidental internet dependence.
+    enable_model_downloads: bool = Field(default=False, alias="ENABLE_MODEL_DOWNLOADS")
     model_cache_max: int = Field(default=3, alias="MODEL_CACHE_MAX")
     gpu_util_max: float = Field(default=0.85, alias="GPU_UTIL_MAX")
     gpu_mem_max_ratio: float = Field(default=0.90, alias="GPU_MEM_MAX_RATIO")

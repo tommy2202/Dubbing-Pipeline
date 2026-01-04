@@ -122,7 +122,14 @@ async def ui_dashboard(request: Request) -> HTMLResponse:
 
 @router.get("/partials/jobs_table")
 async def ui_jobs_table(
-    request: Request, status: str | None = None, q: str | None = None, limit: int = 25
+    request: Request,
+    status: str | None = None,
+    q: str | None = None,
+    project: str | None = None,
+    mode: str | None = None,
+    tag: str | None = None,
+    include_archived: int = 0,
+    limit: int = 25,
 ) -> HTMLResponse:
     user = _current_user_optional(request)
     if user is None:
@@ -133,10 +140,41 @@ async def ui_jobs_table(
     # mirror API defaults
     limit_i = max(1, min(200, int(limit)))
     jobs = store.list(limit=1000, state=(status or None))
-    if q:
-        qq = str(q).lower().strip()
-        if qq:
-            jobs = [j for j in jobs if (qq in j.id.lower()) or (qq in (j.video_path or "").lower())]
+    if not bool(int(include_archived or 0)):
+        jobs = [
+            j
+            for j in jobs
+            if not (isinstance(j.runtime, dict) and bool((j.runtime or {}).get("archived")))
+        ]
+    qq = str(q or "").lower().strip()
+    proj_q = str(project or "").strip().lower()
+    mode_q = str(mode or "").strip().lower()
+    tag_q = str(tag or "").strip().lower()
+    if qq or proj_q or mode_q or tag_q:
+        out_jobs = []
+        for j in jobs:
+            rt = j.runtime if isinstance(j.runtime, dict) else {}
+            proj = ""
+            if isinstance(rt, dict):
+                if isinstance(rt.get("project"), dict):
+                    proj = str((rt.get("project") or {}).get("name") or "").strip()
+                if not proj:
+                    proj = str(rt.get("project_name") or "").strip()
+            tags = []
+            if isinstance(rt, dict) and isinstance(rt.get("tags"), list):
+                tags = [str(x).strip().lower() for x in (rt.get("tags") or []) if str(x).strip()]
+            if proj_q and proj_q not in proj.lower():
+                continue
+            if mode_q and mode_q != str(j.mode or "").strip().lower():
+                continue
+            if tag_q and tag_q not in set(tags):
+                continue
+            if qq:
+                hay = " ".join([j.id, str(j.video_path or ""), proj, " ".join(tags)]).lower()
+                if qq not in hay:
+                    continue
+            out_jobs.append(j)
+        jobs = out_jobs
     jobs = jobs[:limit_i]
     # Template expects simple dicts with state as string.
     out: list[dict[str, Any]] = []
@@ -151,9 +189,19 @@ async def ui_jobs_table(
             if not proj:
                 proj = str(rt.get("project_name") or "").strip()
         d["project_name"] = proj
+        d["tags"] = (rt.get("tags") if isinstance(rt, dict) else []) or []
+        d["archived"] = bool((rt.get("archived") if isinstance(rt, dict) else False) or False)
         d["qa_score"] = _qa_score_for_job_dict(d)
         out.append(d)
     return _render(request, "_jobs_table.html", {"jobs": out})
+
+
+@router.get("/models")
+async def ui_models(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    return _render(request, "models.html", {})
 
 
 @router.get("/jobs/{job_id}")

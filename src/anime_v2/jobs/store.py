@@ -70,6 +70,12 @@ class JobStore:
         jobs.sort(key=lambda j: j.created_at, reverse=True)
         return jobs[:limit]
 
+    def delete_job(self, id: str) -> None:
+        if not id:
+            return
+        with self._lock, self._jobs() as db, suppress(Exception):
+            del db[str(id)]
+
     def append_log(self, id: str, text: str) -> None:
         job = self.get(id)
         if job is None:

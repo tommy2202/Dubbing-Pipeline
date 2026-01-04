@@ -893,28 +893,72 @@ class JobQueue:
                     if srt_out.exists() and srt_meta.exists() and stage_is_done(ckpt, "transcribe"):
                         self.store.append_log(job_id, f"[{now_utc()}] transcribe (checkpoint hit)")
                     else:
-                        if sched is None:
-                            run_with_timeout(
-                                "transcribe",
-                                timeout_s=limits.timeout_whisper_s,
-                                fn=transcribe,
-                                kwargs={
-                                    "audio_path": wav,
-                                    "srt_out": srt_out,
-                                    "device": device,
-                                    "model_name": model_name,
-                                    "task": "transcribe",
-                                    "src_lang": job.src_lang,
-                                    "tgt_lang": job.tgt_lang,
-                                    "job_id": job_id,
-                                    "audio_hash": audio_hash,
-                                    "word_timestamps": bool(get_settings().whisper_word_timestamps),
-                                },
-                                cancel_check=_cancel_check_sync,
-                                cancel_exc=JobCanceled(),
-                            )
+                        # Import path: if a source SRT/transcript was provided at submit time, skip ASR.
+                        try:
+                            curj = self.store.get(job_id)
+                            rt_imp = dict((curj.runtime or {}) if curj else runtime)
+                            imp = rt_imp.get("imports") if isinstance(rt_imp.get("imports"), dict) else {}
+                            src_p = str((imp or {}).get("src_srt_path") or "").strip()
+                            js_p = str((imp or {}).get("transcript_json_path") or "").strip()
+                        except Exception:
+                            src_p = ""
+                            js_p = ""
+                        if src_p or js_p:
+                            from anime_v2.utils.io import atomic_copy, read_json, write_json
+
+                            # Prefer explicit src.srt when present.
+                            src_path = Path(src_p) if src_p else None
+                            if src_path is None and js_p:
+                                # Try to derive source SRT from transcript JSON segments.
+                                try:
+                                    tj = read_json(Path(js_p), default={})
+                                    segs = tj.get("segments") if isinstance(tj, dict) else None
+                                    if isinstance(segs, list):
+                                        cues = []
+                                        for seg in segs:
+                                            if not isinstance(seg, dict):
+                                                continue
+                                            st = float(seg.get("start") or 0.0)
+                                            en = float(seg.get("end") or 0.0)
+                                            txt = str(seg.get("source_text") or seg.get("src_text") or seg.get("text") or "")
+                                            if en <= st or not txt.strip():
+                                                continue
+                                            cues.append({"start": st, "end": en, "text": txt})
+                                        if cues:
+                                            _write_srt(cues, srt_out)
+                                except Exception:
+                                    pass
+                            if src_path is not None and src_path.exists():
+                                atomic_copy(src_path, srt_out)
+                            # Persist public copy unless privacy disallows transcript storage.
+                            if not bool(runtime.get("no_store_transcript") or False):
+                                with suppress(Exception):
+                                    atomic_copy(srt_out, srt_public)
+                            # Write a minimal meta file expected by downstream logic.
+                            with suppress(Exception):
+                                write_json(srt_meta, {"imported": True, "source": (src_p or js_p)})
+                            with suppress(Exception):
+                                write_ckpt(
+                                    job_id,
+                                    "transcribe",
+                                    {"srt_out": srt_out, "srt_meta": srt_meta},
+                                    {"work_dir": str(work_dir)},
+                                    ckpt_path=ckpt_path,
+                                )
+                                ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
+                            # Record skip reason
+                            try:
+                                curj2 = self.store.get(job_id)
+                                rt2 = dict((curj2.runtime or {}) if curj2 else runtime)
+                                rt2.setdefault("skipped_stages", [])
+                                if isinstance(rt2["skipped_stages"], list):
+                                    rt2["skipped_stages"].append({"stage": "transcribe", "reason": "imported_transcript"})
+                                self.store.update(job_id, runtime=rt2)
+                            except Exception:
+                                pass
+                            self.store.append_log(job_id, f"[{now_utc()}] transcribe skipped (import)")
                         else:
-                            with sched.phase("transcribe"):
+                            if sched is None:
                                 run_with_timeout(
                                     "transcribe",
                                     timeout_s=limits.timeout_whisper_s,
@@ -934,6 +978,27 @@ class JobQueue:
                                     cancel_check=_cancel_check_sync,
                                     cancel_exc=JobCanceled(),
                                 )
+                            else:
+                                with sched.phase("transcribe"):
+                                    run_with_timeout(
+                                        "transcribe",
+                                        timeout_s=limits.timeout_whisper_s,
+                                        fn=transcribe,
+                                        kwargs={
+                                            "audio_path": wav,
+                                            "srt_out": srt_out,
+                                            "device": device,
+                                            "model_name": model_name,
+                                            "task": "transcribe",
+                                            "src_lang": job.src_lang,
+                                            "tgt_lang": job.tgt_lang,
+                                            "job_id": job_id,
+                                            "audio_hash": audio_hash,
+                                            "word_timestamps": bool(get_settings().whisper_word_timestamps),
+                                        },
+                                        cancel_check=_cancel_check_sync,
+                                        cancel_exc=JobCanceled(),
+                                    )
                         # reflect circuit state into job (only when we actually ran transcribe)
                         try:
                             curj = self.store.get(job_id)
@@ -1303,6 +1368,79 @@ class JobQueue:
                     return out_json
                 except Exception:
                     return None
+
+            # Import target subtitles/transcripts: skip MT and use imported target as subs_srt_path.
+            try:
+                curj = self.store.get(job_id)
+                rt_imp = dict((curj.runtime or {}) if curj else runtime)
+                imp = rt_imp.get("imports") if isinstance(rt_imp.get("imports"), dict) else {}
+                tgt_p = str((imp or {}).get("tgt_srt_path") or "").strip()
+                js_p = str((imp or {}).get("transcript_json_path") or "").strip()
+            except Exception:
+                tgt_p = ""
+                js_p = ""
+            if tgt_p and Path(tgt_p).exists():
+                try:
+                    from anime_v2.utils.io import atomic_copy, write_json
+
+                    atomic_copy(Path(tgt_p), translated_srt)
+                    subs_srt_path = translated_srt
+                    # Minimal translated.json from SRT cues
+                    cues_tgt = _parse_srt_to_cues(translated_srt)
+                    segs = [
+                        {"start": float(c["start"]), "end": float(c["end"]), "speaker": "SPEAKER_01", "text": str(c.get("text") or "")}
+                        for c in cues_tgt
+                        if isinstance(c, dict)
+                    ]
+                    write_json(translated_json, {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "segments": segs})
+                    do_translate = False
+                    try:
+                        rt2 = dict(rt_imp)
+                        rt2.setdefault("skipped_stages", [])
+                        if isinstance(rt2["skipped_stages"], list):
+                            rt2["skipped_stages"].append({"stage": "translate", "reason": "imported_target_srt"})
+                        self.store.update(job_id, runtime=rt2)
+                    except Exception:
+                        pass
+                    self.store.append_log(job_id, f"[{now_utc()}] translate skipped (import target srt)")
+                except Exception as ex:
+                    self.store.append_log(job_id, f"[{now_utc()}] import target srt failed: {ex} (continuing)")
+            elif js_p and Path(js_p).exists():
+                # Best-effort: if transcript JSON contains target text, use it.
+                try:
+                    from anime_v2.utils.io import read_json, write_json
+
+                    tj = read_json(Path(js_p), default={})
+                    segs_in = tj.get("segments") if isinstance(tj, dict) else None
+                    if isinstance(segs_in, list):
+                        cues = []
+                        segs = []
+                        for seg in segs_in:
+                            if not isinstance(seg, dict):
+                                continue
+                            st = float(seg.get("start") or 0.0)
+                            en = float(seg.get("end") or 0.0)
+                            txt = str(seg.get("tgt_text") or seg.get("target_text") or seg.get("text") or "")
+                            if en <= st:
+                                continue
+                            cues.append({"start": st, "end": en, "text": txt})
+                            segs.append({"start": st, "end": en, "speaker": "SPEAKER_01", "text": txt})
+                        if cues:
+                            _write_srt(cues, translated_srt)
+                            write_json(translated_json, {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "segments": segs})
+                            subs_srt_path = translated_srt
+                            do_translate = False
+                            try:
+                                rt2 = dict(rt_imp)
+                                rt2.setdefault("skipped_stages", [])
+                                if isinstance(rt2["skipped_stages"], list):
+                                    rt2["skipped_stages"].append({"stage": "translate", "reason": "imported_transcript_json"})
+                                self.store.update(job_id, runtime=rt2)
+                            except Exception:
+                                pass
+                            self.store.append_log(job_id, f"[{now_utc()}] translate skipped (import transcript json)")
+                except Exception:
+                    pass
 
             if do_translate:
                 self.store.update(job_id, progress=0.62, message="Translating subtitles")

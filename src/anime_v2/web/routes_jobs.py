@@ -70,6 +70,8 @@ _ALLOWED_CONTAINER_TOKENS = {
     "webm",
 }
 
+_MAX_IMPORT_TEXT_BYTES = 2 * 1024 * 1024  # 2MB per imported text file (SRT/JSON)
+
 # Upload session locks (per upload_id) for concurrent chunk writes
 _UPLOAD_LOCKS: dict[str, asyncio.Lock] = {}
 
@@ -606,6 +608,14 @@ def _input_uploads_dir() -> Path:
     return (_input_dir() / "uploads").resolve()
 
 
+def _input_imports_dir() -> Path:
+    """
+    Directory where the web UI/API stores imported subtitles/transcripts.
+    Not served publicly.
+    """
+    return (_input_dir() / "imports").resolve()
+
+
 def _sanitize_video_path(p: str) -> Path:
     if not p or not _SAFE_PATH_RE.match(p):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid video_path")
@@ -934,6 +944,10 @@ async def create_job(
 
     upload_id = ""
     upload_stem = ""
+    import_src_srt_text: str | None = None
+    import_tgt_srt_text: str | None = None
+    import_transcript_json_text: str | None = None
+
     if "application/json" in ctype:
         body = await request.json()
         if not isinstance(body, dict):
@@ -958,6 +972,13 @@ async def create_job(
         director = bool(body.get("director") or False)
         director_strength = float(body.get("director_strength") or director_strength)
         upload_id = str(body.get("upload_id") or "").strip()
+        # Optional imported transcripts (small; allow client to send text to avoid extra upload plumbing).
+        if isinstance(body.get("src_srt_text"), str):
+            import_src_srt_text = str(body.get("src_srt_text") or "")
+        if isinstance(body.get("tgt_srt_text"), str):
+            import_tgt_srt_text = str(body.get("tgt_srt_text") or "")
+        if isinstance(body.get("transcript_json_text"), str):
+            import_transcript_json_text = str(body.get("transcript_json_text") or "")
         if upload_id:
             urec = store.get_upload(upload_id)
             if not urec or not bool(urec.get("completed")):
@@ -1005,6 +1026,31 @@ async def create_job(
         file = form.get("file")
         vp = form.get("video_path")
         upload_id = str(form.get("upload_id") or "").strip()
+        # Optional import files (read as text; cap size).
+        try:
+            srcf = form.get("src_srt")
+            if srcf is not None and hasattr(srcf, "read"):
+                raw = await srcf.read()
+                if raw and len(raw) <= _MAX_IMPORT_TEXT_BYTES:
+                    import_src_srt_text = raw.decode("utf-8", errors="replace")
+        except Exception:
+            import_src_srt_text = None
+        try:
+            tgtf = form.get("tgt_srt")
+            if tgtf is not None and hasattr(tgtf, "read"):
+                raw = await tgtf.read()
+                if raw and len(raw) <= _MAX_IMPORT_TEXT_BYTES:
+                    import_tgt_srt_text = raw.decode("utf-8", errors="replace")
+        except Exception:
+            import_tgt_srt_text = None
+        try:
+            jsf = form.get("transcript_json")
+            if jsf is not None and hasattr(jsf, "read"):
+                raw = await jsf.read()
+                if raw and len(raw) <= _MAX_IMPORT_TEXT_BYTES:
+                    import_transcript_json_text = raw.decode("utf-8", errors="replace")
+        except Exception:
+            import_transcript_json_text = None
         if file is None and vp is None and not upload_id:
             raise HTTPException(status_code=400, detail="Provide file, upload_id, or video_path")
 
@@ -1210,6 +1256,44 @@ async def create_job(
     except Exception:
         pass
     job.runtime = rt
+
+    # External transcript/subtitle imports (optional):
+    # Store under INPUT_DIR/imports/<job_id>/... and record paths in runtime.
+    imports: dict[str, str] = {}
+    imp_dir = (_input_imports_dir() / jid).resolve()
+    imp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if import_src_srt_text:
+            if len(import_src_srt_text.encode("utf-8", errors="ignore")) > _MAX_IMPORT_TEXT_BYTES:
+                raise HTTPException(status_code=400, detail="src_srt_text too large")
+            p = (imp_dir / "src.srt").resolve()
+            p.write_text(import_src_srt_text, encoding="utf-8")
+            imports["src_srt_path"] = str(p)
+        if import_tgt_srt_text:
+            if len(import_tgt_srt_text.encode("utf-8", errors="ignore")) > _MAX_IMPORT_TEXT_BYTES:
+                raise HTTPException(status_code=400, detail="tgt_srt_text too large")
+            p = (imp_dir / "tgt.srt").resolve()
+            p.write_text(import_tgt_srt_text, encoding="utf-8")
+            imports["tgt_srt_path"] = str(p)
+        if import_transcript_json_text:
+            if len(import_transcript_json_text.encode("utf-8", errors="ignore")) > _MAX_IMPORT_TEXT_BYTES:
+                raise HTTPException(status_code=400, detail="transcript_json_text too large")
+            p = (imp_dir / "transcript.json").resolve()
+            p.write_text(import_transcript_json_text, encoding="utf-8")
+            imports["transcript_json_path"] = str(p)
+    except HTTPException:
+        raise
+    except Exception:
+        # best-effort; do not block job creation for import IO errors
+        imports = {}
+    if imports:
+        rt2 = dict(job.runtime or {})
+        rt2.setdefault("imports", {})
+        if isinstance(rt2.get("imports"), dict):
+            rt2["imports"].update(imports)
+        else:
+            rt2["imports"] = dict(imports)
+        job.runtime = rt2
     store.put(job)
     audit_event(
         "job.submit",
@@ -1519,6 +1603,10 @@ async def list_jobs(
     state: str | None = None,
     status: str | None = None,
     q: str | None = None,
+    project: str | None = None,
+    mode: str | None = None,
+    tag: str | None = None,
+    include_archived: int = 0,
     limit: int = 25,
     offset: int = 0,
     _: Identity = Depends(require_scope("read:job")),
@@ -1528,16 +1616,60 @@ async def list_jobs(
     limit_i = max(1, min(200, int(limit)))
     offset_i = max(0, int(offset))
     jobs_all = store.list(limit=1000, state=st)
-    if q:
-        qq = str(q).lower().strip()
-        if qq:
-            jobs_all = [
-                j for j in jobs_all if (qq in j.id.lower()) or (qq in (j.video_path or "").lower())
-            ]
+    # Default: hide archived unless explicitly included.
+    if not bool(int(include_archived or 0)):
+        jobs_all = [
+            j
+            for j in jobs_all
+            if not (isinstance(j.runtime, dict) and bool((j.runtime or {}).get("archived")))
+        ]
+
+    proj_q = str(project or "").strip().lower()
+    mode_q = str(mode or "").strip().lower()
+    tag_q = str(tag or "").strip().lower()
+    text_q = str(q or "").lower().strip()
+    if proj_q or mode_q or tag_q or text_q:
+        out2: list[Job] = []
+        for j in jobs_all:
+            rt = j.runtime if isinstance(j.runtime, dict) else {}
+            proj = ""
+            if isinstance(rt, dict):
+                if isinstance(rt.get("project"), dict):
+                    proj = str((rt.get("project") or {}).get("name") or "").strip()
+                if not proj:
+                    proj = str(rt.get("project_name") or "").strip()
+            tags = []
+            if isinstance(rt, dict):
+                t = rt.get("tags")
+                if isinstance(t, list):
+                    tags = [str(x).strip().lower() for x in t if str(x).strip()]
+            if proj_q and proj_q not in proj.lower():
+                continue
+            if mode_q and mode_q != str(j.mode or "").strip().lower():
+                continue
+            if tag_q and tag_q not in set(tags):
+                continue
+            if text_q:
+                hay = " ".join(
+                    [
+                        str(j.id or ""),
+                        str(j.video_path or ""),
+                        proj,
+                        " ".join(tags),
+                    ]
+                ).lower()
+                if text_q not in hay:
+                    continue
+            out2.append(j)
+        jobs_all = out2
     total = len(jobs_all)
     jobs = jobs_all[offset_i : offset_i + limit_i]
     out = []
     for j in jobs:
+        rt = j.runtime if isinstance(j.runtime, dict) else {}
+        tags = []
+        if isinstance(rt, dict) and isinstance(rt.get("tags"), list):
+            tags = [str(x).strip() for x in (rt.get("tags") or []) if str(x).strip()]
         out.append(
             {
                 "id": j.id,
@@ -1553,6 +1685,7 @@ async def list_jobs(
                 "tgt_lang": j.tgt_lang,
                 "device": j.device,
                 "runtime": j.runtime,
+                "tags": tags,
             }
         )
     next_offset = offset_i + limit_i
@@ -1563,6 +1696,98 @@ async def list_jobs(
         "total": total,
         "next_offset": (next_offset if next_offset < total else None),
     }
+
+
+@router.put("/api/jobs/{id}/tags")
+async def set_job_tags(
+    request: Request, id: str, ident: Identity = Depends(require_role(Role.operator))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    body = await request.json()
+    tags_in = body.get("tags") if isinstance(body, dict) else None
+    if not isinstance(tags_in, list):
+        raise HTTPException(status_code=400, detail="tags must be a list")
+    tags: list[str] = []
+    for t in tags_in[:20]:
+        s = str(t).strip()
+        if not s:
+            continue
+        if len(s) > 32:
+            s = s[:32]
+        tags.append(s)
+    rt = dict(job.runtime or {})
+    rt["tags"] = tags
+    store.update(id, runtime=rt)
+    audit_event("job.tags", request=request, user_id=ident.user.id, meta={"job_id": id, "count": len(tags)})
+    return {"ok": True, "tags": tags}
+
+
+@router.post("/api/jobs/{id}/archive")
+async def archive_job(
+    request: Request, id: str, ident: Identity = Depends(require_role(Role.operator))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    rt = dict(job.runtime or {})
+    rt["archived"] = True
+    rt["archived_at"] = now_utc()
+    store.update(id, runtime=rt)
+    audit_event("job.archive", request=request, user_id=ident.user.id, meta={"job_id": id})
+    return {"ok": True}
+
+
+@router.post("/api/jobs/{id}/unarchive")
+async def unarchive_job(
+    request: Request, id: str, ident: Identity = Depends(require_role(Role.operator))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    rt = dict(job.runtime or {})
+    rt["archived"] = False
+    rt["archived_at"] = None
+    store.update(id, runtime=rt)
+    audit_event("job.unarchive", request=request, user_id=ident.user.id, meta={"job_id": id})
+    return {"ok": True}
+
+
+@router.delete("/api/jobs/{id}")
+async def delete_job_admin(
+    request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    # Only allow deleting inside OUTPUT_ROOT.
+    out_root = _output_root()
+    base_dir = _job_base_dir(job)
+    jobs_ptr = (out_root / "jobs" / id).resolve()
+    for p in [base_dir, jobs_ptr]:
+        try:
+            p.resolve().relative_to(out_root)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Refusing to delete outside output dir") from None
+    # Best-effort cancel first
+    try:
+        q = _get_queue(request)
+        await q.kill(id, reason="Deleted by admin")
+    except Exception:
+        pass
+    with suppress(Exception):
+        import shutil
+
+        shutil.rmtree(base_dir, ignore_errors=True)
+        shutil.rmtree(jobs_ptr, ignore_errors=True)
+    store.delete_job(id)
+    audit_event("job.delete", request=request, user_id=ident.user.id, meta={"job_id": id})
+    return {"ok": True}
 
 
 @router.get("/api/project-profiles")
