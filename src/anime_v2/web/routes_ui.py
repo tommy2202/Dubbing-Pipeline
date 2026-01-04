@@ -287,6 +287,9 @@ async def ui_settings(request: Request) -> HTMLResponse:
                     "budget_tts_sec": int(s.budget_tts_sec),
                     "budget_mux_sec": int(s.budget_mux_sec),
                 },
+                "notifications": {
+                    "ntfy_enabled": bool(getattr(s, "ntfy_enabled", False)),
+                },
             },
         },
     )

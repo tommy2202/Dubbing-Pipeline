@@ -118,12 +118,14 @@ python3 scripts/verify_runtime.py
 python3 scripts/polish_gate.py
 python3 scripts/security_smoke.py
 python3 scripts/mobile_gate.py
+python3 scripts/security_mobile_gate.py
 ```
 
 Notes:
 - `scripts/verify_env.py` reports **required vs optional** dependencies and which features are enabled.
 - `scripts/polish_gate.py` is the “release polish” one-command check (imports + env + synthetic feature tests + stub/dupe scan).
 - `scripts/mobile_gate.py` is the **end-to-end mobile/remote readiness** suite (synthetic media, no real anime required).
+- `scripts/security_mobile_gate.py` runs a **combined security + mobile** verification set (auth incl QR, upload safety, job lifecycle, playback variants, optional ntfy, and secret-leak scan).
 
 Mobile guide: `docs/mobile_update.md`.
 

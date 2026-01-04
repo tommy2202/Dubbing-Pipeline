@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
-import re
 import threading
 import time
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,7 +12,6 @@ from anime_v2.api.deps import Identity, current_identity, require_role
 from anime_v2.api.models import Role
 from anime_v2.api.security import verify_csrf
 from anime_v2.config import get_settings
-from anime_v2.utils.net import egress_guard
 
 
 def _settings_path() -> Path:
@@ -42,10 +38,6 @@ def _default_user_settings() -> dict[str, Any]:
             "tts_lang": str(s.tts_lang or "en"),
             "tts_speaker": str(s.tts_speaker or "default"),
         },
-        "notifications": {
-            "email": "",
-            "discord_webhook": "",
-        },
         "updated_at": _now_ts(),
     }
 
@@ -71,26 +63,12 @@ def _validate_lang(v: str) -> str:
     return vv
 
 
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-def _validate_email(v: str) -> str:
-    vv = (v or "").strip()
-    if not vv:
-        return ""
-    if len(vv) > 320 or not _EMAIL_RE.match(vv):
-        raise HTTPException(status_code=400, detail="Invalid email")
-    return vv
-
-
-def _validate_discord_webhook(v: str) -> str:
-    vv = (v or "").strip()
-    if not vv:
-        return ""
-    # Basic safety: require https and a reasonable length; do not over-validate.
-    if not (vv.startswith("https://") and len(vv) < 2048):
-        raise HTTPException(status_code=400, detail="Invalid Discord webhook URL")
-    return vv
+#
+# NOTE (hardening sweep):
+# User-level outbound notification channels (email/Discord webhooks) are intentionally
+# not supported in the hardened v2 server. Job-finish notifications are handled by the
+# optional, private self-hosted `ntfy` integration (see `anime_v2.notify` + docs).
+#
 
 
 @dataclass
@@ -154,7 +132,6 @@ class UserSettingsStore:
 
         # Validate + normalize patch
         out_defaults: dict[str, Any] = {}
-        out_notif: dict[str, Any] = {}
         if isinstance(patch.get("defaults"), dict):
             d = patch["defaults"]
             if "mode" in d:
@@ -170,15 +147,6 @@ class UserSettingsStore:
             if "tts_speaker" in d:
                 out_defaults["tts_speaker"] = str(d.get("tts_speaker") or "").strip() or "default"
 
-        if isinstance(patch.get("notifications"), dict):
-            n = patch["notifications"]
-            if "email" in n:
-                out_notif["email"] = _validate_email(str(n.get("email") or ""))
-            if "discord_webhook" in n:
-                out_notif["discord_webhook"] = _validate_discord_webhook(
-                    str(n.get("discord_webhook") or "")
-                )
-
         with self._lock:
             all_data = self._load_all()
             users = all_data.get("users")
@@ -189,15 +157,10 @@ class UserSettingsStore:
             if not isinstance(cur, dict):
                 cur = {}
             cur.setdefault("defaults", {})
-            cur.setdefault("notifications", {})
             if out_defaults:
                 if not isinstance(cur.get("defaults"), dict):
                     cur["defaults"] = {}
                 cur["defaults"].update(out_defaults)
-            if out_notif:
-                if not isinstance(cur.get("notifications"), dict):
-                    cur["notifications"] = {}
-                cur["notifications"].update(out_notif)
             cur["updated_at"] = _now_ts()
             users[uid] = cur
             self._save_all(all_data)
@@ -237,7 +200,6 @@ async def get_settings_me(
     s = get_settings()
     return {
         "defaults": user_cfg.get("defaults", {}),
-        "notifications": user_cfg.get("notifications", {}),
         "system": {
             "limits": {
                 "max_concurrency_global": int(s.max_concurrency_global),
@@ -249,6 +211,9 @@ async def get_settings_me(
                 "budget_transcribe_sec": int(s.budget_transcribe_sec),
                 "budget_tts_sec": int(s.budget_tts_sec),
                 "budget_mux_sec": int(s.budget_mux_sec),
+            },
+            "notifications": {
+                "ntfy_enabled": bool(getattr(s, "ntfy_enabled", False)),
             },
         },
         "updated_at": user_cfg.get("updated_at"),
@@ -264,46 +229,8 @@ async def put_settings_me(
     updated = store.update_user(ident.user.id, body if isinstance(body, dict) else {})
     return {
         "defaults": updated.get("defaults", {}),
-        "notifications": updated.get("notifications", {}),
         "updated_at": updated.get("updated_at"),
     }
-
-
-@router.post("/api/settings/notifications/test")
-async def test_notifications(
-    request: Request, ident: Identity = Depends(require_role(Role.admin))
-) -> dict[str, Any]:
-    store = _get_user_settings_store(request)
-    cfg = store.get_user(ident.user.id)
-    webhook = ""
-    try:
-        notif = cfg.get("notifications") if isinstance(cfg.get("notifications"), dict) else {}
-        webhook = str((notif or {}).get("discord_webhook") or "").strip()
-    except Exception:
-        webhook = ""
-    if not webhook:
-        raise HTTPException(status_code=400, detail="No Discord webhook configured")
-
-    # Best-effort POST. Will be blocked if OFFLINE_MODE or ALLOW_EGRESS=0.
-    with egress_guard():
-        payload = json.dumps({"content": "anime_v2: test notification"}).encode("utf-8")
-        req = urllib.request.Request(
-            webhook,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                code = int(getattr(resp, "status", 0) or 0)
-                if code and code >= 400:
-                    raise HTTPException(status_code=502, detail=f"Webhook failed ({code})")
-        except HTTPException:
-            raise
-        except Exception as ex:
-            raise HTTPException(status_code=502, detail=f"Webhook failed: {ex}") from ex
-
-    return {"ok": True}
 
 
 @router.get("/api/admin/users/{user_id}/settings")
@@ -315,7 +242,6 @@ async def admin_get_user_settings(
     return {
         "user_id": str(user_id),
         "defaults": cfg.get("defaults", {}),
-        "notifications": cfg.get("notifications", {}),
         "updated_at": cfg.get("updated_at"),
     }
 
@@ -330,6 +256,5 @@ async def admin_put_user_settings(
     return {
         "user_id": str(user_id),
         "defaults": updated.get("defaults", {}),
-        "notifications": updated.get("notifications", {}),
         "updated_at": updated.get("updated_at"),
     }

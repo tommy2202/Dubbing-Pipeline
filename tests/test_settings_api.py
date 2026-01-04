@@ -45,7 +45,6 @@ def test_user_settings_get_put_and_upload_defaults(tmp_path: Path) -> None:
                     "tts_lang": "en",
                     "tts_speaker": "default",
                 },
-                "notifications": {"discord_webhook": ""},
             },
         )
         assert r1.status_code == 200
@@ -67,7 +66,7 @@ def test_user_settings_get_put_and_upload_defaults(tmp_path: Path) -> None:
         assert "Settings" in html2
 
 
-def test_discord_webhook_test_requires_configured_url(tmp_path: Path) -> None:
+def test_settings_page_shows_ntfy_flag(tmp_path: Path) -> None:
     os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
     os.environ["ANIME_V2_SETTINGS_PATH"] = str(tmp_path / "settings.json")
     os.environ["APP_ROOT"] = "/workspace"
@@ -78,5 +77,5 @@ def test_discord_webhook_test_requires_configured_url(tmp_path: Path) -> None:
 
     with TestClient(app) as c:
         headers = _login_admin(c)
-        r = c.post("/api/settings/notifications/test", headers=headers)
-        assert r.status_code == 400
+        html = c.get("/ui/settings", headers=headers).text
+        assert "NTFY_ENABLED" in html
