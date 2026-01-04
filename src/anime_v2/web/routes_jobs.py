@@ -1354,6 +1354,37 @@ async def get_job_overrides(
         }
 
 
+@router.get("/api/jobs/{id}/overrides/music/effective")
+async def get_job_music_regions_effective(
+    request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    """
+    Mobile-friendly endpoint for music regions overrides UI.
+    Returns the *effective* regions after applying overrides to base detection output.
+    """
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    from anime_v2.review.overrides import effective_music_regions_for_job, load_overrides
+
+    regions, out_path = effective_music_regions_for_job(base_dir)
+    ov = load_overrides(base_dir)
+    mro = ov.get("music_regions_overrides") if isinstance(ov, dict) else {}
+    return {
+        "version": 1,
+        "job_id": id,
+        "regions": regions,
+        "effective_path": str(out_path),
+        "overrides_counts": {
+            "adds": len(mro.get("adds") or []) if isinstance(mro, dict) else 0,
+            "removes": len(mro.get("removes") or []) if isinstance(mro, dict) else 0,
+            "edits": len(mro.get("edits") or []) if isinstance(mro, dict) else 0,
+        },
+    }
+
+
 @router.put("/api/jobs/{id}/overrides")
 async def put_job_overrides(
     request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
@@ -2025,6 +2056,150 @@ async def get_job_review_segments(
     from anime_v2.review.state import load_state
 
     return load_state(base_dir)
+
+
+def _rewrite_helper_formal(text: str) -> str:
+    """
+    Deterministic "more formal" rewrite (best-effort, English-focused).
+    """
+    t = " ".join(str(text or "").split()).strip()
+    if not t:
+        return ""
+    # Expand common contractions
+    repls = [
+        (r"(?i)\bcan't\b", "cannot"),
+        (r"(?i)\bwon't\b", "will not"),
+        (r"(?i)\bdon't\b", "do not"),
+        (r"(?i)\bdoesn't\b", "does not"),
+        (r"(?i)\bdidn't\b", "did not"),
+        (r"(?i)\bisn't\b", "is not"),
+        (r"(?i)\baren't\b", "are not"),
+        (r"(?i)\bwasn't\b", "was not"),
+        (r"(?i)\bweren't\b", "were not"),
+        (r"(?i)\bit's\b", "it is"),
+        (r"(?i)\bthat's\b", "that is"),
+        (r"(?i)\bthere's\b", "there is"),
+        (r"(?i)\bI'm\b", "I am"),
+        (r"(?i)\bI've\b", "I have"),
+        (r"(?i)\bI'll\b", "I will"),
+        (r"(?i)\bwe're\b", "we are"),
+        (r"(?i)\bthey're\b", "they are"),
+        (r"(?i)\byou're\b", "you are"),
+    ]
+    for pat, rep in repls:
+        t = re.sub(pat, rep, t)
+    return t.strip()
+
+
+def _rewrite_helper_reduce_slang(text: str) -> str:
+    """
+    Deterministic slang reduction (best-effort, English-focused).
+    """
+    t = " ".join(str(text or "").split()).strip()
+    if not t:
+        return ""
+    slang = [
+        (r"(?i)\bgonna\b", "going to"),
+        (r"(?i)\bwanna\b", "want to"),
+        (r"(?i)\bgotta\b", "have to"),
+        (r"(?i)\bkinda\b", "somewhat"),
+        (r"(?i)\bsorta\b", "somewhat"),
+        (r"(?i)\bain't\b", "is not"),
+        (r"(?i)\by'all\b", "you all"),
+        (r"(?i)\bya\b", "you"),
+    ]
+    for pat, rep in slang:
+        t = re.sub(pat, rep, t)
+    return t.strip()
+
+
+@router.post("/api/jobs/{id}/review/segments/{segment_id}/helper")
+async def post_job_review_helper(
+    request: Request,
+    id: str,
+    segment_id: int,
+    _: Identity = Depends(require_scope("submit:job")),
+) -> dict[str, Any]:
+    """
+    Quick-edit helpers for mobile review loop.
+
+    Body JSON:
+      - kind: shorten10|formal|reduce_slang|apply_pg
+      - text: (optional) current text
+    """
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    kind = str(body.get("kind") or "").strip().lower()
+    if kind not in {"shorten10", "formal", "reduce_slang", "apply_pg"}:
+        raise HTTPException(status_code=400, detail="Invalid kind")
+
+    text = str(body.get("text") or "").strip()
+    if not text:
+        # fall back to current chosen_text
+        with suppress(Exception):
+            from anime_v2.review.state import load_state, find_segment
+
+            st = load_state(base_dir)
+            seg = find_segment(st, int(segment_id))
+            if isinstance(seg, dict):
+                text = str(seg.get("chosen_text") or "").strip()
+
+    if not text:
+        return {"ok": True, "kind": kind, "text": ""}
+
+    s = get_settings()
+    out = text
+    provider_used = "heuristic"
+
+    if kind == "apply_pg":
+        from anime_v2.text.pg_filter import apply_pg_filter, built_in_policy
+
+        rt = job.runtime if isinstance(job.runtime, dict) else {}
+        pg = str((rt or {}).get("pg") or "pg").strip().lower()
+        policy = built_in_policy("pg" if pg in {"pg", "pg13"} else "pg")
+        out, _triggers = apply_pg_filter(text, policy)
+    else:
+        # deterministic pre-pass for style helpers
+        if kind == "formal":
+            out = _rewrite_helper_formal(text)
+        elif kind == "reduce_slang":
+            out = _rewrite_helper_reduce_slang(text)
+
+        # "shorten10" and the optional offline LLM use the existing rewrite provider machinery.
+        from anime_v2.timing.fit_text import estimate_speaking_seconds
+        from anime_v2.timing.rewrite_provider import fit_with_rewrite_provider
+
+        est = max(0.1, float(estimate_speaking_seconds(out, wps=float(s.timing_wps))))
+        target_s = est * (0.90 if kind == "shorten10" else 1.0)
+        fitted, _stats, attempt = fit_with_rewrite_provider(
+            provider_name=str(s.rewrite_provider),
+            endpoint=str(s.rewrite_endpoint) if getattr(s, "rewrite_endpoint", None) else None,
+            model_path=(s.rewrite_model if getattr(s, "rewrite_model", None) else None),
+            strict=bool(getattr(s, "rewrite_strict", True)),
+            text=out,
+            target_seconds=float(target_s),
+            tolerance=float(getattr(s, "timing_tolerance", 0.10)),
+            wps=float(getattr(s, "timing_wps", 2.7)),
+            constraints={},
+            context={"context_hint": f"helper={kind}"},
+        )
+        out = str(fitted or "").strip()
+        provider_used = str(attempt.provider_used)
+
+    with suppress(Exception):
+        audit_event(
+            "review.helper",
+            request=request,
+            user_id=_.user.id,
+            meta={"job_id": id, "segment_id": int(segment_id), "kind": kind, "provider": provider_used},
+        )
+    return {"ok": True, "kind": kind, "provider_used": provider_used, "text": out}
 
 
 @router.post("/api/jobs/{id}/review/segments/{segment_id}/edit")

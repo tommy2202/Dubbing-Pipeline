@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -10,6 +12,7 @@ from anime_v2.api.deps import current_identity
 from anime_v2.api.routes_settings import UserSettingsStore
 from anime_v2.api.security import issue_csrf_token
 from anime_v2.config import get_settings
+from anime_v2.utils.io import read_json
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
@@ -53,6 +56,42 @@ def _render(request: Request, template: str, ctx: dict[str, Any]) -> HTMLRespons
     resp = templates.TemplateResponse(request, template, context)
     _with_csrf_cookie(resp, csrf)
     return resp
+
+
+def _job_base_dir_from_dict(job: dict[str, Any]) -> Path:
+    """
+    Mirror routes_jobs._job_base_dir without importing it (avoid circular imports).
+    """
+    out_root = Path(get_settings().output_dir).resolve()
+    out_mkv = str(job.get("output_mkv") or "").strip()
+    if out_mkv:
+        with suppress(Exception):
+            p = Path(out_mkv)
+            if p.parent.exists():
+                return p.parent.resolve()
+    vp = str(job.get("video_path") or "").strip()
+    stem = Path(vp).stem if vp else str(job.get("id") or "job")
+    return (out_root / stem).resolve()
+
+
+def _qa_score_for_job_dict(job: dict[str, Any]) -> float | None:
+    """
+    Best-effort read of Output/<job>/qa/summary.json score for list cards.
+    """
+    try:
+        base_dir = _job_base_dir_from_dict(job)
+        p = (base_dir / "qa" / "summary.json").resolve()
+        if not p.exists():
+            return None
+        data = read_json(p, default=None)
+        if not isinstance(data, dict):
+            return None
+        score = data.get("score")
+        if score is None:
+            return None
+        return float(score)
+    except Exception:
+        return None
 
 
 def _user_settings_store(request: Request) -> UserSettingsStore | None:
@@ -100,7 +139,21 @@ async def ui_jobs_table(
             jobs = [j for j in jobs if (qq in j.id.lower()) or (qq in (j.video_path or "").lower())]
     jobs = jobs[:limit_i]
     # Template expects simple dicts with state as string.
-    return _render(request, "_jobs_table.html", {"jobs": [j.to_dict() for j in jobs]})
+    out: list[dict[str, Any]] = []
+    for j in jobs:
+        d = j.to_dict()
+        # mobile cards want a couple "at a glance" fields
+        rt = d.get("runtime") if isinstance(d.get("runtime"), dict) else {}
+        proj = ""
+        if isinstance(rt, dict):
+            if isinstance(rt.get("project"), dict):
+                proj = str((rt.get("project") or {}).get("name") or "").strip()
+            if not proj:
+                proj = str(rt.get("project_name") or "").strip()
+        d["project_name"] = proj
+        d["qa_score"] = _qa_score_for_job_dict(d)
+        out.append(d)
+    return _render(request, "_jobs_table.html", {"jobs": out})
 
 
 @router.get("/jobs/{job_id}")

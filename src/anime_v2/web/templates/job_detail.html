@@ -126,11 +126,13 @@
               <div class="mt-2 space-y-2">
                 <template x-for="it in qaSummary.top_issues" :key="(it.segment_id||'') + ':' + (it.check_id||'')">
                   <div class="rounded border border-slate-800 bg-slate-950/30 p-3 text-sm">
-                    <div class="text-slate-200">
+                    <div class="text-slate-200 flex flex-wrap items-center gap-2">
                       <span class="text-slate-500">seg</span>
                       <span x-text="it.segment_id"></span>
                       <span class="text-slate-500">·</span>
-                      <span class="text-slate-300" x-text="it.severity"></span>
+                      <span class="rounded border px-2 py-0.5 text-xs"
+                            :class="qaBadgeClass(it.severity)"
+                            x-text="String(it.severity || '').toUpperCase()"></span>
                       <span class="text-slate-500">·</span>
                       <code class="text-slate-300" x-text="it.check_id"></code>
                     </div>
@@ -138,7 +140,7 @@
                     <div class="mt-1 text-xs text-slate-500" x-text="'Suggested: ' + (it.suggested_action || '')"></div>
                     <div class="mt-2">
                       <a class="inline-flex items-center rounded bg-emerald-700/30 hover:bg-emerald-700/40 border border-emerald-700/60 px-3 py-2 text-xs text-emerald-200"
-                         :href="('/ui/jobs/' + encodeURIComponent(jobId) + '?tab=transcript&seg=' + encodeURIComponent(it.segment_id))">
+                         :href="('/ui/jobs/' + encodeURIComponent(jobId) + '?tab=review&seg=' + encodeURIComponent(it.segment_id))">
                         Fix
                       </a>
                     </div>
@@ -155,86 +157,261 @@
     </div>
   </div>
 
-  <!-- Transcript -->
-  <div class="mt-4" x-show="activeTab==='transcript'" x-cloak>
-    {% include "partials/transcript_editor.html" %}
+  <!-- Review/Edit -->
+  <div class="mt-4" x-show="activeTab==='review'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-sm text-slate-300">Review / Edit</div>
+          <div class="mt-1 text-xs text-slate-500">Tap “Fix” from QA to jump here.</div>
+        </div>
+        <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+                @click="loadReview()">Refresh</button>
+      </div>
+
+      <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="reviewError" x-cloak x-text="reviewError"></div>
+
+      <template x-if="reviewState && Array.isArray(reviewState.segments) && reviewState.segments.length">
+        <div class="mt-4 space-y-3">
+          <template x-for="seg in reviewState.segments" :key="seg.segment_id">
+            <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3"
+                 :id="'seg-' + String(seg.segment_id)"
+                 :class="(focusSeg && Number(seg.segment_id)===Number(focusSeg)) ? 'ring-2 ring-emerald-600/70' : ''">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="text-xs font-mono text-slate-400">
+                  #<span x-text="seg.segment_id"></span>
+                  <span class="ml-2" x-text="Number(seg.start||0).toFixed(2)"></span> → <span x-text="Number(seg.end||0).toFixed(2)"></span>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 text-xs">
+                  <span class="rounded bg-slate-900/60 border border-slate-800 px-2 py-1 text-slate-200"
+                        x-text="seg.status || 'pending'"></span>
+                  <span class="rounded bg-slate-900/60 border border-slate-800 px-2 py-1 text-slate-200"
+                        x-text="seg.speaker || ''"></span>
+                </div>
+              </div>
+
+              <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                <div>
+                  <div class="text-xs text-slate-500">Source</div>
+                  <div class="mt-1 whitespace-pre-wrap rounded bg-black/20 border border-slate-900 p-2 text-sm text-slate-300"
+                       x-text="seg.source_text || ''"></div>
+                </div>
+                <div>
+                  <div class="text-xs text-slate-500">Target (editable)</div>
+                  <textarea class="mt-1 w-full min-h-[96px] rounded bg-slate-950 border border-slate-800 p-3 text-sm text-slate-100 {% if user and user.role and user.role.value == 'viewer' %}opacity-80{% endif %}"
+                            x-model="seg.chosen_text"
+                            :aria-label="`Review text for segment ${seg.segment_id}`"
+                            {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}></textarea>
+                </div>
+              </div>
+
+              <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <div class="text-xs text-slate-500">Forced speaker (override)</div>
+                  <select class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm text-slate-100 {% if user and user.role and user.role.value == 'viewer' %}opacity-80{% endif %}"
+                          x-model="seg._speaker_override"
+                          @change="setSpeakerOverride(seg.segment_id, seg._speaker_override)"
+                          {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    <option value="">(auto)</option>
+                    <template x-for="opt in speakerOptions" :key="opt.id">
+                      <option :value="opt.id" x-text="opt.label"></option>
+                    </template>
+                  </select>
+                </div>
+                <div>
+                  <div class="text-xs text-slate-500">Preview</div>
+                  <audio class="mt-2 w-full" controls preload="none"
+                         :src="('/api/jobs/' + encodeURIComponent(jobId) + '/review/segments/' + encodeURIComponent(seg.segment_id) + '/audio')"></audio>
+                </div>
+              </div>
+
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                        @click="reviewSave(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                  Save text
+                </button>
+                <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                        @click="reviewRegen(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                  Regen
+                </button>
+                <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                        @click="reviewToggleLock(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                  <span x-text="String(seg.status||'')==='locked' ? 'Unlock' : 'Lock'"></span>
+                </button>
+
+                <div class="ml-auto flex flex-wrap items-center gap-2">
+                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="applyHelper(seg, 'shorten10')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    Shorten 10%
+                  </button>
+                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="applyHelper(seg, 'formal')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    More formal
+                  </button>
+                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="applyHelper(seg, 'reduce_slang')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    Reduce slang
+                  </button>
+                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="applyHelper(seg, 'apply_pg')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    Apply PG
+                  </button>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <template x-if="reviewState && (!reviewState.segments || !reviewState.segments.length)">
+        <div class="mt-3 text-sm text-slate-500">No review segments yet (run the pipeline first).</div>
+      </template>
+
+      <div class="mt-6">
+        <details class="rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+          <summary class="cursor-pointer text-sm text-slate-200">Advanced: transcript editor (bulk edits)</summary>
+          <div class="mt-4">
+            {% include "partials/transcript_editor.html" %}
+          </div>
+        </details>
+      </div>
+    </div>
   </div>
 
-  <!-- Voice Map -->
-  <div class="mt-4" x-show="activeTab==='voice'" x-cloak>
+  <!-- Overrides -->
+  <div class="mt-4" x-show="activeTab==='overrides'" x-cloak>
     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-      <div class="flex items-center justify-between gap-3">
-        <div class="text-sm text-slate-300">Voice Map</div>
-        <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
-                @click="saveVoiceMap()" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
-          Save Mapping
-        </button>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-sm text-slate-300">Overrides</div>
+          <div class="mt-1 text-xs text-slate-500">Music regions and speaker overrides.</div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+                  @click="loadOverrides()">Refresh</button>
+          <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                  @click="saveOverrides()" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+            Save overrides
+          </button>
+        </div>
       </div>
-      <div class="mt-3 text-xs text-slate-500">Persists to the job record; used for future synth (best-effort).</div>
 
-      <div class="mt-4 overflow-x-auto">
-        <table class="min-w-full text-sm">
-          <thead class="text-xs text-slate-500">
-            <tr>
-              <th class="text-left py-2 pr-3">character_id</th>
-              <th class="text-left py-2 pr-3">label</th>
-              <th class="text-left py-2 pr-3">strategy</th>
-              <th class="text-left py-2 pr-3">tts_speaker</th>
-              <th class="text-left py-2 pr-3">tts_speaker_wav</th>
-              <th class="text-left py-2 pr-3">language</th>
-            </tr>
-          </thead>
-          <tbody>
-            <template x-for="(row, idx) in voiceItems" :key="idx">
-              <tr class="border-t border-slate-900">
-                <td class="py-2 pr-3">
-                  <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
-                         x-model="row.character_id" placeholder="SPEAKER_01" />
-                </td>
-                <td class="py-2 pr-3">
-                  <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
-                         x-model="row.label" placeholder="Alice" />
-                </td>
-                <td class="py-2 pr-3">
-                  <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
-                          x-model="row.speaker_strategy">
-                    <option value="zero-shot">zero-shot</option>
-                    <option value="preset">preset</option>
-                  </select>
-                </td>
-                <td class="py-2 pr-3">
-                  <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
-                         x-model="row.tts_speaker" :disabled="row.speaker_strategy!=='preset'" placeholder="default" />
-                </td>
-                <td class="py-2 pr-3">
-                  <div class="text-xs text-slate-400" x-text="row.tts_speaker_wav || ''"></div>
-                </td>
-                <td class="py-2 pr-3">
-                  <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
-                          x-model="row.language">
-                    <option value="en">en</option>
-                    <option value="ja">ja</option>
-                    <option value="auto">auto</option>
-                  </select>
-                </td>
-              </tr>
+      <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="overridesError" x-cloak x-text="overridesError"></div>
+
+      <div class="mt-4">
+        <div class="text-sm text-slate-300">Music regions</div>
+        <div class="mt-2 text-xs text-slate-500">Toggle to disable, adjust by ±0.5s, or snap to subtitle boundary.</div>
+        <template x-if="Array.isArray(musicRegions) && musicRegions.length">
+          <div class="mt-3 space-y-2">
+            <template x-for="r in musicRegions" :key="String(r._base_start) + ':' + String(r._base_end) + ':' + String(r.kind||'')">
+              <div class="rounded border border-slate-800 bg-slate-950/20 p-3">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="text-sm text-slate-200">
+                    <span class="text-slate-500">kind</span> <span x-text="r.kind || 'music'"></span>
+                    <span class="text-slate-500">·</span>
+                    <span class="font-mono text-xs text-slate-300" x-text="Number(r.start||0).toFixed(2) + '–' + Number(r.end||0).toFixed(2)"></span>
+                  </div>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" class="h-5 w-5" :checked="!isRegionDisabled(r)"
+                           @change="toggleRegion(r, $event.target.checked)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %} />
+                    <span class="text-slate-300">enabled</span>
+                  </label>
+                </div>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="nudgeRegion(r, 'start', -0.5)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>Start -0.5</button>
+                  <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="nudgeRegion(r, 'start', 0.5)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>Start +0.5</button>
+                  <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="nudgeRegion(r, 'end', -0.5)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>End -0.5</button>
+                  <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="nudgeRegion(r, 'end', 0.5)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>End +0.5</button>
+                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="snapRegion(r)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>Snap</button>
+                </div>
+              </div>
             </template>
-          </tbody>
-        </table>
+          </div>
+        </template>
+        <template x-if="!musicRegions || !musicRegions.length">
+          <div class="mt-3 text-sm text-slate-500">No detected music regions yet.</div>
+        </template>
       </div>
 
-      <button class="mt-4 rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
-              @click="voiceItems.push({character_id:'', label:'', speaker_strategy:'preset', tts_speaker:'default', tts_speaker_wav:'', language:'en'})">
-        Add row
-      </button>
+      <div class="mt-6">
+        <details class="rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+          <summary class="cursor-pointer text-sm text-slate-200">Advanced: voice map</summary>
+          <div class="mt-3 text-xs text-slate-500">Used for speaker dropdown labels + future synth (best-effort).</div>
+          <div class="mt-4 overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="text-xs text-slate-500">
+                <tr>
+                  <th class="text-left py-2 pr-3">character_id</th>
+                  <th class="text-left py-2 pr-3">label</th>
+                  <th class="text-left py-2 pr-3">strategy</th>
+                  <th class="text-left py-2 pr-3">tts_speaker</th>
+                  <th class="text-left py-2 pr-3">tts_speaker_wav</th>
+                  <th class="text-left py-2 pr-3">language</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="(row, idx) in voiceItems" :key="idx">
+                  <tr class="border-t border-slate-900">
+                    <td class="py-2 pr-3">
+                      <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                             x-model="row.character_id" placeholder="SPEAKER_01" />
+                    </td>
+                    <td class="py-2 pr-3">
+                      <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                             x-model="row.label" placeholder="Alice" />
+                    </td>
+                    <td class="py-2 pr-3">
+                      <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                              x-model="row.speaker_strategy">
+                        <option value="zero-shot">zero-shot</option>
+                        <option value="preset">preset</option>
+                      </select>
+                    </td>
+                    <td class="py-2 pr-3">
+                      <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                             x-model="row.tts_speaker" :disabled="row.speaker_strategy!=='preset'" placeholder="default" />
+                    </td>
+                    <td class="py-2 pr-3">
+                      <div class="text-xs text-slate-400" x-text="row.tts_speaker_wav || ''"></div>
+                    </td>
+                    <td class="py-2 pr-3">
+                      <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                              x-model="row.language">
+                        <option value="en">en</option>
+                        <option value="ja">ja</option>
+                        <option value="auto">auto</option>
+                      </select>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
 
-      <div class="mt-3 text-sm text-emerald-200" x-show="voiceSaved" x-cloak>Saved.</div>
-      <div class="mt-3 text-sm text-red-200" x-show="voiceError" x-cloak x-text="voiceError"></div>
+          <div class="mt-4 flex flex-wrap items-center gap-2">
+            <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+                    @click="voiceItems.push({character_id:'', label:'', speaker_strategy:'preset', tts_speaker:'default', tts_speaker_wav:'', language:'en'})">
+              Add row
+            </button>
+            <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                    @click="saveVoiceMap()" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+              Save mapping
+            </button>
+          </div>
+          <div class="mt-3 text-sm text-emerald-200" x-show="voiceSaved" x-cloak>Saved.</div>
+          <div class="mt-3 text-sm text-red-200" x-show="voiceError" x-cloak x-text="voiceError"></div>
+        </details>
+      </div>
     </div>
   </div>
 
   <!-- Logs -->
-  <div class="mt-4" x-show="activeTab==='logs'" x-cloak>
+  <div class="mt-4" x-show="activeTab==='overview'" x-cloak>
     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
       <div class="text-sm text-slate-300">Logs (live)</div>
       <div class="mt-3 h-80 overflow-auto rounded-lg bg-black/40 border border-slate-800 p-3 text-xs font-mono text-slate-200"
@@ -350,14 +527,13 @@
     return {
       jobId,
       job: null,
-      activeTab: "overview",
+      activeTab: "artifacts",
       tabs: [
-        { key: "overview", label: "Overview" },
-        { key: "quality", label: "Quality" },
-        { key: "transcript", label: "Transcript" },
-        { key: "voice", label: "Voice Map" },
-        { key: "logs", label: "Logs" },
-        { key: "artifacts", label: "Artifacts" },
+        { key: "artifacts", label: "Playback" },
+        { key: "overview", label: "Progress/Logs" },
+        { key: "quality", label: "QA" },
+        { key: "review", label: "Review/Edit" },
+        { key: "overrides", label: "Overrides" },
       ],
       setActive(tab) {
         this.activeTab = tab;
@@ -369,14 +545,31 @@
           if (!this.files) this.loadFiles();
           else this.initPlayer();
         }
+        if (tab === "review") {
+          if (!this.reviewLoaded) this.loadReview();
+        }
+        if (tab === "overrides") {
+          if (!this.overridesLoaded) this.loadOverrides();
+        }
       },
       voiceItems: [],
+      speakerOptions: [],
       voiceSaved: false,
       voiceError: "",
       files: null,
       qaLoaded: false,
       qaSummary: null,
       qaTopMd: "",
+      reviewLoaded: false,
+      reviewState: null,
+      reviewError: "",
+      overridesLoaded: false,
+      overrides: null,
+      overridesError: "",
+      musicRegions: [],
+      subtitleBoundaries: [],
+      speakerOverrides: {},
+      focusSeg: null,
       hasPlayer: false,
       playing: false,
       muted: false,
@@ -390,10 +583,14 @@
         // deep-link to a tab (and optionally a segment)
         try {
           const u = new URL(window.location.href);
-          const tab = (u.searchParams.get("tab") || "").toLowerCase();
-          if (tab && this.tabs.some(t => t.key === tab)) {
-            this.activeTab = tab;
-          }
+          let tab = (u.searchParams.get("tab") || "").toLowerCase();
+          // legacy aliases
+          if (tab === "transcript") tab = "review";
+          if (tab === "logs") tab = "overview";
+          if (tab && this.tabs.some(t => t.key === tab)) this.activeTab = tab;
+          const seg = u.searchParams.get("seg");
+          const n = seg ? Number(seg) : null;
+          if (n && Number.isFinite(n) && n > 0) this.focusSeg = Math.floor(n);
         } catch (e) {}
         try {
           const m = document.getElementById("main");
@@ -401,6 +598,10 @@
         } catch (e) {}
         // poll job state lightly (UI only)
         setInterval(() => { this.refresh(); }, 1500);
+        if (this.activeTab === "review") {
+          await this.loadReview();
+          if (this.focusSeg) setTimeout(() => { this.scrollToSeg(this.focusSeg); }, 160);
+        }
       },
       async refresh() {
         try {
@@ -445,6 +646,18 @@
             const r2 = await fetch(md, { credentials: "include" });
             if (r2.ok) this.qaTopMd = await r2.text();
           }
+        } catch (e) {}
+      },
+      qaBadgeClass(sev) {
+        const s = String(sev || "").toLowerCase();
+        if (s === "fail" || s === "error" || s === "critical") return "bg-red-900/30 border-red-800 text-red-200";
+        if (s === "warn" || s === "warning") return "bg-amber-900/30 border-amber-800 text-amber-200";
+        return "bg-slate-900/60 border-slate-800 text-slate-200";
+      },
+      scrollToSeg(n) {
+        try {
+          const el = document.getElementById("seg-" + String(n));
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
         } catch (e) {}
       },
       initPlayer() {
@@ -532,6 +745,262 @@
           if (!this.voiceItems.length) {
             this.voiceItems = [{character_id:"", label:"", speaker_strategy:"preset", tts_speaker:"default", tts_speaker_wav:"", language:"en"}];
           }
+          this.speakerOptions = this.voiceItems
+            .filter(x => x && String(x.character_id||"").trim().length)
+            .map(x => ({
+              id: String(x.character_id||"").trim(),
+              label: (String(x.label||"").trim() ? (String(x.label||"").trim() + " (" + String(x.character_id||"").trim() + ")") : String(x.character_id||"").trim())
+            }));
+        } catch (e) {}
+      },
+      async loadReview() {
+        this.reviewLoaded = true;
+        this.reviewError = "";
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments", { credentials: "include" });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.reviewError = data.detail || ("Review load failed (" + r.status + ")");
+            return;
+          }
+          this.reviewState = data;
+          // Pull speaker overrides (cheap) so dropdown shows current selection.
+          try {
+            const r2 = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides", { credentials: "include" });
+            const ov = await r2.json().catch(() => ({}));
+            if (r2.ok && ov && typeof ov === "object") {
+              const so = ov.speaker_overrides && typeof ov.speaker_overrides === "object" ? ov.speaker_overrides : {};
+              this.speakerOverrides = so;
+              if (this.reviewState && Array.isArray(this.reviewState.segments)) {
+                for (const seg of this.reviewState.segments) {
+                  const sid = String(seg && seg.segment_id !== undefined ? seg.segment_id : "");
+                  seg._speaker_override = (so && so[sid]) ? String(so[sid]) : "";
+                }
+              }
+            }
+          } catch (e) {}
+        } catch (e) {
+          this.reviewError = "Review load failed";
+        }
+      },
+      async reviewSave(seg) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/edit", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ text: String(seg.chosen_text || "") }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(data.detail || ("Save failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Saved", "success"); } catch (e) {}
+          await this.loadReview();
+        } catch (e) {}
+      },
+      async reviewRegen(seg) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/regen", {
+            method: "POST",
+            credentials: "include",
+            headers: { "X-CSRF-Token": csrf },
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(data.detail || ("Regen failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Regenerated", "success"); } catch (e) {}
+          await this.loadReview();
+        } catch (e) {}
+      },
+      async reviewToggleLock(seg) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const locked = String(seg.status || "") === "locked";
+          const action = locked ? "unlock" : "lock";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/" + action, {
+            method: "POST",
+            credentials: "include",
+            headers: { "X-CSRF-Token": csrf },
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(data.detail || ("Action failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast(action + " OK", "success"); } catch (e) {}
+          await this.loadReview();
+        } catch (e) {}
+      },
+      async applyHelper(seg, kind) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/helper", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ kind: String(kind || ""), text: String(seg.chosen_text || "") }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(data.detail || ("Helper failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          if (data && data.text !== undefined) {
+            seg.chosen_text = String(data.text || "");
+            try { window.showToast("Applied helper", "success"); } catch (e) {}
+          }
+        } catch (e) {}
+      },
+      async setSpeakerOverride(segmentId, value) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides/speaker", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ updates: [{ index: Number(segmentId || 0), speaker_override: String(value || "") }] }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(data.detail || ("Speaker override failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Speaker override saved", "success"); } catch (e) {}
+        } catch (e) {}
+      },
+      async loadOverrides() {
+        this.overridesLoaded = true;
+        this.overridesError = "";
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.overridesError = d.detail || ("Overrides load failed (" + r.status + ")");
+            return;
+          }
+          this.overrides = d;
+        } catch (e) {
+          this.overridesError = "Overrides load failed";
+        }
+        await this.loadEffectiveMusicRegions();
+        await this.loadSubtitleBoundaries();
+      },
+      async saveOverrides() {
+        if (!this.overrides) return;
+        this.overridesError = "";
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides", {
+            method: "PUT",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify(this.overrides),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.overridesError = d.detail || ("Save failed (" + r.status + ")");
+            try { window.showToast(this.overridesError, "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Overrides saved", "success"); } catch (e) {}
+          await this.loadEffectiveMusicRegions();
+        } catch (e) {
+          this.overridesError = "Save failed";
+        }
+      },
+      _mro() {
+        if (!this.overrides || typeof this.overrides !== "object") return null;
+        if (!this.overrides.music_regions_overrides || typeof this.overrides.music_regions_overrides !== "object") {
+          this.overrides.music_regions_overrides = { adds: [], removes: [], edits: [] };
+        }
+        return this.overrides.music_regions_overrides;
+      },
+      isRegionDisabled(r) {
+        const mro = this._mro();
+        if (!mro) return false;
+        const removes = Array.isArray(mro.removes) ? mro.removes : [];
+        return removes.some(x => x && Number(x.start) === Number(r._base_start) && Number(x.end) === Number(r._base_end));
+      },
+      toggleRegion(r, enabled) {
+        const mro = this._mro();
+        if (!mro) return;
+        const removes = Array.isArray(mro.removes) ? mro.removes : [];
+        const keyStart = Number(r._base_start);
+        const keyEnd = Number(r._base_end);
+        const keep = removes.filter(x => !(x && Number(x.start) === keyStart && Number(x.end) === keyEnd));
+        if (!enabled) keep.push({ start: keyStart, end: keyEnd, reason: "user_remove" });
+        mro.removes = keep;
+        this.saveOverrides();
+      },
+      _upsertEdit(fromStart, fromEnd, toObj) {
+        const mro = this._mro();
+        if (!mro) return;
+        const edits = Array.isArray(mro.edits) ? mro.edits : [];
+        const fs = Number(fromStart);
+        const fe = Number(fromEnd);
+        const kept = edits.filter(e => !(e && e.from && Number(e.from.start) === fs && Number(e.from.end) === fe));
+        kept.push({ from: { start: fs, end: fe }, to: toObj });
+        mro.edits = kept;
+      },
+      nudgeRegion(r, which, delta) {
+        const ds = Number(delta || 0);
+        if (!Number.isFinite(ds) || !ds) return;
+        const s0 = Number(r.start || 0);
+        const e0 = Number(r.end || 0);
+        const ns = (which === "start") ? (s0 + ds) : s0;
+        const ne = (which === "end") ? (e0 + ds) : e0;
+        const to = { start: Math.max(0, ns), end: Math.max(0, Math.max(ns + 0.05, ne)), kind: r.kind || "music", confidence: Number(r.confidence || 0), reason: String(r.reason || "") };
+        this._upsertEdit(r._base_start, r._base_end, to);
+        this.saveOverrides();
+      },
+      _nearestBoundary(t) {
+        const x = Number(t || 0);
+        if (!Array.isArray(this.subtitleBoundaries) || !this.subtitleBoundaries.length) return x;
+        let best = this.subtitleBoundaries[0];
+        let bestD = Math.abs(best - x);
+        for (const b of this.subtitleBoundaries) {
+          const d = Math.abs(Number(b) - x);
+          if (d < bestD) { bestD = d; best = Number(b); }
+        }
+        return Number(best);
+      },
+      snapRegion(r) {
+        const ns = this._nearestBoundary(r.start || 0);
+        const ne = this._nearestBoundary(r.end || 0);
+        const to = { start: Math.max(0, Math.min(ns, ne - 0.05)), end: Math.max(0, Math.max(ne, ns + 0.05)), kind: r.kind || "music", confidence: Number(r.confidence || 0), reason: String(r.reason || "") };
+        this._upsertEdit(r._base_start, r._base_end, to);
+        this.saveOverrides();
+      },
+      async loadEffectiveMusicRegions() {
+        this.musicRegions = [];
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides/music/effective", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) return;
+          const regs = Array.isArray(d.regions) ? d.regions : [];
+          this.musicRegions = regs.map(x => ({ ...x, _base_start: Number(x.start || 0), _base_end: Number(x.end || 0) }));
+        } catch (e) {}
+      },
+      async loadSubtitleBoundaries() {
+        this.subtitleBoundaries = [];
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/transcript?page=1&per_page=500", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) return;
+          const items = Array.isArray(d.items) ? d.items : [];
+          const b = [];
+          for (const it of items) {
+            if (!it) continue;
+            if (it.start !== undefined) b.push(Number(it.start));
+            if (it.end !== undefined) b.push(Number(it.end));
+          }
+          this.subtitleBoundaries = b.filter(x => Number.isFinite(x)).sort((a,b) => a-b);
         } catch (e) {}
       },
       async saveVoiceMap() {
