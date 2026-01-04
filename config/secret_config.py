@@ -47,6 +47,12 @@ class SecretConfig(BaseSettings):
     # character store encryption
     char_store_key: SecretStr | None = Field(default=None, alias="CHAR_STORE_KEY")
 
+    # Security/Privacy vNext: artifacts encryption at rest (optional)
+    # Provide a 32-byte random key encoded as base64.
+    # Example (bash): python -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"
+    artifacts_key: SecretStr | None = Field(default=None, alias="ARTIFACTS_KEY")
+    artifacts_key_file: str | None = Field(default=None, alias="ARTIFACTS_KEY_FILE")
+
     # WebRTC TURN (optional)
     turn_url: str | None = Field(default=None, alias="TURN_URL")
     turn_username: str | None = Field(default=None, alias="TURN_USERNAME")

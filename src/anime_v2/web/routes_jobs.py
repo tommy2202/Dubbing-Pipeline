@@ -38,6 +38,13 @@ from anime_v2.utils.crypto import verify_secret
 from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_duration_seconds
 from anime_v2.utils.log import request_id_var
 from anime_v2.utils.ratelimit import RateLimiter
+from anime_v2.security.crypto import (
+    CryptoConfigError,
+    encrypt_file,
+    encryption_enabled_for,
+    is_encrypted_path,
+    materialize_decrypted,
+)
 
 router = APIRouter()
 
@@ -208,6 +215,7 @@ async def uploads_init(
         "id": upload_id,
         "owner_id": ident.user.id,
         "filename": filename,
+        "orig_stem": Path(filename).stem,
         "total_bytes": int(total),
         "chunk_bytes": int(chunk_bytes),
         "part_path": str(part_path),
@@ -215,6 +223,7 @@ async def uploads_init(
         "received": {},  # idx -> {offset,size,sha256}
         "received_bytes": 0,
         "completed": False,
+        "encrypted": False,
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
@@ -418,7 +427,30 @@ async def uploads_complete(
 
         final_path.parent.mkdir(parents=True, exist_ok=True)
         part_path.replace(final_path)
-        store.update_upload(upload_id, completed=True, updated_at=_now_iso())
+        # Optional: encrypt uploads at rest (best-effort, but fail-safe when enabled).
+        if encryption_enabled_for("uploads"):
+            enc_path = final_path.with_suffix(final_path.suffix + ".enc")
+            try:
+                encrypt_file(final_path, enc_path, kind="uploads", job_id=None)
+            except CryptoConfigError:
+                # Fail-safe: do not keep plaintext when encryption is enabled but misconfigured.
+                with suppress(Exception):
+                    final_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=500, detail="Upload encryption misconfigured")
+            except Exception:
+                with suppress(Exception):
+                    enc_path.unlink(missing_ok=True)
+                with suppress(Exception):
+                    final_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=500, detail="Upload encryption failed")
+            with suppress(Exception):
+                final_path.unlink(missing_ok=True)
+            final_path = enc_path
+            store.update_upload(
+                upload_id, completed=True, final_path=str(final_path), encrypted=True, updated_at=_now_iso()
+            )
+        else:
+            store.update_upload(upload_id, completed=True, updated_at=_now_iso())
 
     audit_event(
         "upload.complete",
@@ -823,6 +855,7 @@ async def create_job(
     duration_s = 0.0
 
     upload_id = ""
+    upload_stem = ""
     if "application/json" in ctype:
         body = await request.json()
         if not isinstance(body, dict):
@@ -837,6 +870,11 @@ async def create_job(
         project_name = str(body.get("project") or body.get("project_name") or "")
         style_guide_path = str(body.get("style_guide_path") or "")
         cache_policy = str(body.get("cache_policy") or cache_policy)
+        # Privacy knobs (optional; persisted on job.runtime)
+        privacy_mode = str(body.get("privacy") or body.get("privacy_mode") or "").strip()
+        no_store_transcript = bool(body.get("no_store_transcript") or False)
+        no_store_source_audio = bool(body.get("no_store_source_audio") or False)
+        minimal_artifacts = bool(body.get("minimal_artifacts") or False)
         speaker_smoothing = bool(body.get("speaker_smoothing") or False)
         scene_detect = str(body.get("scene_detect") or scene_detect)
         director = bool(body.get("director") or False)
@@ -853,6 +891,7 @@ async def create_job(
                 video_path.relative_to(up_root)
             except Exception:
                 raise HTTPException(status_code=400, detail="upload_id path not allowed") from None
+            upload_stem = str(urec.get("orig_stem") or "").strip()
         else:
             vp = body.get("video_path")
             if not isinstance(vp, str):
@@ -875,6 +914,11 @@ async def create_job(
         project_name = str(form.get("project") or form.get("project_name") or "")
         style_guide_path = str(form.get("style_guide_path") or "")
         cache_policy = str(form.get("cache_policy") or cache_policy)
+        # Privacy knobs (optional; persisted on job.runtime)
+        privacy_mode = str(form.get("privacy") or form.get("privacy_mode") or "").strip()
+        no_store_transcript = str(form.get("no_store_transcript") or "").strip() not in {"", "0", "false", "off"}
+        no_store_source_audio = str(form.get("no_store_source_audio") or "").strip() not in {"", "0", "false", "off"}
+        minimal_artifacts = str(form.get("minimal_artifacts") or "").strip() not in {"", "0", "false", "off"}
         speaker_smoothing = str(form.get("speaker_smoothing") or "").strip() not in {"", "0", "false", "off"}
         scene_detect = str(form.get("scene_detect") or scene_detect)
         director = str(form.get("director") or "").strip() not in {"", "0", "false", "off"}
@@ -898,6 +942,7 @@ async def create_job(
                 raise HTTPException(status_code=400, detail="upload_id path not allowed") from None
             if not video_path.exists():
                 raise HTTPException(status_code=400, detail="upload path missing")
+            upload_stem = str(urec.get("orig_stem") or "").strip()
         elif vp is not None:
             # Allow both:
             # - explicit relative paths under APP_ROOT (e.g. "Input/Test.mp4")
@@ -953,12 +998,13 @@ async def create_job(
             video_path = dest
 
     assert video_path is not None
-    # Extension allowlist (defense-in-depth)
-    if video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
+    # Extension allowlist (defense-in-depth). Encrypted-at-rest inputs are allowed (validated via ffprobe after decrypt).
+    if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
         raise HTTPException(status_code=400, detail="Unsupported file type")
     # Validate duration using ffprobe (no user-controlled args).
     try:
-        duration_s = float(ffprobe_duration_seconds(video_path))
+        with materialize_decrypted(video_path, kind="uploads", job_id=None, suffix=".input") as mat:
+            duration_s = float(ffprobe_duration_seconds(mat.path))
     except FFmpegError as ex:
         raise HTTPException(
             status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
@@ -1034,6 +1080,29 @@ async def create_job(
     cp = str(cache_policy or "").strip().lower()
     if cp in {"full", "balanced", "minimal"}:
         rt["cache_policy"] = cp
+
+    # privacy mode + data minimization (per-job)
+    try:
+        from anime_v2.security.privacy import resolve_privacy
+
+        priv = resolve_privacy(
+            {
+                "privacy_mode": str(privacy_mode or ""),
+                "no_store_transcript": bool(no_store_transcript),
+                "no_store_source_audio": bool(no_store_source_audio),
+                "minimal_artifacts": bool(minimal_artifacts),
+            }
+        )
+        rt.update(priv.to_runtime_patch())
+        # Privacy triggers retention automation (minimal) unless an explicit cache_policy was supplied.
+        if (priv.privacy_on or priv.minimal_artifacts) and "cache_policy" not in rt:
+            rt["cache_policy"] = "minimal"
+    except Exception:
+        pass
+
+    # Stable naming for outputs when upload path is encrypted (.enc) or anonymized.
+    if upload_stem:
+        rt["source_stem"] = str(upload_stem)
 
     # Store requested + effective settings summary (best-effort; no secrets).
     try:

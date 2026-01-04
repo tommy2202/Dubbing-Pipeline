@@ -129,6 +129,10 @@ def _final_outputs(job_dir: Path) -> list[Path]:
         out.extend(list(job_dir.glob(pat)))
     # streaming stitched final
     out.extend(list((job_dir / "stream").glob("final*.mp4")))
+    # mobile artifacts (mobile_update): keep by default
+    out.extend(list((job_dir / "mobile").glob("mobile.mp4")))
+    out.extend(list((job_dir / "mobile" / "hls").glob("index.m3u8")))
+    out.extend(list((job_dir / "mobile" / "hls").glob("*.ts")))
     return [p for p in out if p.exists()]
 
 
@@ -145,6 +149,8 @@ def _important_intermediates(job_dir: Path) -> list[Path]:
     out.extend(list((job_dir / "expressive").glob("**/*")))
     out.extend(list((job_dir / "manifests").glob("*.json")))
     out.extend(list((job_dir / "review").glob("state.json")))
+    # per-job human log (kept even in minimal mode)
+    out.extend([job_dir / "job.log"])
     return [p for p in out if p.exists()]
 
 

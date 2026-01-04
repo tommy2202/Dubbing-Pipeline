@@ -710,6 +710,31 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     default=False,
     help="Compute retention plan and write report without deleting.",
 )
+@click.option(
+    "--privacy",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default="off",
+    show_default=True,
+    help="Privacy mode. When on: redact titles, minimize stored intermediates, and apply minimal retention at job end.",
+)
+@click.option(
+    "--no-store-transcript",
+    is_flag=True,
+    default=False,
+    help="Do not persist transcript/subtitle files to Output/<job>/ (still muxes subs unless --no-subs).",
+)
+@click.option(
+    "--no-store-source-audio",
+    is_flag=True,
+    default=False,
+    help="Do not persist extracted source audio to Output/<job>/.",
+)
+@click.option(
+    "--minimal-artifacts",
+    is_flag=True,
+    default=False,
+    help="Keep only final outputs + manifests + minimal logs; triggers minimal retention at job end.",
+)
 def run(
     video: Path | None,
     batch_spec: str | None,
@@ -828,6 +853,10 @@ def run(
     cache_policy: str,
     retention_days: int,
     retention_dry_run: bool,
+    privacy: str,
+    no_store_transcript: bool,
+    no_store_source_audio: bool,
+    minimal_artifacts: bool,
 ) -> None:
     """
     Run pipeline-v2 on VIDEO.
@@ -1382,13 +1411,33 @@ def run(
     except Exception:
         pass
 
-    wav_path = out_dir / "audio.wav"
-    srt_out = out_dir / f"{stem}.srt"
-    vtt_out = out_dir / f"{stem}.vtt"
-    translated_srt = out_dir / f"{stem}.translated.srt"
-    translated_vtt = out_dir / f"{stem}.translated.vtt"
+    # Privacy/data minimization (opt-in; defaults preserve current behavior).
+    from anime_v2.security.privacy import resolve_privacy
+
+    priv = resolve_privacy(
+        {
+            "privacy_mode": str(privacy),
+            "no_store_transcript": bool(no_store_transcript),
+            "no_store_source_audio": bool(no_store_source_audio),
+            "minimal_artifacts": bool(minimal_artifacts),
+        }
+    )
+    if priv.privacy_on or priv.minimal_artifacts:
+        cache_policy = "minimal"
+        # Privacy mode disables cross-episode voice memory persistence by default.
+        voice_memory = "off"
+
+    work_priv = out_dir / "work_privacy"
+    if priv.no_store_transcript or priv.no_store_source_audio:
+        work_priv.mkdir(parents=True, exist_ok=True)
+
+    wav_path = (work_priv / "audio.wav") if priv.no_store_source_audio else (out_dir / "audio.wav")
+    srt_out = (work_priv / f"{stem}.srt") if priv.no_store_transcript else (out_dir / f"{stem}.srt")
+    vtt_out = (work_priv / f"{stem}.vtt") if priv.no_store_transcript else (out_dir / f"{stem}.vtt")
+    translated_srt = (work_priv / f"{stem}.translated.srt") if priv.no_store_transcript else (out_dir / f"{stem}.translated.srt")
+    translated_vtt = (work_priv / f"{stem}.translated.vtt") if priv.no_store_transcript else (out_dir / f"{stem}.translated.vtt")
     diar_json = out_dir / "diarization.json"
-    translated_json = out_dir / "translated.json"
+    translated_json = (work_priv / "translated.json") if priv.no_store_transcript else (out_dir / "translated.json")
     tts_wav = out_dir / f"{stem}.tts.wav"
     dub_mkv = out_dir / "dub.mkv"
 
@@ -1968,14 +2017,14 @@ def run(
     # Optional subtitle format conversions for source transcript
     subs_choice = (subs or "both").lower()
     subs_fmt = (subs_format or "srt").lower()
-    if subs_choice in {"src", "both"} and subs_fmt in {"vtt", "both"}:
+    if subs_choice in {"src", "both"} and subs_fmt in {"vtt", "both"} and not priv.no_store_transcript:
         try:
             write_vtt(_parse_srt_to_cues(srt_out), vtt_out)
         except Exception as ex:
             logger.warning("[v2] vtt export failed (src): %s", ex)
 
     # Feature E: formatted subtitle variants under Output/<job>/subs/ (best-effort; does not affect mux defaults)
-    if subs_choice in {"src", "both"}:
+    if subs_choice in {"src", "both"} and not priv.no_store_transcript:
         try:
             from anime_v2.subs.formatting import write_formatted_subs_variant
 
@@ -2357,6 +2406,8 @@ def run(
 
             # Feature E: write formatted subtitle variants under Output/<job>/subs/
             try:
+                if priv.no_store_transcript:
+                    raise RuntimeError("privacy_no_store_transcript")
                 from anime_v2.subs.formatting import write_formatted_subs_variant
 
                 if subs_choice in {"tgt", "both"}:
@@ -2410,7 +2461,7 @@ def run(
             except Exception as ex:
                 logger.warning("[v2] subs formatting failed (tgt variants): %s", ex)
 
-            if subs_choice in {"tgt", "both"} and subs_fmt in {"vtt", "both"}:
+            if subs_choice in {"tgt", "both"} and subs_fmt in {"vtt", "both"} and not priv.no_store_transcript:
                 try:
                     _write_vtt_from_lines(
                         [
@@ -2804,6 +2855,13 @@ def run(
         write_drift_reports(job_dir=out_dir, snapshot_path=snap, compare_last_n=5)
     except Exception as ex:
         logger.warning("drift_report_failed_continue", error=str(ex))
+
+    # Privacy cleanup: remove transient artifacts directory (best-effort).
+    try:
+        if (priv.no_store_transcript or priv.no_store_source_audio) and (out_dir / "work_privacy").exists():
+            shutil.rmtree(out_dir / "work_privacy", ignore_errors=True)
+    except Exception:
+        pass
 
 # Public entrypoint (project.scripts -> anime_v2.cli:cli)
 from anime_v2.review.cli import review as review  # noqa: E402

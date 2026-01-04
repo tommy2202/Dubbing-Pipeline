@@ -10,6 +10,7 @@ from typing import Any
 
 from anime_v2.utils.io import atomic_write_text, read_json, write_json
 from anime_v2.utils.log import logger
+from anime_v2.security.crypto import decrypt_bytes, encryption_enabled_for, is_encrypted_path, write_bytes_encrypted
 
 
 def overrides_path(job_dir: Path) -> Path:
@@ -44,7 +45,15 @@ def default_overrides() -> dict[str, Any]:
 
 def load_overrides(job_dir: Path) -> dict[str, Any]:
     p = overrides_path(job_dir)
-    data = read_json(p, default=None)
+    if encryption_enabled_for("review") and is_encrypted_path(p):
+        try:
+            blob = p.read_bytes()
+            pt = decrypt_bytes(blob, kind="review", job_id=str(Path(job_dir).name))
+            data = json.loads(pt.decode("utf-8"))
+        except Exception:
+            data = None
+    else:
+        data = read_json(p, default=None)
     if not isinstance(data, dict):
         return default_overrides()
     out = default_overrides()
@@ -70,7 +79,11 @@ def save_overrides(job_dir: Path, overrides: dict[str, Any]) -> Path:
     if isinstance(overrides, dict):
         payload.update({k: overrides.get(k) for k in payload.keys() if k in overrides})
     payload["version"] = 1
-    atomic_write_text(p, json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    raw = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    if encryption_enabled_for("review"):
+        write_bytes_encrypted(p, raw, kind="review", job_id=str(Path(job_dir).name))
+    else:
+        atomic_write_text(p, raw.decode("utf-8"), encoding="utf-8")
     return p
 
 

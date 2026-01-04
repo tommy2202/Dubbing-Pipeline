@@ -40,6 +40,7 @@ from anime_v2.utils.hashio import hash_audio_from_video
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import install_egress_policy
 from anime_v2.utils.time import format_srt_timestamp
+from anime_v2.security.crypto import CryptoConfigError, decrypt_file, is_encrypted_path
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-")
 
@@ -218,6 +219,17 @@ class JobQueue:
         out_root = Path(get_settings().output_dir).resolve()
         # Optional project output subdir (stored on job.runtime by batch/project submission).
         runtime = dict(job.runtime or {})
+        # Privacy/data minimization (opt-in; default off). Also triggers minimal retention.
+        try:
+            from anime_v2.security.privacy import resolve_privacy
+
+            priv = resolve_privacy(runtime)
+            runtime.update(priv.to_runtime_patch())
+        except Exception:
+            priv = None
+
+        # Stable naming: allow job.runtime.source_stem to control Output/<stem>/ naming (e.g. encrypted uploads).
+        stem = str(runtime.get("source_stem") or video_path.stem or str(job.id)).strip() or str(job.id)
         proj_sub = ""
         try:
             proj = runtime.get("project")
@@ -226,9 +238,9 @@ class JobQueue:
         except Exception:
             proj_sub = ""
         if proj_sub:
-            base_dir = (out_root / proj_sub / video_path.stem).resolve()
+            base_dir = (out_root / proj_sub / stem).resolve()
         else:
-            base_dir = (out_root / video_path.stem).resolve()
+            base_dir = (out_root / stem).resolve()
         base_dir.mkdir(parents=True, exist_ok=True)
         # Stable per-job pointer (best-effort) so mobile/API users can find artifacts under Output/jobs/<job_id>/...
         # We keep the canonical base_dir at Output/<stem>/... for backwards compatibility.
@@ -237,7 +249,11 @@ class JobQueue:
             jobs_dir.mkdir(parents=True, exist_ok=True)
             (jobs_dir / "target.txt").write_text(str(base_dir) + "\n", encoding="utf-8")
             (jobs_dir / "job_id.txt").write_text(str(job_id) + "\n", encoding="utf-8")
-            (jobs_dir / "video.txt").write_text(str(video_path) + "\n", encoding="utf-8")
+            # Privacy: avoid writing source filename/path when enabled.
+            if priv is not None and bool(getattr(priv, "privacy_on", False)):
+                (jobs_dir / "video.txt").write_text("(redacted)\n", encoding="utf-8")
+            else:
+                (jobs_dir / "video.txt").write_text(str(video_path) + "\n", encoding="utf-8")
         # Temp artifacts live under Output/<stem>/work/<job_id>/...
         work_dir = (base_dir / "work" / job_id).resolve()
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -252,8 +268,8 @@ class JobQueue:
             job_id,
             work_dir=str(work_dir),
             log_path=str(log_path),
-            output_mkv=str(base_dir / f"{video_path.stem}.dub.mkv"),
-            output_srt=str(base_dir / f"{video_path.stem}.translated.srt"),
+            output_mkv=str(base_dir / f"{stem}.dub.mkv"),
+            output_srt=str(base_dir / f"{stem}.translated.srt"),
             runtime=runtime,
         )
 
@@ -285,8 +301,22 @@ class JobQueue:
             except Exception:
                 pass
 
+        decrypted_video: Path | None = None
         try:
             await self._check_canceled(job_id)
+
+            # If input video is encrypted-at-rest, decrypt once into the work dir for the duration of the job.
+            # Fail-safe: if encryption is enabled but misconfigured, the job must fail.
+            video_in = video_path
+            if is_encrypted_path(video_path):
+                decrypted_video = (work_dir / "_input_video").with_suffix(".mp4")
+                try:
+                    decrypt_file(video_path, decrypted_video, kind="uploads", job_id=job_id)
+                except CryptoConfigError as ex:
+                    raise RuntimeError(str(ex)) from ex
+                except Exception as ex:
+                    raise RuntimeError(f"Failed to decrypt input video: {ex}") from ex
+                video_in = decrypted_video
 
             # Per-job ffmpeg stderr capture (concurrency-safe via ContextVar)
             try:
@@ -299,7 +329,7 @@ class JobQueue:
             # Compute audio hash once per job (used for cross-job caching)
             audio_hash = None
             try:
-                audio_hash = hash_audio_from_video(video_path)
+                audio_hash = hash_audio_from_video(video_in)
                 curj = self.store.get(job_id)
                 rt = dict((curj.runtime or {}) if curj else runtime)
                 rt["audio_hash"] = audio_hash
@@ -323,7 +353,7 @@ class JobQueue:
                             fn=audio_extractor.extract,
                             args=(),
                             kwargs={
-                                "video": video_path,
+                                "video": video_in,
                                 "out_dir": work_dir,
                                 "wav_out": work_dir / "audio.wav",
                                 "job_id": job_id,
@@ -337,7 +367,7 @@ class JobQueue:
                                 fn=audio_extractor.extract,
                                 args=(),
                                 kwargs={
-                                    "video": video_path,
+                                    "video": video_in,
                                     "out_dir": work_dir,
                                     "wav_out": work_dir / "audio.wav",
                                     "job_id": job_id,
@@ -390,7 +420,7 @@ class JobQueue:
                 write_stage_manifest(
                     job_dir=base_dir,
                     stage="audio",
-                    inputs={"video": file_fingerprint(video_path)},
+                    inputs={"video": file_fingerprint(video_in)},
                     params={"wav_out": "audio.wav", "project": proj_name, "project_profile_hash": proj_hash},
                     outputs={"audio_wav": str(Path(str(wav)).resolve())},
                 )
@@ -626,7 +656,7 @@ class JobQueue:
                         seg_wav = Path(str(wav))
                     by_label.setdefault(lab, []).append((s, e, seg_wav))
 
-                show = str(settings.show_id) if settings.show_id else video_path.stem
+                show = str(settings.show_id) if settings.show_id else stem
                 sim = float(settings.char_sim_thresh)
                 thresholds = {"sim": sim}
                 lab_to_char: dict[str, str] = {}
@@ -634,7 +664,9 @@ class JobQueue:
                 vm_store = None
                 vm_map: dict[str, str] = {}
                 vm_meta: dict[str, dict[str, object]] = {}
-                vm_enabled = bool(getattr(settings, "voice_memory", False))
+                vm_enabled = bool(getattr(settings, "voice_memory", False)) and not bool(
+                    runtime.get("minimal_artifacts") or runtime.get("privacy_mode") in {"on", "1", True}
+                )
                 if vm_enabled:
                     try:
                         from anime_v2.voice_memory.store import (
@@ -813,9 +845,9 @@ class JobQueue:
             except Exception:
                 model_name = "medium"
             device = _select_device(job.device)
-            srt_out = work_dir / f"{video_path.stem}.srt"
+            srt_out = work_dir / f"{stem}.srt"
             # Persist a stable copy in Output/<stem>/ for inspection / playback.
-            srt_public = base_dir / f"{video_path.stem}.srt"
+            srt_public = base_dir / f"{stem}.srt"
             self.store.update(job_id, progress=0.30, message=f"Transcribing (Whisper {model_name})")
             self.store.append_log(
                 job_id, f"[{now_utc()}] transcribe model={model_name} device={device}"
@@ -886,9 +918,10 @@ class JobQueue:
             try:
                 from anime_v2.utils.io import atomic_copy
 
-                atomic_copy(srt_out, srt_public)
-                if srt_out.with_suffix(".json").exists():
-                    atomic_copy(srt_out.with_suffix(".json"), srt_public.with_suffix(".json"))
+                if not bool(runtime.get("no_store_transcript") or False):
+                    atomic_copy(srt_out, srt_public)
+                    if srt_out.with_suffix(".json").exists():
+                        atomic_copy(srt_out.with_suffix(".json"), srt_public.with_suffix(".json"))
             except Exception:
                 pass
 
@@ -896,6 +929,8 @@ class JobQueue:
             try:
                 from anime_v2.subs.formatting import write_formatted_subs_variant
 
+                if bool(runtime.get("no_store_transcript") or False):
+                    raise RuntimeError("privacy_no_store_transcript")
                 proj_name = ""
                 try:
                     curj = self.store.get(job_id)
@@ -1055,11 +1090,12 @@ class JobQueue:
                     self.store.append_log(job_id, f"[{now_utc()}] speaker_overrides applied segments={changed}")
             except Exception:
                 pass
-            translated_json = base_dir / "translated.json"
-            translated_srt = base_dir / f"{video_path.stem}.translated.srt"
+            no_store_tx = bool(runtime.get("no_store_transcript") or False)
+            translated_json = (work_dir / "translated.json") if no_store_tx else (base_dir / "translated.json")
+            translated_srt = (work_dir / f"{stem}.translated.srt") if no_store_tx else (base_dir / f"{stem}.translated.srt")
 
             do_translate = job.src_lang.lower() != job.tgt_lang.lower()
-            subs_srt_path: Path | None = srt_public
+            subs_srt_path: Path | None = srt_out if no_store_tx else srt_public
             # Resynthesis path: if transcript edits exist and a resynth was requested,
             # we will skip MT and synthesize only approved segments (others become silence).
             resynth = None
@@ -1198,7 +1234,7 @@ class JobQueue:
                     )
                     # also write an edited SRT for review
                     try:
-                        out_srt = base_dir / f"{video_path.stem}.translated.edited.srt"
+                        out_srt = base_dir / f"{stem}.translated.edited.srt"
                         _write_srt(
                             [
                                 {
@@ -1233,7 +1269,7 @@ class JobQueue:
                         mt_lowconf_thresh=float(settings.mt_lowconf_thresh),
                         glossary_path=settings.glossary_path,
                         style_path=settings.style_path,
-                        show_id=(str(settings.show_id) if settings.show_id else video_path.stem),
+                        show_id=(str(settings.show_id) if settings.show_id else stem),
                         whisper_model=model_name,
                         audio_path=str(wav),
                         device=device,
@@ -1396,7 +1432,8 @@ class JobQueue:
                     # Feature E: formatted subtitle variants under Output/<job>/subs/
                     try:
                         from anime_v2.subs.formatting import write_formatted_subs_variant
-
+                        if bool(runtime.get("no_store_transcript") or False):
+                            raise RuntimeError("privacy_no_store_transcript")
                         proj_name = ""
                         try:
                             curj = self.store.get(job_id)
@@ -1803,7 +1840,7 @@ class JobQueue:
                                         )
                                         if str(getattr(settings, "container", "mkv")).lower() == "mkv" and "mkv" in emit:
                                             outs2["mkv"] = export_mkv_multitrack(
-                                                video_in=video_path,
+                                                video_in=video_in,
                                                 tracks=[
                                                     {
                                                         "path": str(tracks.original_full_wav),
@@ -1864,21 +1901,21 @@ class JobQueue:
 
                                 if "mkv" in emit and "mkv" not in outs2:
                                     outs2["mkv"] = export_mkv(
-                                        video_path,
+                                        video_in,
                                         final_mix_wav,
                                         subs_srt_path,
                                         work_dir / f"{video_path.stem}.dub.mkv",
                                     )
                                 if "mp4" in emit:
                                     outs2["mp4"] = export_mp4(
-                                        video_path,
+                                        video_in,
                                         final_mix_wav,
                                         subs_srt_path,
                                         work_dir / f"{video_path.stem}.dub.mp4",
                                     )
                                 if "fmp4" in emit:
                                     outs2["fmp4"] = export_mp4(
-                                        video_path,
+                                        video_in,
                                         final_mix_wav,
                                         subs_srt_path,
                                         work_dir / f"{video_path.stem}.dub.frag.mp4",
@@ -1886,7 +1923,7 @@ class JobQueue:
                                     )
                                 if "hls" in emit:
                                     outs2["hls"] = export_hls(
-                                        video_path,
+                                        video_in,
                                         final_mix_wav,
                                         subs_srt_path,
                                         work_dir / f"{video_path.stem}_hls",
@@ -1901,7 +1938,7 @@ class JobQueue:
                         else:
                             if sched is None:
                                 outs = mix(
-                                    video_in=video_path,
+                                    video_in=video_in,
                                     tts_wav=tts_wav,
                                     srt=subs_srt_path,
                                     out_dir=work_dir,
@@ -1910,7 +1947,7 @@ class JobQueue:
                             else:
                                 with sched.phase("mux"):
                                     outs = mix(
-                                        video_in=video_path,
+                                        video_in=video_in,
                                         tts_wav=tts_wav,
                                         srt=subs_srt_path,
                                         out_dir=work_dir,
@@ -1939,7 +1976,7 @@ class JobQueue:
                                     )
                                     if str(getattr(settings, "container", "mkv")).lower() == "mkv" and out_mkv:
                                         out_mkv = export_mkv_multitrack(
-                                            video_in=video_path,
+                                            video_in=video_in,
                                             tracks=[
                                                 {"path": str(tracks.original_full_wav), "title": "Original (JP)", "language": "jpn", "default": "0"},
                                                 {"path": str(tracks.dubbed_full_wav), "title": "Dubbed (EN)", "language": "eng", "default": "1"},
@@ -1973,7 +2010,7 @@ class JobQueue:
                     )
                     if sched is None:
                         mkv_export.mux(
-                            src_video=video_path,
+                            src_video=video_in,
                             dub_wav=tts_wav,
                             srt_path=subs_srt_path,
                             out_mkv=out_mkv,
@@ -1982,7 +2019,7 @@ class JobQueue:
                     else:
                         with sched.phase("mux"):
                             mkv_export.mux(
-                                src_video=video_path,
+                                src_video=video_in,
                                 dub_wav=tts_wav,
                                 srt_path=subs_srt_path,
                                 out_mkv=out_mkv,
@@ -2025,20 +2062,20 @@ class JobQueue:
                     )
                     # Dubbed mobile MP4 (default)
                     export_mobile_mp4(
-                        video_in=video_path,
+                        video_in=video_in,
                         audio_wav=dubbed_wav if dubbed_wav.exists() else None,
                         out_path=mobile_dir / "mobile.mp4",
                     )
                     # Original mobile MP4 (user-selectable in UI)
                     export_mobile_mp4(
-                        video_in=video_path,
+                        video_in=video_in,
                         audio_wav=None,
                         out_path=mobile_dir / "original.mp4",
                     )
 
                     if bool(getattr(settings, "mobile_hls", False)) and dubbed_wav.exists():
                         export_mobile_hls(
-                            video_in=video_path,
+                            video_in=video_in,
                             dub_wav=dubbed_wav,
                             out_dir=mobile_dir / "hls",
                         )
@@ -2213,6 +2250,10 @@ class JobQueue:
             with suppress(Exception):
                 if sched is not None:
                     sched.on_job_done(job_id)
+            # Best-effort cleanup of decrypted input (if any).
+            with suppress(Exception):
+                if decrypted_video is not None:
+                    decrypted_video.unlink(missing_ok=True)
 
     async def _notify_job_finished(self, job_id: str, *, state: str) -> None:
         """

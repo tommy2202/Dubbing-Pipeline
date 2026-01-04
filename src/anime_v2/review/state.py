@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from anime_v2.utils.io import atomic_write_text, read_json
+from anime_v2.security.crypto import encryption_enabled_for, decrypt_bytes, write_bytes_encrypted, is_encrypted_path
 
 
 def now_utc() -> str:
@@ -29,13 +30,30 @@ def review_audio_dir(job_dir: Path) -> Path:
 
 
 def load_state(job_dir: Path) -> dict[str, Any]:
-    return read_json(review_state_path(job_dir), default={"version": 1, "segments": [], "job": {}})
+    p = review_state_path(job_dir)
+    if encryption_enabled_for("review") and is_encrypted_path(p):
+        blob = p.read_bytes()
+        pt = decrypt_bytes(blob, kind="review", job_id=str(Path(job_dir).name))
+        try:
+            data = json.loads(pt.decode("utf-8"))
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            return data
+        return {"version": 1, "segments": [], "job": {}}
+    v = read_json(p, default={"version": 1, "segments": [], "job": {}})
+    return v if isinstance(v, dict) else {"version": 1, "segments": [], "job": {}}
 
 
 def save_state(job_dir: Path, state: dict[str, Any]) -> None:
     p = review_state_path(job_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(p, json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    payload = json.dumps(state, indent=2, sort_keys=True).encode("utf-8")
+    if encryption_enabled_for("review"):
+        # Fail-safe: if encryption is enabled but misconfigured, this will raise and we will not write plaintext.
+        write_bytes_encrypted(p, payload, kind="review", job_id=str(Path(job_dir).name))
+    else:
+        atomic_write_text(p, payload.decode("utf-8"), encoding="utf-8")
 
 
 def _parse_srt(path: Path) -> list[dict[str, Any]]:
