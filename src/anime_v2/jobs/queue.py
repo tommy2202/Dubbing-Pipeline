@@ -2011,6 +2011,12 @@ class JobQueue:
                             face_mode=str(getattr(settings, "lipsync_face", "auto")).lower(),
                             device=str(getattr(settings, "lipsync_device", "auto")).lower(),
                             bbox=bbox,
+                            scene_limited=bool(getattr(settings, "lipsync_scene_limited", False)),
+                            sample_every_s=float(getattr(settings, "lipsync_sample_every_s", 0.5) or 0.5),
+                            min_face_ratio=float(getattr(settings, "lipsync_min_face_ratio", 0.60) or 0.60),
+                            min_range_s=float(getattr(settings, "lipsync_min_range_s", 2.0) or 2.0),
+                            merge_gap_s=float(getattr(settings, "lipsync_merge_gap_s", 0.6) or 0.6),
+                            max_frames=int(getattr(settings, "lipsync_max_frames", 600) or 600),
                             timeout_s=int(getattr(settings, "lipsync_timeout_s", 1200)),
                         )
                         plugin.run(req)

@@ -252,6 +252,13 @@ class PublicConfig(BaseSettings):
     lipsync_device: str = Field(default="auto", alias="LIPSYNC_DEVICE")  # auto|cpu|cuda
     lipsync_box: str | None = Field(default=None, alias="LIPSYNC_BOX")  # "x1,y1,x2,y2"
     lipsync_timeout_s: int = Field(default=1200, alias="LIPSYNC_TIMEOUT_S")
+    # Feature J: scene-limited lip-sync (best-effort; default off)
+    lipsync_scene_limited: bool = Field(default=False, alias="LIPSYNC_SCENE_LIMITED")
+    lipsync_sample_every_s: float = Field(default=0.5, alias="LIPSYNC_SAMPLE_EVERY_S")
+    lipsync_min_face_ratio: float = Field(default=0.60, alias="LIPSYNC_MIN_FACE_RATIO")
+    lipsync_min_range_s: float = Field(default=2.0, alias="LIPSYNC_MIN_RANGE_S")
+    lipsync_merge_gap_s: float = Field(default=0.6, alias="LIPSYNC_MERGE_GAP_S")
+    lipsync_max_frames: int = Field(default=600, alias="LIPSYNC_MAX_FRAMES")
 
     # --- ops: retention/cleanup ---
     # latency budgets (seconds): mark jobs "degraded" when exceeded

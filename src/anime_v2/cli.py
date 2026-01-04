@@ -586,6 +586,48 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     help="Face box override for Wav2Lip when --lipsync-face bbox: 'x1,y1,x2,y2'",
 )
 @click.option(
+    "--lipsync-scene-limited",
+    "lipsync_scene_limited",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default=("on" if bool(get_settings().lipsync_scene_limited) else "off"),
+    show_default=True,
+    help="Feature J: apply lip-sync only to face-visible ranges (best-effort); skips ranges where face detection is weak.",
+)
+@click.option(
+    "--lipsync-sample-every",
+    "lipsync_sample_every_s",
+    type=float,
+    default=float(get_settings().lipsync_sample_every_s),
+    show_default=True,
+    help="Feature J: seconds between sampled frames for face preview/range selection.",
+)
+@click.option(
+    "--lipsync-min-face-ratio",
+    type=float,
+    default=float(get_settings().lipsync_min_face_ratio),
+    show_default=True,
+)
+@click.option(
+    "--lipsync-min-range",
+    "lipsync_min_range_s",
+    type=float,
+    default=float(get_settings().lipsync_min_range_s),
+    show_default=True,
+)
+@click.option(
+    "--lipsync-merge-gap",
+    "lipsync_merge_gap_s",
+    type=float,
+    default=float(get_settings().lipsync_merge_gap_s),
+    show_default=True,
+)
+@click.option(
+    "--lipsync-max-frames",
+    type=int,
+    default=int(get_settings().lipsync_max_frames),
+    show_default=True,
+)
+@click.option(
     "--strict-plugins",
     is_flag=True,
     default=False,
@@ -737,6 +779,12 @@ def run(
     lipsync_face: str,
     lipsync_device: str,
     lipsync_box: str | None,
+    lipsync_scene_limited: str,
+    lipsync_sample_every_s: float,
+    lipsync_min_face_ratio: float,
+    lipsync_min_range_s: float,
+    lipsync_merge_gap_s: float,
+    lipsync_max_frames: int,
     strict_plugins: bool,
     print_config: bool,
     dry_run: bool,
@@ -2638,6 +2686,12 @@ def run(
                     face_mode=str(lipsync_face or "auto").lower(),
                     device=str(lipsync_device or "auto").lower(),
                     bbox=bbox,
+                    scene_limited=(str(lipsync_scene_limited).lower() == "on"),
+                    sample_every_s=float(lipsync_sample_every_s),
+                    min_face_ratio=float(lipsync_min_face_ratio),
+                    min_range_s=float(lipsync_min_range_s),
+                    merge_gap_s=float(lipsync_merge_gap_s),
+                    max_frames=int(lipsync_max_frames),
                     timeout_s=int(get_settings().lipsync_timeout_s),
                 )
                 outp = plugin.run(req)
@@ -2679,6 +2733,7 @@ from anime_v2.review.cli import review as review  # noqa: E402
 from anime_v2.qa.cli import qa as qa  # noqa: E402
 from anime_v2.overrides.cli import overrides as overrides  # noqa: E402
 from anime_v2.voice_memory.cli import voice as voice  # noqa: E402
+from anime_v2.plugins.lipsync.cli import lipsync as lipsync  # noqa: E402
 
 cli = DefaultGroup(name="anime-v2", help="anime-v2 CLI (run + review)")  # type: ignore[assignment]
 cli.add_command(run)
@@ -2686,6 +2741,7 @@ cli.add_command(review)
 cli.add_command(qa)
 cli.add_command(overrides)
 cli.add_command(voice)
+cli.add_command(lipsync)
 
 
 if __name__ == "__main__":  # pragma: no cover
