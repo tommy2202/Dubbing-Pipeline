@@ -281,3 +281,84 @@ def export_hls(video_in: Path, dub_wav: Path, srt: Path | None, out_dir: Path) -
         logger.info("[v2] export hls: subtitle kept as %s", srt)
     logger.info("[v2] export hls → %s", master)
     return master
+
+
+def export_mobile_mp4(
+    *,
+    video_in: Path,
+    audio_wav: Path | None,
+    out_path: Path,
+    crf: int = 22,
+    audio_bitrate: str = "128k",
+) -> Path:
+    """
+    Mobile-friendly MP4 for iOS/Android:
+      - H.264 baseline + yuv420p (max compatibility)
+      - AAC-LC
+      - +faststart for progressive playback
+
+    If audio_wav is None, uses the source video's first audio track.
+    """
+    video_in = Path(video_in)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd: list[str] = [str(get_settings().ffmpeg_bin), "-y", "-i", str(video_in)]
+    if audio_wav is not None:
+        cmd += ["-i", str(audio_wav)]
+        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+    else:
+        # Original audio
+        cmd += ["-map", "0:v:0", "-map", "0:a:0?"]
+
+    cmd += [
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "baseline",
+        "-level",
+        "3.1",
+        "-preset",
+        "veryfast",
+        "-crf",
+        str(int(crf)),
+        "-pix_fmt",
+        "yuv420p",
+        "-vf",
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-c:a",
+        "aac",
+        "-b:a",
+        str(audio_bitrate),
+        "-movflags",
+        "+faststart",
+        "-sn",
+        "-avoid_negative_ts",
+        "make_zero",
+        str(out_path),
+    ]
+    run_ffmpeg(cmd, timeout_s=1200, retries=0, capture=True)
+    return out_path
+
+
+def export_mobile_hls(
+    *,
+    video_in: Path,
+    dub_wav: Path,
+    out_dir: Path,
+) -> Path:
+    """
+    Mobile HLS VOD export for maximum iOS reliability.
+
+    Writes:
+      - out_dir/master.m3u8 (existing export_hls behavior)
+      - out_dir/index.m3u8 (copy of master for mobile-friendly naming)
+    """
+    out_dir = Path(out_dir)
+    master = export_hls(video_in=Path(video_in), dub_wav=Path(dub_wav), srt=None, out_dir=out_dir)
+    try:
+        idx = out_dir / "index.m3u8"
+        if master.exists():
+            idx.write_text(master.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+    except Exception:
+        pass
+    return master

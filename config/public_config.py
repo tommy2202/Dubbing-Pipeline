@@ -120,6 +120,10 @@ class PublicConfig(BaseSettings):
     multitrack: bool = Field(default=False, alias="MULTITRACK")
     container: str = Field(default="mkv", alias="CONTAINER")  # mkv|mp4 (used when multitrack on)
 
+    # Mobile playback artifacts (does not change master outputs)
+    mobile_outputs: bool = Field(default=True, alias="MOBILE_OUTPUTS")
+    mobile_hls: bool = Field(default=False, alias="MOBILE_HLS")
+
     # Feature B: retention/cache policy (opt-in; default keep everything)
     cache_policy: str = Field(default="full", alias="CACHE_POLICY")  # full|balanced|minimal
     retention_days: int = Field(default=0, alias="RETENTION_DAYS")  # 0 disables time-based pruning

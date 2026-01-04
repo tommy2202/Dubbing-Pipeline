@@ -2009,6 +2009,42 @@ class JobQueue:
             if out_mp4 and Path(out_mp4).exists():
                 _move_best_effort(Path(out_mp4), final_mp4)
 
+            # Mobile-friendly playback outputs (H.264/AAC MP4 + optional HLS).
+            try:
+                if bool(getattr(settings, "mobile_outputs", True)):
+                    from anime_v2.stages.export import export_mobile_hls, export_mobile_mp4
+
+                    mobile_dir = (base_dir / "mobile").resolve()
+                    mobile_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Prefer enhanced final mix when present, else TTS track.
+                    dubbed_wav = (
+                        (base_dir / "audio" / "final_mix.wav")
+                        if (base_dir / "audio" / "final_mix.wav").exists()
+                        else tts_wav
+                    )
+                    # Dubbed mobile MP4 (default)
+                    export_mobile_mp4(
+                        video_in=video_path,
+                        audio_wav=dubbed_wav if dubbed_wav.exists() else None,
+                        out_path=mobile_dir / "mobile.mp4",
+                    )
+                    # Original mobile MP4 (user-selectable in UI)
+                    export_mobile_mp4(
+                        video_in=video_path,
+                        audio_wav=None,
+                        out_path=mobile_dir / "original.mp4",
+                    )
+
+                    if bool(getattr(settings, "mobile_hls", False)) and dubbed_wav.exists():
+                        export_mobile_hls(
+                            video_in=video_path,
+                            dub_wav=dubbed_wav,
+                            out_dir=mobile_dir / "hls",
+                        )
+            except Exception as ex:
+                self.store.append_log(job_id, f"[{now_utc()}] mobile outputs skipped: {ex}")
+
             # Tier-3A: optional lip-sync plugin (default off).
             try:
                 mode = str(getattr(settings, "lipsync", "off") or "off").strip().lower()

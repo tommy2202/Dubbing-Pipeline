@@ -278,6 +278,20 @@
           </template>
 
           <div class="mt-4 text-sm text-slate-200 space-y-2">
+            <template x-if="files && files.mobile_mp4">
+              <div>
+                <span class="text-slate-500">Mobile MP4 (dubbed):</span>
+                <a class="underline" :href="files.mobile_mp4.url" target="_blank" rel="noreferrer">play/download</a>
+                <a class="underline ml-3" :href="vlcLink(files.mobile_mp4.url)">Open in VLC</a>
+              </div>
+            </template>
+            <template x-if="files && files.mobile_original_mp4">
+              <div>
+                <span class="text-slate-500">Mobile MP4 (original):</span>
+                <a class="underline" :href="files.mobile_original_mp4.url" target="_blank" rel="noreferrer">play/download</a>
+                <a class="underline ml-3" :href="vlcLink(files.mobile_original_mp4.url)">Open in VLC</a>
+              </div>
+            </template>
             <template x-if="files && files.hls_manifest">
               <div><span class="text-slate-500">HLS:</span> <a class="underline" :href="files.hls_manifest.url" target="_blank" rel="noreferrer">manifest</a></div>
             </template>
@@ -285,7 +299,11 @@
               <div><span class="text-slate-500">MP4:</span> <a class="underline" :href="files.mp4.url" target="_blank" rel="noreferrer" download>download</a></div>
             </template>
             <template x-if="files && files.mkv">
-              <div><span class="text-slate-500">MKV:</span> <a class="underline" :href="files.mkv.url" target="_blank" rel="noreferrer" download>download</a></div>
+              <div>
+                <span class="text-slate-500">Master (MKV):</span>
+                <a class="underline" :href="files.mkv.url" target="_blank" rel="noreferrer" download>download</a>
+                <span class="text-xs text-slate-500 ml-2">(best quality; some mobile browsers won't play)</span>
+              </div>
             </template>
             <div><span class="text-slate-500">SRT:</span> <span class="break-all" x-text="job?.output_srt || ''"></span></div>
           </div>
@@ -400,6 +418,14 @@
           // init player if artifacts tab active
           if (this.activeTab === "artifacts") this.initPlayer();
         } catch (e) {}
+      },
+      vlcLink(relUrl) {
+        try {
+          const abs = new URL(relUrl, window.location.origin).toString();
+          return "vlc-x-callback://x-callback-url/stream?url=" + encodeURIComponent(abs);
+        } catch (e) {
+          return "#";
+        }
       },
       async loadQA() {
         this.qaLoaded = true;

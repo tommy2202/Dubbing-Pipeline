@@ -2166,11 +2166,15 @@ async def job_files(
     base_dir = _job_base_dir(job)
     stem = Path(job.video_path).stem if job.video_path else base_dir.name
 
-    # candidates
+    # candidates (master)
     mp4 = None
     mkv = None
     hls = None
     lipsync = None
+    # mobile
+    mobile_mp4 = None
+    mobile_orig_mp4 = None
+    mobile_hls = None
     qa_summary = None
     qa_top_md = None
 
@@ -2208,6 +2212,28 @@ async def job_files(
     except Exception:
         hls = None
 
+    # Mobile artifacts (preferred for iOS/Android playback)
+    try:
+        mdir = base_dir / "mobile"
+        cand = mdir / "mobile.mp4"
+        if cand.exists():
+            mobile_mp4 = cand
+        cand2 = mdir / "original.mp4"
+        if cand2.exists():
+            mobile_orig_mp4 = cand2
+        # Prefer index.m3u8 when present, else master.m3u8
+        cand3 = mdir / "hls" / "index.m3u8"
+        if cand3.exists():
+            mobile_hls = cand3
+        else:
+            cand4 = mdir / "hls" / "master.m3u8"
+            if cand4.exists():
+                mobile_hls = cand4
+    except Exception:
+        mobile_mp4 = None
+        mobile_orig_mp4 = None
+        mobile_hls = None
+
     out_root = _output_root()
 
     def rel_url(p: Path) -> str:
@@ -2215,7 +2241,15 @@ async def job_files(
         return f"/files/{rel}"
 
     files: list[dict[str, Any]] = []
-    for kind, p in [("hls_manifest", hls), ("lipsync_mp4", lipsync), ("mp4", mp4), ("mkv", mkv)]:
+    for kind, p in [
+        ("mobile_hls_manifest", mobile_hls),
+        ("mobile_mp4", mobile_mp4),
+        ("mobile_original_mp4", mobile_orig_mp4),
+        ("hls_manifest", hls),
+        ("lipsync_mp4", lipsync),
+        ("mp4", mp4),
+        ("mkv", mkv),
+    ]:
         if p is None:
             continue
         try:
@@ -2315,17 +2349,29 @@ async def job_files(
         "lipsync_mp4": None,
         "mp4": None,
         "mkv": None,
+        "mobile_mp4": None,
+        "mobile_original_mp4": None,
+        "mobile_hls_manifest": None,
         "qa_summary": None,
         "qa_top_issues": None,
     }
-    if hls is not None:
+    # Prefer mobile playback sources for the built-in player keys.
+    if mobile_hls is not None:
+        data["hls_manifest"] = {"url": rel_url(mobile_hls), "path": str(mobile_hls)}
+        data["mobile_hls_manifest"] = {"url": rel_url(mobile_hls), "path": str(mobile_hls)}
+    elif hls is not None:
         data["hls_manifest"] = {"url": rel_url(hls), "path": str(hls)}
-    if mp4 is not None:
+    if mobile_mp4 is not None:
+        data["mp4"] = {"url": rel_url(mobile_mp4), "path": str(mobile_mp4)}
+        data["mobile_mp4"] = {"url": rel_url(mobile_mp4), "path": str(mobile_mp4)}
+    elif mp4 is not None:
         data["mp4"] = {"url": rel_url(mp4), "path": str(mp4)}
     if lipsync is not None:
         data["lipsync_mp4"] = {"url": rel_url(lipsync), "path": str(lipsync)}
     if mkv is not None:
         data["mkv"] = {"url": rel_url(mkv), "path": str(mkv)}
+    if mobile_orig_mp4 is not None:
+        data["mobile_original_mp4"] = {"url": rel_url(mobile_orig_mp4), "path": str(mobile_orig_mp4)}
 
     # QA artifacts (best-effort)
     try:

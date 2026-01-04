@@ -142,3 +142,14 @@ This verifies:
 - cancel job
 - `/api/jobs/{id}/outputs` + `/api/jobs/{id}/logs` aliases
 
+### Mobile playback outputs verification
+
+```bash
+python3 scripts/verify_mobile_outputs.py
+```
+
+This verifies:
+- H.264/AAC mobile MP4 encoding
+- optional HLS playlist + segments
+- HTTP Range response headers (206 + `Accept-Ranges` + `Content-Range`)
+
