@@ -2728,12 +2728,28 @@ def run(
         except Exception:
             logger.exception("qa_failed_continue")
 
+    # Feature L: cross-episode drift snapshots + reports (offline, deterministic; best-effort).
+    try:
+        from anime_v2.reports.drift import write_drift_reports, write_drift_snapshot
+
+        vm_root = Path(voice_memory_dir or get_settings().voice_memory_dir).resolve()
+        snap = write_drift_snapshot(
+            job_dir=out_dir,
+            video_path=video,
+            voice_memory_dir=vm_root,
+            glossary_path=(str(glossary).strip() if glossary else None),
+        )
+        write_drift_reports(job_dir=out_dir, snapshot_path=snap, compare_last_n=5)
+    except Exception as ex:
+        logger.warning("drift_report_failed_continue", error=str(ex))
+
 # Public entrypoint (project.scripts -> anime_v2.cli:cli)
 from anime_v2.review.cli import review as review  # noqa: E402
 from anime_v2.qa.cli import qa as qa  # noqa: E402
 from anime_v2.overrides.cli import overrides as overrides  # noqa: E402
 from anime_v2.voice_memory.cli import voice as voice  # noqa: E402
 from anime_v2.plugins.lipsync.cli import lipsync as lipsync  # noqa: E402
+from anime_v2.character.cli import character as character  # noqa: E402
 
 cli = DefaultGroup(name="anime-v2", help="anime-v2 CLI (run + review)")  # type: ignore[assignment]
 cli.add_command(run)
@@ -2742,6 +2758,7 @@ cli.add_command(qa)
 cli.add_command(overrides)
 cli.add_command(voice)
 cli.add_command(lipsync)
+cli.add_command(character)
 
 
 if __name__ == "__main__":  # pragma: no cover

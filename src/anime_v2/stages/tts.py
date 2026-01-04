@@ -510,6 +510,53 @@ def run(
         pitch_mul = float(eff_pitch) * float(emo_pitch)
         energy_mul = float(eff_energy) * float(emo_energy)
 
+        # Segment index is 1-based; allow per-segment forced character_id.
+        forced = speaker_overrides.get(str(i + 1))
+        speaker_id = str(forced or line.get("speaker_id") or eff_tts_speaker or "default")
+        if eff_voice_mode == "single":
+            speaker_id = str(eff_tts_speaker or "default")
+        pause_tail_ms = 0
+
+        # Feature K: per-character delivery profiles (voice memory + optional project profile overlay).
+        # Defaults preserve behavior unless a profile field is explicitly set.
+        delivery: dict[str, Any] = {}
+        try:
+            dp_path = (out_dir / "analysis" / "delivery_profiles.json").resolve()
+            if dp_path.exists():
+                dpx = read_json(dp_path, default={})
+                chars = dpx.get("characters") if isinstance(dpx, dict) else None
+                if isinstance(chars, dict):
+                    row = chars.get(str(speaker_id))
+                    if isinstance(row, dict):
+                        delivery.update(dict(row))
+        except Exception:
+            delivery = {}
+        try:
+            if vm_store is not None:
+                cid = vm_manual.get(speaker_id, speaker_id)
+                vmd = vm_store.get_delivery_profile(str(cid))
+                if isinstance(vmd, dict) and vmd:
+                    delivery.update(dict(vmd))
+        except Exception:
+            pass
+
+        # speaking rate multiplier (applied to prosody rate)
+        try:
+            rm = delivery.get("rate_mul")
+            if rm is not None and str(rm).strip() != "":
+                rate_mul *= float(rm)
+        except Exception:
+            pass
+
+        pause_style = str(delivery.get("pause_style") or "").strip().lower()
+        if pause_style:
+            line["pause_style"] = pause_style
+        pref_vm = str(delivery.get("preferred_voice_mode") or "").strip().lower()
+        if pref_vm in {"clone", "preset", "single"}:
+            line["preferred_voice_mode"] = pref_vm
+            if pref_vm == "single":
+                speaker_id = str(eff_tts_speaker or "default")
+
         # Tier-3B expressive mode (optional; OFF by default)
         if eff_expressive != "off":
             try:
@@ -546,16 +593,24 @@ def run(
                 elif eff_expressive in {"auto", "text-only"}:
                     feats = None
 
+                seg_strength = float(eff_expressive_strength)
+                try:
+                    es = delivery.get("expressive_strength")
+                    if es is not None and str(es).strip() != "":
+                        seg_strength = float(es)
+                except Exception:
+                    pass
                 plan = plan_for_segment(
                     segment_id=seg_id,
                     mode=eff_expressive,
-                    strength=float(eff_expressive_strength),
+                    strength=float(seg_strength),
                     text=text,
                     features=feats,
                 )
                 rate_mul *= float(plan.rate_mul)
                 pitch_mul *= float(plan.pitch_mul)
                 energy_mul *= float(plan.energy_mul)
+                pause_tail_ms = max(pause_tail_ms, int(getattr(plan, "pause_tail_ms", 0) or 0))
                 if eff_expressive_debug:
                     out_plan = out_dir / "expressive" / "plans" / f"{seg_id:04d}.json"
                     write_plan_json(plan, out_plan, features=feats)
@@ -568,23 +623,37 @@ def run(
                 from anime_v2.expressive.director import plan_for_segment
 
                 seg_id = int(i + 1)
+                d_strength = float(eff_director_strength)
+                try:
+                    es = delivery.get("expressive_strength")
+                    if es is not None and str(es).strip() != "":
+                        d_strength = float(es)
+                except Exception:
+                    pass
                 plan = plan_for_segment(
                     segment_id=seg_id,
                     text=text,
                     start_s=float(line.get("start", 0.0)),
                     end_s=float(line.get("end", 0.0)),
                     source_audio_wav=Path(source_audio_wav) if source_audio_wav is not None else None,
-                    strength=float(eff_director_strength),
+                    strength=float(d_strength),
                 )
                 rate_mul *= float(plan.rate_mul)
                 pitch_mul *= float(plan.pitch_mul)
                 energy_mul *= float(plan.energy_mul)
+                pause_tail_ms = max(pause_tail_ms, int(getattr(plan, "pause_tail_ms", 0) or 0))
                 _director_plans.append(plan)
-        # Segment index is 1-based; allow per-segment forced character_id.
-        forced = speaker_overrides.get(str(i + 1))
-        speaker_id = str(forced or line.get("speaker_id") or eff_tts_speaker or "default")
-        if eff_voice_mode == "single":
-            speaker_id = str(eff_tts_speaker or "default")
+
+        # Apply pause-style scaling (only if we actually have a pause tail).
+        if pause_tail_ms > 0:
+            mul = 1.0
+            if pause_style == "tight":
+                mul = 0.6
+            elif pause_style in {"", "default", "normal"}:
+                mul = 1.0
+            elif pause_style == "dramatic":
+                mul = 1.5
+            pause_tail_ms = int(max(0, min(800, int(float(pause_tail_ms) * float(mul)))))
         if not text:
             # keep timing, but skip synthesis (silence clip)
             clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
@@ -644,6 +713,11 @@ def run(
             or eff_tts_speaker_wav
             or speaker_rep_wav.get(speaker_id)
         )
+        # Per-segment voice mode (Feature K + Tier-2A): do not mutate job-level defaults.
+        seg_voice_mode = str(line.get("preferred_voice_mode") or eff_voice_mode or "clone").strip().lower()
+        if seg_voice_mode not in {"clone", "preset", "single"}:
+            seg_voice_mode = "clone"
+
         # Tier-2A: prefer voice-memory refs for stable cross-episode identity.
         if vm_store is not None:
             try:
@@ -656,10 +730,13 @@ def run(
                 for c in vm_store.list_characters():
                     if str(c.get("character_id") or "") != str(cid):
                         continue
-                    pref_mode = str(c.get("voice_mode") or "").strip().lower()
+                    # Only apply legacy per-character voice_mode if no explicit delivery-profile preferred_voice_mode exists.
+                    pref_mode = ""
+                    if not str(line.get("preferred_voice_mode") or "").strip():
+                        pref_mode = str(c.get("voice_mode") or "").strip().lower()
                     pref_preset = str(c.get("preset_voice_id") or "").strip()
                     if pref_mode in {"clone", "preset", "single"}:
-                        eff_voice_mode = pref_mode
+                        seg_voice_mode = pref_mode
                     if pref_preset:
                         per_speaker_preset_override[speaker_id] = pref_preset
                     break
@@ -713,7 +790,7 @@ def run(
         if (
             engine is not None
             and cb.allow()
-            and eff_voice_mode == "clone"
+            and seg_voice_mode == "clone"
             and eff_tts_provider in {"auto", "xtts"}
         ):
             # 1) XTTS clone (if speaker_wav)
@@ -740,7 +817,7 @@ def run(
             # 2) XTTS preset
             if (
                 not synthesized
-                and eff_voice_mode in {"clone", "preset"}
+                and seg_voice_mode in {"clone", "preset"}
                 and eff_tts_provider in {"auto", "xtts"}
             ):
                 # Choose best preset if we have speaker embedding; else default preset
@@ -841,6 +918,32 @@ def run(
                 pitch=pitch_mul,
                 energy=energy_mul,
             )
+
+        # Feature K: add a pause tail (best-effort) after prosody controls.
+        if pause_tail_ms > 0:
+            with suppress(Exception):
+                from anime_v2.utils.ffmpeg_safe import ffprobe_duration_seconds
+
+                d0 = float(ffprobe_duration_seconds(Path(clip)))
+                tail_s = float(pause_tail_ms) / 1000.0
+                outp = Path(clip).with_suffix(".pause.wav")
+                run_ffmpeg(
+                    [
+                        str(settings.ffmpeg_bin),
+                        "-y",
+                        "-i",
+                        str(clip),
+                        "-filter:a",
+                        f"apad=pad_dur={tail_s:.3f}",
+                        "-t",
+                        f"{(d0 + tail_s):.3f}",
+                        str(outp),
+                    ],
+                    timeout_s=120,
+                    retries=0,
+                    capture=True,
+                )
+                clip = outp
 
         # Optional Tier-1 C pacing controls (opt-in).
         if eff_pacing:

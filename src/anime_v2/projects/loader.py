@@ -57,6 +57,7 @@ class LoadedProjectProfile:
     style_guide_path: Path | None
     qa_config: dict[str, Any]
     mix_config: dict[str, Any]
+    delivery_config: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +69,7 @@ class LoadedProjectProfile:
             "style_guide_path": str(self.style_guide_path) if self.style_guide_path else "",
             "qa": self.qa_config,
             "mix": self.mix_config,
+            "delivery": self.delivery_config,
         }
 
 
@@ -119,6 +121,7 @@ def load_project_profile(name: str) -> LoadedProjectProfile | None:
     style_rel = str(inc.get("style_guide") or data.get("style_guide") or "style_guide.yaml")
     qa_rel = str(inc.get("qa") or data.get("qa") or "qa.yaml")
     mix_rel = str(inc.get("mix") or data.get("mix") or "mix.yaml")
+    delivery_rel = str(inc.get("delivery") or data.get("delivery") or "delivery.yaml")
 
     style_path = (pdir / style_rel).resolve() if style_rel else None
     if style_path and not style_path.exists():
@@ -127,19 +130,24 @@ def load_project_profile(name: str) -> LoadedProjectProfile | None:
 
     qa_path = (pdir / qa_rel).resolve() if qa_rel else None
     mix_path = (pdir / mix_rel).resolve() if mix_rel else None
+    delivery_path = (pdir / delivery_rel).resolve() if delivery_rel else None
 
     qa_cfg: dict[str, Any] = {}
     mix_cfg: dict[str, Any] = {}
+    delivery_cfg: dict[str, Any] = {}
     if qa_path and qa_path.exists():
         qa_cfg = _load_yaml_or_json(qa_path)
     if mix_path and mix_path.exists():
         mix_cfg = _load_yaml_or_json(mix_path)
+    if delivery_path and delivery_path.exists():
+        delivery_cfg = _load_yaml_or_json(delivery_path)
 
     # Hash includes content (not just profile.yaml) for stable job provenance.
     hash_payload = {
         "profile": data,
         "qa": qa_cfg,
         "mix": mix_cfg,
+        "delivery": delivery_cfg,
         # style guide is already hashed/validated by its loader; we include path only
         "style_guide_path": str(style_path) if style_path else "",
     }
@@ -153,7 +161,44 @@ def load_project_profile(name: str) -> LoadedProjectProfile | None:
         style_guide_path=style_path,
         qa_config=qa_cfg if isinstance(qa_cfg, dict) else {},
         mix_config=mix_cfg if isinstance(mix_cfg, dict) else {},
+        delivery_config=delivery_cfg if isinstance(delivery_cfg, dict) else {},
     )
+
+
+def delivery_profiles_from_profile(profile: LoadedProjectProfile) -> dict[str, Any]:
+    """
+    Returns per-character delivery profile overrides from delivery.yaml (optional).
+
+    Expected shape:
+      version: 1
+      characters:
+        SPEAKER_01:
+          rate_mul: 1.05
+          pause_style: dramatic
+          expressive_strength: 0.7
+          preferred_voice_mode: clone
+    """
+    cfg = profile.delivery_config if isinstance(profile.delivery_config, dict) else {}
+    ver = int(cfg.get("version") or 1) if isinstance(cfg, dict) else 1
+    if ver != 1:
+        return {}
+    chars = cfg.get("characters") if isinstance(cfg.get("characters"), dict) else {}
+    out: dict[str, Any] = {}
+    if isinstance(chars, dict):
+        for cid, row in chars.items():
+            if not str(cid).strip() or not isinstance(row, dict):
+                continue
+            d: dict[str, Any] = {}
+            if "rate_mul" in row:
+                d["rate_mul"] = float(row["rate_mul"])
+            if "pause_style" in row:
+                d["pause_style"] = str(row["pause_style"] or "").strip().lower()
+            if "expressive_strength" in row:
+                d["expressive_strength"] = float(row["expressive_strength"])
+            if "preferred_voice_mode" in row:
+                d["preferred_voice_mode"] = str(row["preferred_voice_mode"] or "").strip().lower()
+            out[str(cid).strip()] = d
+    return out
 
 
 def mix_overrides_from_profile(profile: LoadedProjectProfile) -> dict[str, Any]:
@@ -223,6 +268,14 @@ def write_profile_artifacts(job_dir: Path, profile: LoadedProjectProfile) -> Non
         atomic_write_text(
             job_dir / "analysis" / "qa_profile.json",
             json.dumps({"version": 1, "project": profile.name, "profile_hash": profile.profile_hash, "thresholds": th}, indent=2, sort_keys=True),
+            "utf-8",
+        )
+
+    dp = delivery_profiles_from_profile(profile)
+    if dp:
+        atomic_write_text(
+            job_dir / "analysis" / "delivery_profiles.json",
+            json.dumps({"version": 1, "project": profile.name, "profile_hash": profile.profile_hash, "characters": dp}, indent=2, sort_keys=True),
             "utf-8",
         )
 

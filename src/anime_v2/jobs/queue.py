@@ -2047,6 +2047,21 @@ class JobQueue:
             except Exception:
                 self.store.append_log(job_id, f"[{now_utc()}] qa failed; continuing")
 
+            # Feature L: cross-episode drift snapshots + reports (offline, deterministic; best-effort).
+            try:
+                from anime_v2.reports.drift import write_drift_reports, write_drift_snapshot
+
+                snap = write_drift_snapshot(
+                    job_dir=base_dir,
+                    video_path=video_path,
+                    voice_memory_dir=Path(getattr(settings, "voice_memory_dir", Path.cwd() / "data" / "voice_memory")).resolve(),
+                    glossary_path=str(getattr(settings, "glossary_path", "") or ""),
+                )
+                write_drift_reports(job_dir=base_dir, snapshot_path=snap, compare_last_n=5)
+                self.store.append_log(job_id, f"[{now_utc()}] drift_report: ok")
+            except Exception as ex:
+                self.store.append_log(job_id, f"[{now_utc()}] drift_report skipped: {ex}")
+
             # Feature B: per-job retention policy (default full => keep everything)
             try:
                 curj = self.store.get(job_id)

@@ -68,6 +68,8 @@ class CharacterMeta:
     updated_at: str = ""
     voice_mode: str = ""  # clone|preset|single (preference)
     preset_voice_id: str = ""
+    # Feature K: per-character delivery profile (optional; empty means "inherit job defaults")
+    delivery_profile: dict[str, Any] | None = None
     notes: str = ""
     tags: list[str] | None = None
 
@@ -132,6 +134,16 @@ class VoiceMemoryStore:
                 "updated_at": now,
                 "voice_mode": "",
                 "preset_voice_id": "",
+                "delivery_profile": {
+                    # speaking rate multiplier (applied to prosody rate); 1.0 means unchanged
+                    "rate_mul": None,
+                    # pause style: default|tight|normal|dramatic (controls pause tail scaling)
+                    "pause_style": "",
+                    # expressive strength override 0..1; None => inherit job setting
+                    "expressive_strength": None,
+                    # preferred voice mode (clone|preset|single); "" => inherit
+                    "preferred_voice_mode": "",
+                },
                 "notes": "",
                 "tags": [],
             }
@@ -161,6 +173,87 @@ class VoiceMemoryStore:
 
     def set_character_preset(self, character_id: str, preset_voice_id: str) -> None:
         self.update_character(str(character_id), {"preset_voice_id": str(preset_voice_id).strip()})
+
+    def get_character(self, character_id: str) -> dict[str, Any] | None:
+        data = self._load_characters()
+        chars = data.get("characters", {})
+        if not isinstance(chars, dict):
+            return None
+        rec = chars.get(str(character_id))
+        return dict(rec) if isinstance(rec, dict) else None
+
+    def get_delivery_profile(self, character_id: str) -> dict[str, Any]:
+        """
+        Returns a normalized per-character delivery profile.
+        Empty/invalid values are returned as an empty dict to indicate "inherit".
+        """
+        rec = self.get_character(str(character_id)) or {}
+        dp = rec.get("delivery_profile")
+        if not isinstance(dp, dict):
+            return {}
+        out: dict[str, Any] = {}
+        # rate_mul
+        rm = dp.get("rate_mul")
+        try:
+            if rm is not None and str(rm).strip() != "":
+                out["rate_mul"] = float(rm)
+        except Exception:
+            pass
+        # pause_style
+        ps = str(dp.get("pause_style") or "").strip().lower()
+        if ps:
+            out["pause_style"] = ps
+        # expressive_strength
+        es = dp.get("expressive_strength")
+        try:
+            if es is not None and str(es).strip() != "":
+                out["expressive_strength"] = float(es)
+        except Exception:
+            pass
+        # preferred_voice_mode
+        vm = str(dp.get("preferred_voice_mode") or "").strip().lower()
+        if vm:
+            out["preferred_voice_mode"] = vm
+        return out
+
+    def update_delivery_profile(self, character_id: str, patch: dict[str, Any]) -> None:
+        """
+        Patch delivery_profile fields atomically.
+        """
+        cid = str(character_id).strip()
+        rec = self.get_character(cid) or {}
+        dp0 = rec.get("delivery_profile")
+        if not isinstance(dp0, dict):
+            dp0 = {}
+        dp0.update({k: v for k, v in (patch or {}).items()})
+        self.update_character(cid, {"delivery_profile": dp0})
+
+    def set_character_rate_mul(self, character_id: str, rate_mul: float) -> None:
+        v = float(rate_mul)
+        if not (0.5 <= v <= 2.0):
+            raise ValueError("rate_mul must be in [0.5, 2.0]")
+        self.update_delivery_profile(str(character_id), {"rate_mul": float(v)})
+
+    def set_character_pause_style(self, character_id: str, style: str) -> None:
+        s = str(style).strip().lower()
+        if s not in {"", "default", "tight", "normal", "dramatic"}:
+            raise ValueError("pause_style must be one of: default|tight|normal|dramatic")
+        self.update_delivery_profile(str(character_id), {"pause_style": s})
+
+    def set_character_expressive_strength(self, character_id: str, strength: float | None) -> None:
+        if strength is None:
+            self.update_delivery_profile(str(character_id), {"expressive_strength": None})
+            return
+        v = float(strength)
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("expressive_strength must be in [0, 1]")
+        self.update_delivery_profile(str(character_id), {"expressive_strength": float(v)})
+
+    def set_character_preferred_voice_mode(self, character_id: str, mode: str) -> None:
+        m = str(mode).strip().lower()
+        if m not in {"", "clone", "preset", "single"}:
+            raise ValueError("preferred_voice_mode must be clone|preset|single")
+        self.update_delivery_profile(str(character_id), {"preferred_voice_mode": m})
 
     def character_dir(self, character_id: str) -> Path:
         d = self.embeddings_dir / str(character_id)
