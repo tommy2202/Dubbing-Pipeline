@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Security & Mobile Gate
 
@@ -14,11 +12,12 @@ This wrapper runs the repo's verification scripts that together validate:
 It is safe to run on synthetic media (no real anime inputs required).
 """
 
+from __future__ import annotations
+
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 PY = sys.executable

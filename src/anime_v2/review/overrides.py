@@ -3,14 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from anime_v2.security.crypto import (
+    decrypt_bytes,
+    encryption_enabled_for,
+    is_encrypted_path,
+    write_bytes_encrypted,
+)
 from anime_v2.utils.io import atomic_write_text, read_json, write_json
 from anime_v2.utils.log import logger
-from anime_v2.security.crypto import decrypt_bytes, encryption_enabled_for, is_encrypted_path, write_bytes_encrypted
 
 
 def overrides_path(job_dir: Path) -> Path:
@@ -77,7 +81,7 @@ def save_overrides(job_dir: Path, overrides: dict[str, Any]) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     payload = default_overrides()
     if isinstance(overrides, dict):
-        payload.update({k: overrides.get(k) for k in payload.keys() if k in overrides})
+        payload.update({k: overrides.get(k) for k in payload if k in overrides})
     payload["version"] = 1
     raw = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
     if encryption_enabled_for("review"):
@@ -318,14 +322,15 @@ def apply_smoothing_overrides_to_utts(
             continue
         s = float(u.get("start", 0.0))
         e = float(u.get("end", s))
-        if any(_overlaps(s, e, a0, a1) for a0, a1 in ranges):
-            if "speaker_original" in u and str(u.get("speaker_original") or "").strip():
-                u2 = dict(u)
-                u2["speaker"] = str(u.get("speaker_original"))
-                u2["_smoothing_reverted"] = True
-                out.append(u2)
-                reverted += 1
-                continue
+        if any(_overlaps(s, e, a0, a1) for a0, a1 in ranges) and (
+            "speaker_original" in u and str(u.get("speaker_original") or "").strip()
+        ):
+            u2 = dict(u)
+            u2["speaker"] = str(u.get("speaker_original"))
+            u2["_smoothing_reverted"] = True
+            out.append(u2)
+            reverted += 1
+            continue
         out.append(u)
     return out, reverted
 

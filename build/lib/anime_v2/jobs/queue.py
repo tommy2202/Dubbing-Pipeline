@@ -26,6 +26,7 @@ from anime_v2.ops.metrics import (
     whisper_seconds,
 )
 from anime_v2.runtime.scheduler import Scheduler
+from anime_v2.security.crypto import CryptoConfigError, decrypt_file, is_encrypted_path
 from anime_v2.stages import audio_extractor, mkv_export, tts
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.diarization import DiarizeConfig
@@ -40,7 +41,6 @@ from anime_v2.utils.hashio import hash_audio_from_video
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import install_egress_policy
 from anime_v2.utils.time import format_srt_timestamp
-from anime_v2.security.crypto import CryptoConfigError, decrypt_file, is_encrypted_path
 
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-")
 
@@ -427,7 +427,10 @@ class JobQueue:
                     rt2 = dict((curj.runtime or {}) if curj else runtime)
                     proj_name = str(rt2.get("project_name") or "").strip()
                     if proj_name:
-                        from anime_v2.projects.loader import load_project_profile, write_profile_artifacts
+                        from anime_v2.projects.loader import (
+                            load_project_profile,
+                            write_profile_artifacts,
+                        )
 
                         prof = load_project_profile(proj_name)
                         if prof is not None:
@@ -637,7 +640,10 @@ class JobQueue:
                         )
                         # Feature D: optional per-job smoothing overrides (disable smoothing in selected ranges/segments)
                         try:
-                            from anime_v2.review.overrides import apply_smoothing_overrides_to_utts, load_overrides
+                            from anime_v2.review.overrides import (
+                                apply_smoothing_overrides_to_utts,
+                                load_overrides,
+                            )
 
                             ov = load_overrides(base_dir)
                             sm_ov = ov.get("smoothing_overrides", {}) if isinstance(ov, dict) else {}
@@ -1544,7 +1550,10 @@ class JobQueue:
                     # Optional timing-aware translation fit (Tier-1 B).
                     if bool(getattr(settings, "timing_fit", False)):
                         try:
-                            from anime_v2.timing.rewrite_provider import append_rewrite_jsonl, fit_with_rewrite_provider
+                            from anime_v2.timing.rewrite_provider import (
+                                append_rewrite_jsonl,
+                                fit_with_rewrite_provider,
+                            )
 
                             wps = float(getattr(settings, "timing_wps", 2.7))
                             tol = float(getattr(settings, "timing_tolerance", 0.10))
@@ -1974,7 +1983,9 @@ class JobQueue:
                                 and music_regions_path_work.exists()
                             ):
                                 try:
-                                    from anime_v2.audio.music_detect import build_music_preserving_bed
+                                    from anime_v2.audio.music_detect import (
+                                        build_music_preserving_bed,
+                                    )
                                     from anime_v2.utils.io import read_json
 
                                     data = read_json(music_regions_path_work, default={})

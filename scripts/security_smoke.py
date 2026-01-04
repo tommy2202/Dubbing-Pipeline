@@ -52,14 +52,14 @@ def main() -> int:
             # HTML route should have baseline security headers
             r = c.get("/ui/login")
             assert r.status_code == 200
-            assert "content-security-policy" in {k.lower() for k in r.headers.keys()}
+            assert "content-security-policy" in {k.lower() for k in r.headers}
             assert r.headers.get("x-content-type-options") == "nosniff"
             assert r.headers.get("x-frame-options") == "DENY"
 
             # CORS should not reflect arbitrary origins when allow list is empty
             r = c.get("/ui/login", headers={"Origin": "https://evil.example"})
             assert r.status_code == 200
-            assert "access-control-allow-origin" not in {k.lower() for k in r.headers.keys()}
+            assert "access-control-allow-origin" not in {k.lower() for k in r.headers}
 
             # Directory traversal in file picker should be blocked
             # (requires auth)

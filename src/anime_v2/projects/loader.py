@@ -37,10 +37,11 @@ def _load_yaml_or_json(path: Path) -> dict[str, Any]:
             raise ValueError("profile YAML must be an object")
         return data
     except Exception:
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            raise ValueError("profile must be YAML or JSON object")
-        return data
+        pass
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("profile must be YAML or JSON object")
+    return data
 
 
 def _sha256_json(obj: Any) -> str:

@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from anime_v2.utils.io import atomic_write_text
-from anime_v2.utils.log import logger
 
 
 @dataclass(frozen=True, slots=True)

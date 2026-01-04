@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import wave
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -155,10 +156,8 @@ def detect_scenes_audio(
             t += hop
             i0 += frames_hop
     finally:
-        try:
+        with suppress(Exception):
             wf.close()
-        except Exception:
-            pass
 
     # dedupe bounds close together
     bounds.sort(key=lambda x: x[0])

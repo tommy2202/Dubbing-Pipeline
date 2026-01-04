@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import base64
 import os
-from dataclasses import dataclass
 
 from anime_v2.config import get_settings
 from anime_v2.security.crypto import CryptoConfigError  # reuse key source semantics
-
 
 _PREFIX = "enc:v1:"
 

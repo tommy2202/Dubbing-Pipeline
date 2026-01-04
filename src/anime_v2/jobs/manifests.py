@@ -10,7 +10,6 @@ from typing import Any
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
 
-
 _SHA256_MAX_BYTES = 256 * 1024 * 1024  # avoid hashing very large files by default
 
 
@@ -133,8 +132,5 @@ def can_resume_stage(
         return False
     if str(data.get("params_hash") or "") != params_hash(params):
         return False
-    for out in expected_outputs:
-        if not Path(out).exists():
-            return False
-    return True
+    return all(Path(out).exists() for out in expected_outputs)
 

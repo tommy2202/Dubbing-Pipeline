@@ -5,8 +5,7 @@ import random
 import time
 import urllib.error
 import urllib.request
-from dataclasses import asdict
-from typing import Any
+from contextlib import suppress
 
 from anime_v2.config import get_settings
 from anime_v2.ops import audit
@@ -38,11 +37,11 @@ def _parse_auth(raw: str) -> dict[str, str]:
         if len(parts) != 2:
             return {}
         user, pw = parts[0], parts[1]
-        b64 = base64.b64encode(f"{user}:{pw}".encode("utf-8")).decode("ascii")
+        b64 = base64.b64encode(f"{user}:{pw}".encode()).decode("ascii")
         return {"Authorization": f"Basic {b64}"}
     if ":" in v and not v.startswith("http"):
         user, pw = v.split(":", 1)
-        b64 = base64.b64encode(f"{user}:{pw}".encode("utf-8")).decode("ascii")
+        b64 = base64.b64encode(f"{user}:{pw}".encode()).decode("ascii")
         return {"Authorization": f"Basic {b64}"}
     # Unknown format; treat as bearer token for convenience.
     return {"Authorization": f"Bearer {v}"}
@@ -153,10 +152,9 @@ def notify(
                 ok = True
                 break
             # Retry on rate limit / server errors.
-            if int(st) in {408, 425, 429} or int(st) >= 500:
-                if attempt < retries:
-                    _sleep_backoff(attempt)
-                    continue
+            if (int(st) in {408, 425, 429} or int(st) >= 500) and (attempt < retries):
+                _sleep_backoff(attempt)
+                continue
             break
         except urllib.error.HTTPError as ex:
             try:
@@ -164,10 +162,12 @@ def notify(
             except Exception:
                 last_status = None
             last_error = "http_error"
-            if last_status in {408, 425, 429} or (last_status is not None and last_status >= 500):
-                if attempt < retries:
-                    _sleep_backoff(attempt)
-                    continue
+            if (
+                (last_status in {408, 425, 429} or (last_status is not None and last_status >= 500))
+                and (attempt < retries)
+            ):
+                _sleep_backoff(attempt)
+                continue
             break
         except Exception as ex:
             last_error = str(ex)[:200]
@@ -177,7 +177,7 @@ def notify(
             break
 
     # Audit/log without credentials (never include auth/topic).
-    try:
+    with suppress(Exception):
         audit.emit(
             "notify.ntfy",
             request_id=None,
@@ -190,11 +190,9 @@ def notify(
                 "error": last_error,
             },
         )
-    except Exception:
-        pass
 
     # Structured app log (no secrets)
-    try:
+    with suppress(Exception):
         logger.info(
             "ntfy_notify",
             ok=bool(ok),
@@ -202,8 +200,6 @@ def notify(
             job_id=str(job_id or "") or None,
             status=int(last_status) if last_status is not None else None,
         )
-    except Exception:
-        pass
 
     return bool(ok)
 

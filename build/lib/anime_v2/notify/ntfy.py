@@ -5,8 +5,6 @@ import random
 import time
 import urllib.error
 import urllib.request
-from dataclasses import asdict
-from typing import Any
 
 from anime_v2.config import get_settings
 from anime_v2.ops import audit
@@ -38,11 +36,11 @@ def _parse_auth(raw: str) -> dict[str, str]:
         if len(parts) != 2:
             return {}
         user, pw = parts[0], parts[1]
-        b64 = base64.b64encode(f"{user}:{pw}".encode("utf-8")).decode("ascii")
+        b64 = base64.b64encode(f"{user}:{pw}".encode()).decode("ascii")
         return {"Authorization": f"Basic {b64}"}
     if ":" in v and not v.startswith("http"):
         user, pw = v.split(":", 1)
-        b64 = base64.b64encode(f"{user}:{pw}".encode("utf-8")).decode("ascii")
+        b64 = base64.b64encode(f"{user}:{pw}".encode()).decode("ascii")
         return {"Authorization": f"Basic {b64}"}
     # Unknown format; treat as bearer token for convenience.
     return {"Authorization": f"Bearer {v}"}

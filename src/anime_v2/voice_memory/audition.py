@@ -67,7 +67,7 @@ def _top_presets_for_character(character_id: str, *, top_n: int) -> list[Candida
     if not str(character_id or "").strip():
         db = load_voice_db(preset_dir=preset_dir, db_path=db_path, embeddings_dir=embeddings_dir)
         presets = db.get("presets", {}) if isinstance(db, dict) else {}
-        names = sorted([str(k) for k in presets.keys()]) if isinstance(presets, dict) else []
+        names = sorted([str(k) for k in presets]) if isinstance(presets, dict) else []
         return [Candidate(kind="preset", label=f"preset:{nm}", speaker_id=nm, score=None) for nm in names[: max(0, int(top_n))]]
 
     # Attempt similarity using stored embedding.npy from voice memory (may not match preset space; best-effort).
@@ -82,7 +82,7 @@ def _top_presets_for_character(character_id: str, *, top_n: int) -> list[Candida
 
     db = load_voice_db(preset_dir=preset_dir, db_path=db_path, embeddings_dir=embeddings_dir)
     presets = db.get("presets", {}) if isinstance(db, dict) else {}
-    names = sorted([str(k) for k in presets.keys()]) if isinstance(presets, dict) else []
+    names = sorted([str(k) for k in presets]) if isinstance(presets, dict) else []
     out = []
     for nm in names[: max(0, int(top_n))]:
         out.append(Candidate(kind="preset", label=f"preset:{nm}", speaker_id=nm, score=None))
@@ -139,7 +139,6 @@ def audition(
     Produce audition WAVs under Output/<job>/audition/.
     Always produces outputs (silence fallback if TTS unavailable).
     """
-    s = get_settings()
     job_dir = Path(out_job_dir).resolve()
     out_dir = job_dir / "audition"
     _safe_mkdir(out_dir)

@@ -10,7 +10,6 @@ from typing import Any
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger
 
-
 _SHA256_MAX_BYTES = 256 * 1024 * 1024  # avoid hashing very large files by default
 
 

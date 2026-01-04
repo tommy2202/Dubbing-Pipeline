@@ -29,7 +29,7 @@ def _write_clipped_wav(path: Path, *, seconds: float, sr: int = 16000) -> None:
         wf.setsampwidth(2)
         wf.setframerate(sr)
         for _ in range(n):
-            wf.writeframesraw(int(32767).to_bytes(2, "little", signed=True))
+            wf.writeframesraw((32767).to_bytes(2, "little", signed=True))
 
 
 def main() -> int:

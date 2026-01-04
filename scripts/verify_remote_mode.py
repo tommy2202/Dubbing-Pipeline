@@ -4,10 +4,10 @@ import asyncio
 import os
 from typing import Any
 
+from config.settings import get_settings
 from fastapi import FastAPI
 
 from anime_v2.api.remote_access import remote_access_middleware
-from config.settings import get_settings
 
 
 def _reset_settings_env(env: dict[str, str]) -> None:

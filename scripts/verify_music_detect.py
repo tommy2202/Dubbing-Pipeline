@@ -66,7 +66,7 @@ def main() -> int:
     import subprocess
 
     def sh(cmd: list[str]) -> None:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(cmd, check=True, capture_output=True)
 
     # 1s "speech-ish" band-limited noise
     sh(

@@ -132,7 +132,7 @@ def _update_episode_mappings(root: Path, *, from_id: str, to_id: str) -> int:
         if not isinstance(mapping, dict):
             continue
         dirty = False
-        for diar_label, rec in mapping.items():
+        for _diar_label, rec in mapping.items():
             if not isinstance(rec, dict):
                 continue
             cid = str(rec.get("character_id") or "")

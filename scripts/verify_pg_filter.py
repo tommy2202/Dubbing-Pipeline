@@ -10,7 +10,11 @@ from config.settings import get_safe_config_report
 def main() -> int:
     print("safe_config_report:", get_safe_config_report())
 
-    from anime_v2.text.pg_filter import apply_pg_filter, apply_pg_filter_to_segments, built_in_policy
+    from anime_v2.text.pg_filter import (
+        apply_pg_filter,
+        apply_pg_filter_to_segments,
+        built_in_policy,
+    )
 
     samples = [
         ("pg13", "This is fucking shit.", "This is freaking crap."),

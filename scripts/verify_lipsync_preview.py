@@ -71,5 +71,5 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception as ex:
         print(f"verify_lipsync_preview: FAIL: {ex}", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from ex
 

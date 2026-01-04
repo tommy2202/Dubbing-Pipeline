@@ -5,7 +5,11 @@ from pathlib import Path
 
 
 def main() -> int:
-    from anime_v2.subs.formatting import SubtitleFormatRules, format_subtitle_blocks_with_stats, write_formatted_subs_variant
+    from anime_v2.subs.formatting import (
+        SubtitleFormatRules,
+        format_subtitle_blocks_with_stats,
+        write_formatted_subs_variant,
+    )
 
     rules = SubtitleFormatRules(max_chars_per_line=20, max_lines=2, max_cps=25.0, min_duration_s=0.8, max_duration_s=7.0)
 

@@ -3,9 +3,10 @@ from __future__ import annotations
 import os
 import shutil
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 from anime_v2.utils.io import read_json, write_json
 from anime_v2.utils.log import logger

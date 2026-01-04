@@ -4,10 +4,10 @@ import base64
 import os
 import struct
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 from anime_v2.config import get_settings
 from anime_v2.utils.io import atomic_write_bytes
@@ -109,7 +109,7 @@ def _aad(*, kind: str, job_id: str | None = None) -> bytes:
     # AAD is not secret; it binds ciphertext to a context to reduce accidental misuse.
     k = str(kind or "").strip().lower()
     jid = str(job_id or "").strip()
-    return f"anime_v2:{k}:{jid}".encode("utf-8")
+    return f"anime_v2:{k}:{jid}".encode()
 
 
 def encrypt_file(in_path: Path, out_path: Path, *, kind: str, job_id: str | None = None) -> None:

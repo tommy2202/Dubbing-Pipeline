@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import math
 import time
 import wave
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from anime_v2.review.ops import resolve_job_dir
 from anime_v2.utils.io import atomic_write_text, read_json
@@ -790,9 +790,11 @@ def score_job(
                 max_r = _safe_float(pacing.get("max_ratio"), 1.18) or 1.18
                 near = float(pacing_near_limit_frac)
                 near_limit = False
-                if atempo_ratio is not None:
-                    if atempo_ratio >= float(max_r) * near or atempo_ratio <= float(min_r) / max(near, 1e-6):
-                        near_limit = True
+                if atempo_ratio is not None and (
+                    atempo_ratio >= float(max_r) * near
+                    or atempo_ratio <= float(min_r) / max(near, 1e-6)
+                ):
+                    near_limit = True
                 if hard_trim:
                     issues.append(
                         QAIssue(
@@ -846,10 +848,7 @@ def score_job(
         )
 
     # job score: average segment scores, penalize failures
-    if seg_rows:
-        avg = sum(s.score for s in seg_rows) / float(len(seg_rows))
-    else:
-        avg = 100.0
+    avg = sum(s.score for s in seg_rows) / float(len(seg_rows)) if seg_rows else 100.0
     fails = by_sev["fail"]
     job_score = max(0.0, min(100.0, avg - float(fails) * 2.0))
 

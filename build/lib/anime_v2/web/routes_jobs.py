@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import ipaddress
+import json as _json
 import re
 import time
-import json as _json
-import ipaddress
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -34,10 +34,6 @@ from anime_v2.ops.metrics import jobs_queued, pipeline_job_total
 from anime_v2.ops.storage import ensure_free_space
 from anime_v2.runtime import lifecycle
 from anime_v2.runtime.scheduler import JobRecord, Scheduler
-from anime_v2.utils.crypto import verify_secret
-from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_media_info
-from anime_v2.utils.log import request_id_var
-from anime_v2.utils.ratelimit import RateLimiter
 from anime_v2.security.crypto import (
     CryptoConfigError,
     encrypt_file,
@@ -45,6 +41,10 @@ from anime_v2.security.crypto import (
     is_encrypted_path,
     materialize_decrypted,
 )
+from anime_v2.utils.crypto import verify_secret
+from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_media_info
+from anime_v2.utils.log import request_id_var
+from anime_v2.utils.ratelimit import RateLimiter
 
 router = APIRouter()
 
@@ -841,7 +841,6 @@ def _load_transcript_store(base_dir: Path) -> dict[str, Any]:
 def _save_transcript_store(base_dir: Path, data: dict[str, Any]) -> None:
     store_path, _ = _transcript_store_paths(base_dir)
     store_path.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
 
     tmp = store_path.with_suffix(".tmp")
     tmp.write_text(_json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
@@ -851,7 +850,6 @@ def _save_transcript_store(base_dir: Path, data: dict[str, Any]) -> None:
 def _append_transcript_version(base_dir: Path, entry: dict[str, Any]) -> None:
     _, vpath = _transcript_store_paths(base_dir)
     vpath.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
 
     with vpath.open("a", encoding="utf-8") as f:
         f.write(_json.dumps(entry, sort_keys=True) + "\n")
@@ -1224,8 +1222,8 @@ async def create_job(
 
     # Store requested + effective settings summary (best-effort; no secrets).
     try:
-        from anime_v2.modes import resolve_effective_settings
         from anime_v2.config import get_settings as _gs
+        from anime_v2.modes import resolve_effective_settings
 
         s = _gs()
         base = {
@@ -1797,7 +1795,8 @@ async def list_project_profiles(_: Identity = Depends(require_scope("read:job"))
     Returned items are safe to expose (no secrets).
     """
     try:
-        from anime_v2.projects.loader import list_project_profiles as _list, load_project_profile
+        from anime_v2.projects.loader import list_project_profiles as _list
+        from anime_v2.projects.loader import load_project_profile
 
         items: list[dict[str, Any]] = []
         for name in _list():
@@ -2648,7 +2647,7 @@ async def post_job_review_helper(
     if not text:
         # fall back to current chosen_text
         with suppress(Exception):
-            from anime_v2.review.state import load_state, find_segment
+            from anime_v2.review.state import find_segment, load_state
 
             st = load_state(base_dir)
             seg = find_segment(st, int(segment_id))

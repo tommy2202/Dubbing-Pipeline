@@ -96,7 +96,7 @@ def _load_yaml_or_json(path: Path) -> dict[str, Any]:
         if not isinstance(data, dict):
             raise ValueError("style guide JSON must be an object")
         return data
-    # yaml preferred; fallback to json if yaml missing and file looks like json
+    # yaml preferred; fallback to json if yaml missing or parse fails
     try:
         import yaml  # type: ignore
 
@@ -105,11 +105,12 @@ def _load_yaml_or_json(path: Path) -> dict[str, Any]:
             raise ValueError("style guide YAML must be an object")
         return data
     except Exception:
-        # last resort: try JSON
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            raise ValueError("style guide must be YAML or JSON object")
-        return data
+        pass
+    # last resort: try JSON
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("style guide must be YAML or JSON object")
+    return data
 
 
 def load_style_guide(path: Path, *, project: str | None = None) -> StyleGuide:

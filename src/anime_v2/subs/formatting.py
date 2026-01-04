@@ -12,7 +12,6 @@ from anime_v2.utils.io import atomic_write_text, read_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.subtitles import write_srt, write_vtt
 
-
 _WS_RE = re.compile(r"\s+")
 
 
@@ -33,7 +32,7 @@ class SubtitleFormatRules:
     min_gap_to_next_s: float = 0.06  # when extending end time
 
     @staticmethod
-    def from_dict(d: dict[str, Any] | None) -> "SubtitleFormatRules":
+    def from_dict(d: dict[str, Any] | None) -> SubtitleFormatRules:
         if not isinstance(d, dict):
             return SubtitleFormatRules()
         ver = int(d.get("version") or 1)
@@ -166,7 +165,7 @@ def _wrap_to_lines(text: str, *, max_chars: int, max_lines: int) -> tuple[list[s
     kept = lines[: max_lines - 1]
     rest = " ".join(lines[max_lines - 1 :])
     last, truncated = _wrap_to_lines(rest, max_chars=max_chars, max_lines=1)
-    return kept + last, True or truncated
+    return kept + last, True
 
 
 def _violations_for_block(text: str, dur_s: float, rules: SubtitleFormatRules) -> int:

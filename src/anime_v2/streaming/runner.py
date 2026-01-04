@@ -418,7 +418,10 @@ def run_streaming(
                 # 3c) Optional timing-fit (Tier-1B) inside the chunk.
                 if timing_fit:
                     with suppress(Exception):
-                        from anime_v2.timing.rewrite_provider import append_rewrite_jsonl, fit_with_rewrite_provider
+                        from anime_v2.timing.rewrite_provider import (
+                            append_rewrite_jsonl,
+                            fit_with_rewrite_provider,
+                        )
 
                         for seg in translated:
                             try:

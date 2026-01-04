@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import math
 import time
 import wave
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from anime_v2.review.ops import resolve_job_dir
 from anime_v2.utils.io import atomic_write_text, read_json

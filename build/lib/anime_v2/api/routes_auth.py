@@ -4,19 +4,19 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from anime_v2.api.middleware import audit_event
-from anime_v2.api.models import AuthStore, Role
-from anime_v2.api.security import verify_csrf
 from anime_v2.api.auth.refresh_tokens import (
     RefreshTokenError,
     issue_and_store_refresh_token,
     revoke_refresh_token_best_effort,
     rotate_refresh_token,
 )
+from anime_v2.api.middleware import audit_event
+from anime_v2.api.models import AuthStore, Role
 from anime_v2.api.security import (
     create_access_token,
     decode_token,
     issue_csrf_token,
+    verify_csrf,
 )
 from anime_v2.config import get_settings
 from anime_v2.utils.crypto import PasswordHasher
@@ -126,7 +126,6 @@ async def login(request: Request) -> Response:
             # recovery code fallback (optional)
             if recovery_code:
                 try:
-                    from anime_v2.utils.crypto import PasswordHasher as _PH
                     import hashlib as _hashlib
 
                     h = _hashlib.sha256(str(recovery_code).encode("utf-8")).hexdigest()
@@ -155,6 +154,7 @@ async def login(request: Request) -> Response:
             )
             try:
                 import pyotp  # type: ignore
+
                 from anime_v2.security.field_crypto import decrypt_field
 
                 if not user.totp_secret:
@@ -406,8 +406,8 @@ async def totp_setup(request: Request) -> dict[str, Any]:
     # Optional: generate recovery codes now (returned once).
     codes = []
     try:
-        import secrets as _secrets
         import hashlib as _hashlib
+        import secrets as _secrets
 
         codes = [(_secrets.token_urlsafe(9).replace("-", "").replace("_", "")[:10]) for _ in range(8)]
         hashes = [_hashlib.sha256(c.encode("utf-8")).hexdigest() for c in codes]
@@ -435,6 +435,7 @@ async def totp_verify(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Missing code")
     try:
         import pyotp  # type: ignore
+
         from anime_v2.security.field_crypto import decrypt_field
 
         secret = decrypt_field(str(user.totp_secret), aad=f"totp:{user.id}")
@@ -462,8 +463,8 @@ async def qr_init(
         raise HTTPException(status_code=404, detail="QR login disabled")
     ttl = max(10, min(300, int(getattr(s, "qr_login_ttl_sec", 60) or 60)))
 
-    import secrets
     import hashlib
+    import secrets
 
     code = "qr_" + secrets.token_urlsafe(18)
     nonce_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()

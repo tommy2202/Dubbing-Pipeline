@@ -20,10 +20,10 @@ def main() -> int:
     os.environ["ADMIN_PASSWORD"] = "adminpass"
     os.environ["COOKIE_SECURE"] = "0"
 
+    from anime_v2.api.models import Role, User
     from anime_v2.config import get_settings
     from anime_v2.server import app
     from anime_v2.utils.crypto import PasswordHasher
-    from anime_v2.api.models import Role, User
 
     get_settings.cache_clear()
 

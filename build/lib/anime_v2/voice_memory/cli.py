@@ -6,7 +6,6 @@ from pathlib import Path
 import click
 
 from anime_v2.config import get_settings
-from anime_v2.utils.paths import output_dir_for
 from anime_v2.voice_memory.audition import audition as run_audition
 from anime_v2.voice_memory.store import VoiceMemoryStore
 from anime_v2.voice_memory.tools import merge_characters, undo_merge

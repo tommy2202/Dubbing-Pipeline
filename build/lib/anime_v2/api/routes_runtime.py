@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
-from fastapi import HTTPException, Request
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from anime_v2.api.deps import Identity, require_role
 from anime_v2.api.models import Role
@@ -9,7 +10,6 @@ from anime_v2.config import get_settings
 from anime_v2.ops.storage import ensure_free_space
 from anime_v2.runtime.model_manager import ModelManager
 from anime_v2.runtime.scheduler import Scheduler
-from pathlib import Path
 
 router = APIRouter(prefix="/api/runtime", tags=["runtime"])
 
@@ -49,7 +49,7 @@ async def runtime_models(_: Identity = Depends(require_role(Role.admin))):
         low_space = True
     disk["low_space"] = bool(low_space)
     disk["summary"] = (
-        (f"free {disk['free_gb']:.1f}GB / {disk['total_gb']:.1f}GB" if disk.get("free_gb") else "unknown")
+        f"free {disk['free_gb']:.1f}GB / {disk['total_gb']:.1f}GB" if disk.get("free_gb") else "unknown"
     )
 
     enabled = bool(getattr(s, "enable_model_downloads", False)) and bool(getattr(s, "allow_egress", True))
@@ -85,7 +85,6 @@ async def runtime_models_prewarm(
     tts = str(getattr(s, "tts_model", "tts_models/multilingual/multi-dataset/xtts_v2") or "").strip()
 
     import threading
-    import time
     from uuid import uuid4
 
     task_id = uuid4().hex[:12]

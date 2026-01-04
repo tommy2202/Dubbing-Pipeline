@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import time
 from contextlib import suppress
@@ -18,7 +19,7 @@ from anime_v2.stages.mixing import MixConfig, mix
 from anime_v2.stages.transcription import transcribe
 from anime_v2.stages.translation import TranslationConfig, translate_segments
 from anime_v2.utils.embeds import ecapa_embedding
-from anime_v2.utils.io import read_json, write_json
+from anime_v2.utils.io import read_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import install_egress_policy
 from anime_v2.utils.paths import output_dir_for
@@ -1375,6 +1376,7 @@ def run(
     if bool(debug_dump):
         try:
             from config.settings import get_safe_config_report
+
             from anime_v2.utils.io import write_json
 
             analysis_dir = out_dir / "analysis"
@@ -1401,13 +1403,6 @@ def run(
             analysis_dir = out_dir / "analysis"
             analysis_dir.mkdir(parents=True, exist_ok=True)
             write_json(analysis_dir / "effective_settings.json", eff.to_dict())
-            if job_logger is not None:
-                job_logger.event(
-                    stage="start",
-                    level="info",
-                    msg="effective_settings_written",
-                    path=str(analysis_dir / "effective_settings.json"),
-                )
     except Exception:
         pass
 
@@ -1730,7 +1725,10 @@ def run(
                 )
                 # Feature D: optional per-job smoothing overrides (disable smoothing in selected ranges)
                 try:
-                    from anime_v2.review.overrides import apply_smoothing_overrides_to_utts, load_overrides
+                    from anime_v2.review.overrides import (
+                        apply_smoothing_overrides_to_utts,
+                        load_overrides,
+                    )
 
                     ov = load_overrides(out_dir)
                     sm_ov = ov.get("smoothing_overrides", {}) if isinstance(ov, dict) else {}
@@ -2332,7 +2330,10 @@ def run(
             # Optional timing-aware translation fit (Tier-1 B).
             if timing_fit:
                 try:
-                    from anime_v2.timing.rewrite_provider import append_rewrite_jsonl, fit_with_rewrite_provider
+                    from anime_v2.timing.rewrite_provider import (
+                        append_rewrite_jsonl,
+                        fit_with_rewrite_provider,
+                    )
 
                     analysis_dir = out_dir / "analysis"
                     analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -2568,7 +2569,13 @@ def run(
         if str(mix_mode).lower() == "enhanced":
             # Tier-1 A enhanced mixing uses extracted/separated background + TTS dialogue
             from anime_v2.audio.mix import MixParams, mix_dubbed_audio
-            from anime_v2.stages.export import export_hls, export_m4a, export_mkv, export_mkv_multitrack, export_mp4
+            from anime_v2.stages.export import (
+                export_hls,
+                export_m4a,
+                export_mkv,
+                export_mkv_multitrack,
+                export_mp4,
+            )
 
             bg = background_wav or Path(str(extracted))
             # If separation enabled and music regions exist, preserve original audio during music
@@ -2743,7 +2750,7 @@ def run(
     logger.info("[v2] Done in %.2fs", time.perf_counter() - t0)
     if job_logger is not None:
         # Minimal end-of-job summary. (More detailed per-stage timing is best-effort.)
-        try:
+        with suppress(Exception):
             job_logger.write_summary(
                 {
                     "job_id": stem,
@@ -2753,8 +2760,6 @@ def run(
                     "stage_durations_s": stage_durations,
                 }
             )
-        except Exception:
-            pass
         with suppress(Exception):
             job_logger.event(stage="end", level="info", msg="job_done", wall_time_s=float(time.perf_counter() - t0))
 
@@ -2864,12 +2869,12 @@ def run(
         pass
 
 # Public entrypoint (project.scripts -> anime_v2.cli:cli)
-from anime_v2.review.cli import review as review  # noqa: E402
-from anime_v2.qa.cli import qa as qa  # noqa: E402
-from anime_v2.overrides.cli import overrides as overrides  # noqa: E402
-from anime_v2.voice_memory.cli import voice as voice  # noqa: E402
-from anime_v2.plugins.lipsync.cli import lipsync as lipsync  # noqa: E402
 from anime_v2.character.cli import character as character  # noqa: E402
+from anime_v2.overrides.cli import overrides as overrides  # noqa: E402
+from anime_v2.plugins.lipsync.cli import lipsync as lipsync  # noqa: E402
+from anime_v2.qa.cli import qa as qa  # noqa: E402
+from anime_v2.review.cli import review as review  # noqa: E402
+from anime_v2.voice_memory.cli import voice as voice  # noqa: E402
 
 cli = DefaultGroup(name="anime-v2", help="anime-v2 CLI (run + review)")  # type: ignore[assignment]
 cli.add_command(run)

@@ -123,7 +123,7 @@ def main() -> int:
             langs.append(str(tags.get("language", "")))
         if not any("Original" in t for t in titles):
             raise AssertionError(f"missing expected audio title tags: {titles}")
-        if not any(l in {"jpn", "eng", "und"} for l in langs):
+        if not any(lang in {"jpn", "eng", "und"} for lang in langs):
             raise AssertionError(f"missing expected language tags: {langs}")
 
         print("[verify_multitrack_mux] OK: mkv has 1 video + 4 audio tracks")

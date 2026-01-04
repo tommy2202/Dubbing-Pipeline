@@ -9,9 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from anime_v2.timing.fit_text import FitStats, estimate_speaking_seconds, fit_translation_to_time
+from anime_v2.timing.fit_text import FitStats, fit_translation_to_time
 from anime_v2.utils.io import atomic_write_text
-from anime_v2.utils.log import logger
 
 
 class RewriteProvider(Protocol):

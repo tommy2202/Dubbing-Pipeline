@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 import tempfile
+from pathlib import Path
 
 
 def _rand_key_b64() -> str:
@@ -20,7 +21,13 @@ def main() -> int:
 
     get_settings.cache_clear()
 
-    from anime_v2.security.crypto import CryptoConfigError, decrypt_bytes, decrypt_file, encrypt_bytes, encrypt_file
+    from anime_v2.security.crypto import (
+        CryptoConfigError,
+        decrypt_bytes,
+        decrypt_file,
+        encrypt_bytes,
+        encrypt_file,
+    )
 
     pt = b"hello world" * 1000
     ct = encrypt_bytes(pt, kind="review", job_id="j_test")
@@ -35,7 +42,7 @@ def main() -> int:
             f.write(os.urandom(8 * 1024 * 1024))
         encrypt_file(inp, enc, kind="review", job_id="j_test")  # type: ignore[arg-type]
         decrypt_file(enc, dec, kind="review", job_id="j_test")  # type: ignore[arg-type]
-        assert open(inp, "rb").read() == open(dec, "rb").read()
+        assert Path(inp).read_bytes() == Path(dec).read_bytes()
 
     # 2) Fail-safe: encryption enabled but key missing must error (no silent plaintext writes)
     os.environ["ARTIFACTS_KEY"] = ""

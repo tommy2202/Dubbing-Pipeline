@@ -17,7 +17,7 @@ class HardwareCaps:
     has_pyannote: bool
 
     @classmethod
-    def detect(cls) -> "HardwareCaps":
+    def detect(cls) -> HardwareCaps:
         def _can_import(mod: str) -> bool:
             try:
                 __import__(mod)

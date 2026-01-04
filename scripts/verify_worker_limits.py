@@ -10,9 +10,9 @@ def _sleep(seconds: float) -> None:
 
 
 def main() -> int:
-    from anime_v2.jobs.watchdog import PhaseTimeout, run_with_timeout
     from anime_v2.jobs.models import Job, JobState
     from anime_v2.jobs.store import JobStore
+    from anime_v2.jobs.watchdog import PhaseTimeout, run_with_timeout
 
     # 1) Timeout triggers
     t0 = time.perf_counter()

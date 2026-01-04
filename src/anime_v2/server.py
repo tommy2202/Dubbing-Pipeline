@@ -18,6 +18,7 @@ from starlette.templating import Jinja2Templates
 from anime_v2.api.deps import require_role, require_scope
 from anime_v2.api.middleware import request_context_middleware
 from anime_v2.api.models import AuthStore, Role, User, now_ts
+from anime_v2.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
 from anime_v2.api.routes_audit import router as audit_router
 from anime_v2.api.routes_auth import router as auth_router
 from anime_v2.api.routes_keys import router as keys_router
@@ -38,7 +39,6 @@ from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import install_egress_policy
 from anime_v2.utils.ratelimit import RateLimiter
-from anime_v2.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
 from anime_v2.web.routes_jobs import router as jobs_router
 from anime_v2.web.routes_ui import router as ui_router
 from anime_v2.web.routes_webrtc import router as webrtc_router
@@ -252,9 +252,7 @@ def _is_https_request(request: Request) -> bool:
     if xf == "https":
         return True
     cfv = (request.headers.get("cf-visitor") or "").lower()
-    if "https" in cfv:
-        return True
-    return False
+    return "https" in cfv
 
 
 def _csp_header_value() -> str:

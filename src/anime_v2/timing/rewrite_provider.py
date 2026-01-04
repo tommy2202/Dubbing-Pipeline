@@ -9,9 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from anime_v2.timing.fit_text import FitStats, estimate_speaking_seconds, fit_translation_to_time
+from anime_v2.timing.fit_text import FitStats, fit_translation_to_time
 from anime_v2.utils.io import atomic_write_text
-from anime_v2.utils.log import logger
 
 
 class RewriteProvider(Protocol):
@@ -97,9 +96,7 @@ def _is_localhost_url(url: str) -> bool:
     try:
         u = urllib.parse.urlparse(str(url))
         host = (u.hostname or "").strip().lower()
-        if host in {"localhost", "127.0.0.1", "::1"}:
-            return True
-        return False
+        return host in {"localhost", "127.0.0.1", "::1"}
     except Exception:
         return False
 
@@ -271,7 +268,7 @@ class LocalLLMRewriteProvider:
         # Deterministic-ish decode (no sampling when strict)
         gen = model.generate(
             **inputs,
-            do_sample=False if self.strict else True,
+            do_sample=not self.strict,
             temperature=0.0 if self.strict else 0.2,
             max_new_tokens=int(self.max_new_tokens),
             eos_token_id=getattr(tok, "eos_token_id", None),

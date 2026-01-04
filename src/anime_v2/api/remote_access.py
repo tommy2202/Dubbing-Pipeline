@@ -4,6 +4,7 @@ import ipaddress
 import json
 import time
 import urllib.request
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -150,15 +151,13 @@ def _load_cf_access_jwks(team_domain: str, *, max_age_sec: int = 86400) -> dict[
 
     # Try disk cache first (works even if ALLOW_EGRESS=0 after first fetch).
     p = _jwks_cache_path()
-    try:
+    with suppress(Exception):
         if p.exists():
             obj = json.loads(p.read_text(encoding="utf-8"))
             if isinstance(obj, dict) and "keys" in obj:
                 _JWKS_CACHE["jwks"] = obj
                 _JWKS_CACHE["ts"] = now
                 return obj
-    except Exception:
-        pass
 
     s = get_settings()
     if not bool(getattr(s, "allow_egress", True)):
@@ -167,10 +166,8 @@ def _load_cf_access_jwks(team_domain: str, *, max_age_sec: int = 86400) -> dict[
     obj = _fetch_cf_access_jwks(team_domain)
     _JWKS_CACHE["jwks"] = obj
     _JWKS_CACHE["ts"] = now
-    try:
+    with suppress(Exception):
         p.write_text(json.dumps(obj, sort_keys=True), encoding="utf-8")
-    except Exception:
-        pass
     return obj
 
 

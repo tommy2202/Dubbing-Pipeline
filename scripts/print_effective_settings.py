@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 from anime_v2.config import get_settings
@@ -47,7 +46,6 @@ def main() -> int:
         "qa": False,
         "director": bool(getattr(s, "director", False)),
         "multitrack": bool(getattr(s, "multitrack", False)),
-        "voice_mode": str(getattr(s, "voice_mode", "clone")),
     }
 
     overrides = {}

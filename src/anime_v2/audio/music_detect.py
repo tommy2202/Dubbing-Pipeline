@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import wave
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -269,10 +270,8 @@ def analyze_audio_for_music_regions(
                     )
                 )
     finally:
-        try:
+        with suppress(Exception):
             wf.close()
-        except Exception:
-            pass
 
     merged = _merge_regions(regs, gap_s=max(0.2, h))
     logger.info("music_detect_done", regions=len(merged))

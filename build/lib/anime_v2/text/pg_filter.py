@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from anime_v2.utils.io import atomic_write_text
 from anime_v2.utils.log import logger

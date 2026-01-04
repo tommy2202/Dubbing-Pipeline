@@ -3,14 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from anime_v2.security.crypto import (
+    decrypt_bytes,
+    encryption_enabled_for,
+    is_encrypted_path,
+    write_bytes_encrypted,
+)
 from anime_v2.utils.io import atomic_write_text, read_json, write_json
 from anime_v2.utils.log import logger
-from anime_v2.security.crypto import decrypt_bytes, encryption_enabled_for, is_encrypted_path, write_bytes_encrypted
 
 
 def overrides_path(job_dir: Path) -> Path:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -12,7 +11,7 @@ from anime_v2.api.deps import require_scope
 from anime_v2.api.models import AuthStore, Role, User, now_ts
 from anime_v2.api.routes_auth import router as auth_router
 from anime_v2.api.security import issue_csrf_token
-from anime_v2.utils.crypto import PasswordHasher, random_id
+from anime_v2.utils.crypto import PasswordHasher
 from anime_v2.utils.ratelimit import RateLimiter
 
 
