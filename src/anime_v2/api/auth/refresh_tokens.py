@@ -18,7 +18,16 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def issue_and_store_refresh_token(*, store: AuthStore, user_id: str, days: int) -> str:
+def issue_and_store_refresh_token(
+    *,
+    store: AuthStore,
+    user_id: str,
+    days: int,
+    device_id: str | None = None,
+    device_name: str | None = None,
+    created_ip: str | None = None,
+    user_agent: str | None = None,
+) -> str:
     tok = create_refresh_token(sub=user_id, days=int(days))
     data = decode_token(tok, expected_typ="refresh")
     jti = str(data.get("jti") or "")
@@ -34,6 +43,11 @@ def issue_and_store_refresh_token(*, store: AuthStore, user_id: str, days: int) 
         token_hash=_hash_token(tok),
         expires_at=int(exp),
         created_at=now_ts(),
+        device_id=device_id,
+        device_name=device_name,
+        created_ip=created_ip,
+        last_ip=created_ip,
+        user_agent=user_agent,
     )
     return tok
 
@@ -45,7 +59,9 @@ class RotateResult:
     new_refresh_token: str
 
 
-def rotate_refresh_token(*, store: AuthStore, refresh_token: str, days: int) -> RotateResult:
+def rotate_refresh_token(
+    *, store: AuthStore, refresh_token: str, days: int, used_ip: str | None = None
+) -> RotateResult:
     data = decode_token(refresh_token, expected_typ="refresh")
     sub = str(data.get("sub") or "")
     jti = str(data.get("jti") or "")
@@ -76,7 +92,20 @@ def rotate_refresh_token(*, store: AuthStore, refresh_token: str, days: int) -> 
         raise RefreshTokenError("refresh token expired")
 
     # Rotate: mint new token and mark old as replaced.
-    new_tok = issue_and_store_refresh_token(store=store, user_id=sub, days=int(days))
+    # Preserve device/session metadata across rotation (best-effort).
+    device_id = str(rec.get("device_id") or "") or None
+    device_name = str(rec.get("device_name") or "") or None
+    created_ip = str(rec.get("created_ip") or "") or None
+    user_agent = str(rec.get("user_agent") or "") or None
+    new_tok = issue_and_store_refresh_token(
+        store=store,
+        user_id=sub,
+        days=int(days),
+        device_id=device_id,
+        device_name=device_name,
+        created_ip=(used_ip or created_ip),
+        user_agent=user_agent,
+    )
     new_data: dict[str, Any] = decode_token(new_tok, expected_typ="refresh")
     new_jti = str(new_data.get("jti") or "")
     store.rotate_refresh_token(old_jti=jti, new_jti=new_jti)

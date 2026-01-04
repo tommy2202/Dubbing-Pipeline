@@ -242,3 +242,12 @@ async def ui_settings(request: Request) -> HTMLResponse:
             },
         },
     )
+
+
+@router.get("/qr")
+async def ui_qr_redeem(request: Request, code: str = "") -> HTMLResponse:
+    # QR redeem does not require prior auth; it will call /api/auth/qr/redeem.
+    c = (code or request.query_params.get("code") or "").strip()
+    if not c:
+        return _render(request, "qr_redeem.html", {"code": ""})
+    return _render(request, "qr_redeem.html", {"code": c})

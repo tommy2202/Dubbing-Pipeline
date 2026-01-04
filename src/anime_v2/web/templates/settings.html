@@ -71,6 +71,71 @@
 
   <div class="space-y-4">
     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <h2 class="text-sm text-slate-300">Sessions</h2>
+      <p class="mt-1 text-xs text-slate-500">Manage your active devices/sessions (refresh-token chains).</p>
+
+      <div class="mt-3 space-y-2 text-sm" x-show="sessions && sessions.length">
+        <template x-for="s in sessions" :key="s.device_id">
+          <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <div class="text-slate-200">
+                  <span class="font-medium" x-text="s.device_name || 'device'"></span>
+                  <span class="text-xs text-slate-500 ml-2" x-text="s.device_id"></span>
+                </div>
+                <div class="mt-1 text-xs text-slate-500 break-words" x-text="s.user_agent"></div>
+                <div class="mt-1 text-xs text-slate-500">
+                  <span>Created:</span> <span x-text="new Date((s.created_at||0)*1000).toISOString()"></span>
+                  <template x-if="s.last_used_at">
+                    <span class="ml-2"><span>Last used:</span> <span x-text="new Date((s.last_used_at||0)*1000).toISOString()"></span></span>
+                  </template>
+                </div>
+              </div>
+              <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-sm text-red-100"
+                      @click="revokeSession(s.device_id)">
+                Revoke
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div class="mt-3 text-sm text-slate-500" x-show="sessions && !sessions.length">No active sessions.</div>
+
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" @click="loadSessions()">Refresh</button>
+        <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-4 py-3 text-sm text-red-100"
+                @click="revokeAllSessions()">
+          Revoke all
+        </button>
+      </div>
+    </div>
+
+    {% if user and user.role and user.role.value == "admin" %}
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <h2 class="text-sm text-slate-300">QR login (admin)</h2>
+      <p class="mt-1 text-xs text-slate-500">Generates a single-use code for quick phone login. Requires ENABLE_QR_LOGIN=1.</p>
+
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
+                @click="genQr()">
+          Generate QR
+        </button>
+        <a class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" x-show="qrRedeemUrl" x-cloak
+           :href="qrRedeemUrl" target="_blank" rel="noopener">
+          Open link
+        </a>
+      </div>
+      <div class="mt-3 text-xs text-slate-500" x-show="qrExpiresAt" x-cloak>
+        Expires at: <span x-text="qrExpiresAt"></span>
+      </div>
+      <div class="mt-3 rounded-lg border border-slate-800 bg-slate-950/20 p-3 text-xs text-slate-500 break-words" x-show="qrRedeemUrl" x-cloak>
+        <div class="text-slate-300 text-sm">Redeem URL</div>
+        <div class="mt-1" x-text="qrRedeemUrl"></div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
       <h2 class="text-sm text-slate-300">Notifications</h2>
       <p class="mt-1 text-xs text-slate-500">Optional. Webhook test uses outbound network access.</p>
 
@@ -127,6 +192,9 @@
       error: "",
       toast: "",
       sendingTest: false,
+      sessions: [],
+      qrRedeemUrl: "",
+      qrExpiresAt: "",
       form: {
         defaults: {
           mode: "{{ ((cfg.defaults.mode if cfg and cfg.defaults and cfg.defaults.mode else 'medium') | e) }}",
@@ -142,6 +210,64 @@
         },
       },
       init() {},
+      async loadSessions() {
+        this.error = "";
+        const r = await fetch("/api/auth/sessions", { credentials: "include" });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this.error = d.detail || ("Failed to load sessions (" + r.status + ")");
+          return;
+        }
+        this.sessions = Array.isArray(d.items) ? d.items : [];
+      },
+      async revokeSession(deviceId) {
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/auth/sessions/" + encodeURIComponent(deviceId) + "/revoke", {
+          method: "POST",
+          credentials: "include",
+          headers: {"X-CSRF-Token": csrf},
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this.error = d.detail || ("Revoke failed (" + r.status + ")");
+          return;
+        }
+        await this.loadSessions();
+        try { window.showToast("Session revoked", "success"); } catch (e) {}
+      },
+      async revokeAllSessions() {
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/auth/sessions/revoke_all", {
+          method: "POST",
+          credentials: "include",
+          headers: {"X-CSRF-Token": csrf},
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this.error = d.detail || ("Revoke all failed (" + r.status + ")");
+          return;
+        }
+        await this.loadSessions();
+        try { window.showToast("All sessions revoked", "success"); } catch (e) {}
+      },
+      async genQr() {
+        this.error = "";
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/auth/qr/init", {
+          method: "POST",
+          credentials: "include",
+          headers: {"content-type":"application/json", "X-CSRF-Token": csrf},
+          body: JSON.stringify({}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this.error = d.detail || ("QR init failed (" + r.status + ")");
+          return;
+        }
+        this.qrRedeemUrl = d.redeem_url || "";
+        this.qrExpiresAt = d.expires_at ? (new Date(Number(d.expires_at) * 1000).toISOString()) : "";
+        try { window.showToast("QR code created", "success"); } catch (e) {}
+      },
       async save() {
         this.error = "";
         this.toast = "";

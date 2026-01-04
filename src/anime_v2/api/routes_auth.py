@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from anime_v2.api.middleware import audit_event
 from anime_v2.api.models import AuthStore, Role
@@ -24,9 +24,33 @@ from anime_v2.utils.ratelimit import RateLimiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Safe import: deps only depends on models/security; no circular back to routes_auth.
+from anime_v2.api.deps import Identity, require_role  # noqa: E402
+
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
+
+def _ua(request: Request) -> str:
+    return str(request.headers.get("user-agent") or "")[:160]
+
+def _device_name_guess(request: Request) -> str:
+    # Simple, privacy-preserving device label.
+    ua = (request.headers.get("user-agent") or "").strip()
+    if not ua:
+        return "browser"
+    low = ua.lower()
+    if "iphone" in low or "ipad" in low:
+        return "iOS"
+    if "android" in low:
+        return "Android"
+    if "windows" in low:
+        return "Windows"
+    if "mac os" in low or "macintosh" in low:
+        return "macOS"
+    if "linux" in low:
+        return "Linux"
+    return "browser"
 
 
 def _get_store(request: Request) -> AuthStore:
@@ -73,6 +97,7 @@ async def login(request: Request) -> Response:
     username = str(body.get("username") or "").strip()
     password = str(body.get("password") or "")
     totp = str(body.get("totp") or "").strip() or None
+    recovery_code = str(body.get("recovery_code") or "").strip() or None
     session_val = body.get("session") or False
     if isinstance(session_val, str):
         session = session_val.strip().lower() in {"1", "true", "yes", "on"}
@@ -93,34 +118,64 @@ async def login(request: Request) -> Response:
         audit_event("auth.login_failed", request=request, user_id=None, meta={"username": username})
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if user.totp_enabled:
+    # Optional TOTP (admin only) when enabled by config.
+    s = get_settings()
+    enforce_totp = bool(getattr(s, "enable_totp", False)) and (user.role == Role.admin) and bool(user.totp_enabled)
+    if enforce_totp:
         if not totp:
-            audit_event(
-                "auth.login_failed_totp",
-                request=request,
-                user_id=user.id,
-                meta={"username": username},
-            )
-            raise HTTPException(status_code=401, detail="TOTP required")
-        try:
-            import pyotp  # type: ignore
+            # recovery code fallback (optional)
+            if recovery_code:
+                try:
+                    from anime_v2.utils.crypto import PasswordHasher as _PH
+                    import hashlib as _hashlib
 
-            if not user.totp_secret or not pyotp.TOTP(user.totp_secret).verify(
-                totp, valid_window=1
-            ):
+                    h = _hashlib.sha256(str(recovery_code).encode("utf-8")).hexdigest()
+                    if store.consume_recovery_code(user_id=user.id, code_hash=h):
+                        totp = "recovery_used"
+                    else:
+                        raise HTTPException(status_code=401, detail="Invalid recovery code")
+                except HTTPException:
+                    raise
+                except Exception:
+                    raise HTTPException(status_code=500, detail="Recovery codes unavailable")
+            else:
                 audit_event(
                     "auth.login_failed_totp",
                     request=request,
                     user_id=user.id,
                     meta={"username": username},
                 )
-                raise HTTPException(status_code=401, detail="Invalid TOTP")
-        except HTTPException:
-            raise
-        except Exception as ex:
-            raise HTTPException(status_code=500, detail="TOTP unavailable") from ex
+                raise HTTPException(status_code=401, detail="TOTP required")
+        if totp != "recovery_used":
+            audit_event(
+                "auth.login_failed_totp",
+                request=request,
+                user_id=user.id,
+                meta={"username": username},
+            )
+            try:
+                import pyotp  # type: ignore
+                from anime_v2.security.field_crypto import decrypt_field
 
-    s = get_settings()
+                if not user.totp_secret:
+                    raise HTTPException(status_code=500, detail="TOTP misconfigured")
+                secret = decrypt_field(str(user.totp_secret), aad=f"totp:{user.id}")
+                if not pyotp.TOTP(secret).verify(str(totp), valid_window=1):
+                    audit_event(
+                        "auth.login_failed_totp",
+                        request=request,
+                        user_id=user.id,
+                        meta={"username": username},
+                    )
+                    raise HTTPException(status_code=401, detail="Invalid TOTP")
+            except HTTPException:
+                raise
+            except Exception as ex:
+                raise HTTPException(status_code=500, detail="TOTP unavailable") from ex
+    elif bool(user.totp_enabled) and not bool(getattr(s, "enable_totp", False)) and user.role == Role.admin:
+        # If a DB has totp_enabled set but feature is disabled, fail safe for admin.
+        raise HTTPException(status_code=500, detail="TOTP is disabled by server policy")
+
     access = create_access_token(
         sub=user.id, role=user.role.value, scopes=["read:job"], minutes=s.access_token_minutes
     )
@@ -145,7 +200,15 @@ async def login(request: Request) -> Response:
     resp = Response()
     resp.set_cookie(
         "refresh",
-        issue_and_store_refresh_token(store=store, user_id=user.id, days=s.refresh_token_days),
+        issue_and_store_refresh_token(
+            store=store,
+            user_id=user.id,
+            days=s.refresh_token_days,
+            device_id=__import__("secrets").token_hex(8),
+            device_name=_device_name_guess(request),
+            created_ip=_client_ip(request),
+            user_agent=_ua(request),
+        ),
         httponly=True,
         samesite="lax",
         secure=s.cookie_secure,
@@ -217,7 +280,12 @@ async def refresh(request: Request) -> Response:
 
     store = _get_store(request)
     try:
-        rot = rotate_refresh_token(store=store, refresh_token=str(rt), days=get_settings().refresh_token_days)
+        rot = rotate_refresh_token(
+            store=store,
+            refresh_token=str(rt),
+            days=get_settings().refresh_token_days,
+            used_ip=_client_ip(request),
+        )
         user = store.get_user(rot.access_sub)
         if user is None:
             audit_event(
@@ -308,6 +376,10 @@ async def totp_setup(request: Request) -> dict[str, Any]:
 
     ident = current_identity(request, _get_store(request))
     user = ident.user
+    if user.role != Role.admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not bool(getattr(get_settings(), "enable_totp", False)):
+        raise HTTPException(status_code=404, detail="TOTP disabled")
     try:
         import pyotp  # type: ignore
     except Exception as ex:
@@ -315,8 +387,26 @@ async def totp_setup(request: Request) -> dict[str, Any]:
     secret = pyotp.random_base32()
     uri = pyotp.TOTP(secret).provisioning_uri(name=user.username, issuer_name="anime_v2")
     # Store secret but not enabled until verified
-    _get_store(request).set_totp(user.id, secret=secret, enabled=False)
-    return {"secret": secret, "uri": uri}
+    try:
+        from anime_v2.security.field_crypto import encrypt_field
+
+        enc = encrypt_field(secret, aad=f"totp:{user.id}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="TOTP encryption unavailable")
+    _get_store(request).set_totp(user.id, secret=enc, enabled=False)
+
+    # Optional: generate recovery codes now (returned once).
+    codes = []
+    try:
+        import secrets as _secrets
+        import hashlib as _hashlib
+
+        codes = [(_secrets.token_urlsafe(9).replace("-", "").replace("_", "")[:10]) for _ in range(8)]
+        hashes = [_hashlib.sha256(c.encode("utf-8")).hexdigest() for c in codes]
+        _get_store(request).put_recovery_codes(user_id=user.id, code_hashes=hashes)
+    except Exception:
+        codes = []
+    return {"secret": secret, "uri": uri, "recovery_codes": codes}
 
 
 @router.post("/totp/verify")
@@ -327,18 +417,209 @@ async def totp_verify(request: Request) -> dict[str, Any]:
     user = _get_store(request).get_user(ident.user.id)
     if user is None or not user.totp_secret:
         raise HTTPException(status_code=400, detail="TOTP not initialized")
+    if user.role != Role.admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not bool(getattr(get_settings(), "enable_totp", False)):
+        raise HTTPException(status_code=404, detail="TOTP disabled")
     body = await request.json()
     code = str((body or {}).get("code") or "").strip()
     if not code:
         raise HTTPException(status_code=400, detail="Missing code")
     try:
         import pyotp  # type: ignore
+        from anime_v2.security.field_crypto import decrypt_field
 
-        if not pyotp.TOTP(user.totp_secret).verify(code, valid_window=1):
+        secret = decrypt_field(str(user.totp_secret), aad=f"totp:{user.id}")
+        if not pyotp.TOTP(secret).verify(code, valid_window=1):
             raise HTTPException(status_code=400, detail="Invalid code")
     except HTTPException:
         raise
     except Exception as ex:
         raise HTTPException(status_code=500, detail="TOTP unavailable") from ex
     _get_store(request).set_totp(user.id, secret=user.totp_secret, enabled=True)
+    return {"ok": True}
+
+
+@router.post("/qr/init")
+async def qr_init(
+    request: Request,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict[str, Any]:
+    """
+    Admin-only: mint a short-lived, single-use QR login code.
+    The QR contains ONLY the nonce (no password/token). Redeeming it sets session cookies.
+    """
+    s = get_settings()
+    if not bool(getattr(s, "enable_qr_login", False)):
+        raise HTTPException(status_code=404, detail="QR login disabled")
+    ttl = max(10, min(300, int(getattr(s, "qr_login_ttl_sec", 60) or 60)))
+
+    import secrets
+    import hashlib
+
+    code = "qr_" + secrets.token_urlsafe(18)
+    nonce_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    now = __import__("time").time()
+    created_at = int(now)
+    expires_at = int(now) + int(ttl)
+    store = _get_store(request)
+    store.put_qr_code(
+        nonce_hash=nonce_hash,
+        user_id=str(ident.user.id),
+        created_at=created_at,
+        expires_at=expires_at,
+        created_ip=_client_ip(request),
+    )
+
+    base = str(getattr(s, "public_base_url", "") or "").strip().rstrip("/")
+    if not base:
+        base = str(request.base_url).rstrip("/")
+    from urllib.parse import quote
+
+    redeem_url = f"{base}/ui/qr?code={quote(code)}"
+
+    audit_event(
+        "auth.qr_init",
+        request=request,
+        user_id=ident.user.id,
+        meta={"ttl_sec": ttl},
+    )
+    return {"code": code, "expires_at": expires_at, "redeem_url": redeem_url}
+
+
+@router.post("/qr/redeem")
+async def qr_redeem(request: Request) -> Response:
+    """
+    Unauthenticated: exchange a one-time code for a session (cookies).
+    Single-use and short-lived; does not reveal reusable secrets.
+    """
+    s = get_settings()
+    if not bool(getattr(s, "enable_qr_login", False)):
+        raise HTTPException(status_code=404, detail="QR login disabled")
+    rl = _get_rl(request)
+    ip = _client_ip(request)
+    if not rl.allow(f"auth:qr:redeem:ip:{ip}", limit=10, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    code = str(body.get("code") or "").strip()
+    if not code or not code.startswith("qr_"):
+        raise HTTPException(status_code=400, detail="Invalid code")
+
+    import hashlib
+
+    nonce_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    store = _get_store(request)
+    uid = store.consume_qr_code(nonce_hash=nonce_hash, used_ip=ip)
+    if not uid:
+        audit_event("auth.qr_redeem_failed", request=request, user_id=None, meta={"reason": "invalid"})
+        raise HTTPException(status_code=401, detail="Invalid or expired code")
+
+    user = store.get_user(str(uid))
+    if user is None:
+        raise HTTPException(status_code=401, detail="Unknown user")
+
+    scopes = ["read:job"]
+    if user.role in {Role.operator, Role.admin}:
+        scopes.append("submit:job")
+    if user.role == Role.admin:
+        scopes.append("admin:*")
+    access = create_access_token(sub=user.id, role=user.role.value, scopes=scopes, minutes=s.access_token_minutes)
+    csrf = issue_csrf_token()
+
+    resp = Response()
+    resp.set_cookie(
+        "refresh",
+        issue_and_store_refresh_token(
+            store=store,
+            user_id=user.id,
+            days=s.refresh_token_days,
+            device_id=__import__("secrets").token_hex(8),
+            device_name="qr-login",
+            created_ip=ip,
+            user_agent=_ua(request),
+        ),
+        httponly=True,
+        samesite="lax",
+        secure=s.cookie_secure,
+        max_age=s.refresh_token_days * 86400,
+        path="/",
+    )
+    resp.set_cookie(
+        "csrf",
+        csrf,
+        httponly=False,
+        samesite="lax",
+        secure=s.cookie_secure,
+        max_age=s.refresh_token_days * 86400,
+        path="/",
+    )
+    try:
+        from itsdangerous import URLSafeTimedSerializer  # type: ignore
+
+        ser = URLSafeTimedSerializer(s.session_secret.get_secret_value(), salt="session")
+        signed = ser.dumps(access)
+        resp.set_cookie(
+            "session",
+            signed,
+            httponly=True,
+            samesite="lax",
+            secure=s.cookie_secure,
+            max_age=s.refresh_token_days * 86400,
+            path="/",
+        )
+    except Exception:
+        pass
+    resp.headers["content-type"] = "application/json"
+    resp.body = __import__("json").dumps({"ok": True, "csrf_token": csrf}).encode("utf-8")
+    audit_event("auth.qr_redeem_ok", request=request, user_id=user.id, meta={"role": user.role.value})
+    return resp
+
+
+@router.get("/sessions")
+async def list_sessions(request: Request) -> dict[str, Any]:
+    from anime_v2.api.deps import current_identity
+
+    ident = current_identity(request, _get_store(request))
+    store = _get_store(request)
+    items = store.list_active_sessions(user_id=str(ident.user.id))
+    # Stable, minimal payload.
+    out = []
+    for it in items:
+        out.append(
+            {
+                "device_id": str(it.get("device_id") or "") or str(it.get("jti") or ""),
+                "device_name": str(it.get("device_name") or "") or "",
+                "created_at": int(it.get("created_at") or 0),
+                "last_used_at": int(it.get("last_used_at") or 0) if it.get("last_used_at") else None,
+                "created_ip": str(it.get("created_ip") or "") or "",
+                "last_ip": str(it.get("last_ip") or "") or "",
+                "user_agent": str(it.get("user_agent") or "") or "",
+                "expires_at": int(it.get("expires_at") or 0),
+            }
+        )
+    return {"items": out}
+
+
+@router.post("/sessions/{device_id}/revoke")
+async def revoke_session(request: Request, device_id: str) -> dict[str, Any]:
+    from anime_v2.api.deps import current_identity
+
+    ident = current_identity(request, _get_store(request))
+    verify_csrf(request)
+    n = _get_store(request).revoke_sessions_by_device(user_id=str(ident.user.id), device_id=str(device_id))
+    audit_event("auth.session_revoke", request=request, user_id=ident.user.id, meta={"count": n})
+    return {"ok": True, "revoked": int(n)}
+
+
+@router.post("/sessions/revoke_all")
+async def revoke_all_sessions(request: Request) -> dict[str, Any]:
+    from anime_v2.api.deps import current_identity
+
+    ident = current_identity(request, _get_store(request))
+    verify_csrf(request)
+    _get_store(request).revoke_all_refresh_tokens_for_user(str(ident.user.id))
+    audit_event("auth.session_revoke_all", request=request, user_id=ident.user.id, meta=None)
     return {"ok": True}

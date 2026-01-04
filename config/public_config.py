@@ -178,6 +178,13 @@ class PublicConfig(BaseSettings):
     )  # UNSAFE on public networks
     enable_api_keys: bool = Field(default=True, alias="ENABLE_API_KEYS")
 
+    # Safer auth UX (optional, off by default)
+    enable_qr_login: bool = Field(default=False, alias="ENABLE_QR_LOGIN")
+    qr_login_ttl_sec: int = Field(default=60, alias="QR_LOGIN_TTL_SEC")
+
+    # Optional TOTP (2FA) for admin accounts only (off by default)
+    enable_totp: bool = Field(default=False, alias="ENABLE_TOTP")
+
     # --- egress/offline controls ---
     offline_mode: bool = Field(default=False, alias="OFFLINE_MODE")
     allow_egress: bool = Field(default=True, alias="ALLOW_EGRESS")
