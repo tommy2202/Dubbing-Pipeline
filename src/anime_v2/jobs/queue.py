@@ -790,6 +790,7 @@ class JobQueue:
                     "qa": bool(rt2.get("qa") or False) if isinstance(rt2, dict) else False,
                     "director": bool(getattr(settings, "director", False)),
                     "multitrack": bool(getattr(settings, "multitrack", False)),
+                    "stream_context_seconds": float(getattr(settings, "stream_context_seconds", 15.0) or 15.0),
                 }
                 overrides: dict[str, Any] = {}
                 # job-level override for ASR model isn't currently a first-class field; keep mode-based selection.

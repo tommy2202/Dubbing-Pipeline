@@ -22,6 +22,7 @@
   ],
   "requested_mode": "high",
   "separation": "off",
+  "stream_context_seconds": 15.0,
   "sources": {
     "asr_model": "mode:high",
     "diarizer": "mode:high",
@@ -34,6 +35,7 @@
     "separation": "fallback",
     "speaker_smoothing": "mode:high",
     "timing_fit": "mode:high",
+    "stream_context_seconds": "mode:high",
     "voice_memory": "mode:high",
     "voice_mode": "mode:high"
   },

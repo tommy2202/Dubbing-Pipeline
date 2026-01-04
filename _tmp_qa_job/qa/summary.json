@@ -15,6 +15,15 @@
       "details": {
         "peak": 0.999969482421875
       },
+      "fix": {
+        "cli": [
+          "anime-v2 review show _tmp_qa_job 3",
+          "anime-v2 review edit _tmp_qa_job 3 --text \"...\"",
+          "anime-v2 review regen _tmp_qa_job 3",
+          "anime-v2 review lock _tmp_qa_job 3"
+        ],
+        "ui_url": "/ui/jobs/_tmp_qa_job?tab=transcript&seg=3"
+      },
       "impact": 0.18,
       "message": "Audio appears clipped (peak too hot).",
       "segment_id": 3,
@@ -26,6 +35,15 @@
       "details": {
         "conf": -1.3,
         "lowconf": false
+      },
+      "fix": {
+        "cli": [
+          "anime-v2 review show _tmp_qa_job 4",
+          "anime-v2 review edit _tmp_qa_job 4 --text \"...\"",
+          "anime-v2 review regen _tmp_qa_job 4",
+          "anime-v2 review lock _tmp_qa_job 4"
+        ],
+        "ui_url": "/ui/jobs/_tmp_qa_job?tab=transcript&seg=4"
       },
       "impact": 0.18,
       "message": "Low ASR/MT confidence (-1.30).",
@@ -39,6 +57,15 @@
         "next_start": 1.0,
         "segment_end_est": 1.6
       },
+      "fix": {
+        "cli": [
+          "anime-v2 review show _tmp_qa_job 1",
+          "anime-v2 review edit _tmp_qa_job 1 --text \"...\"",
+          "anime-v2 review regen _tmp_qa_job 1",
+          "anime-v2 review lock _tmp_qa_job 1"
+        ],
+        "ui_url": "/ui/jobs/_tmp_qa_job?tab=transcript&seg=1"
+      },
       "impact": 0.2,
       "message": "Segment audio likely overlaps the next segment.",
       "segment_id": 1,
@@ -50,6 +77,15 @@
       "details": {
         "threshold": 3.8,
         "wps": 11.0
+      },
+      "fix": {
+        "cli": [
+          "anime-v2 review show _tmp_qa_job 2",
+          "anime-v2 review edit _tmp_qa_job 2 --text \"...\"",
+          "anime-v2 review regen _tmp_qa_job 2",
+          "anime-v2 review lock _tmp_qa_job 2"
+        ],
+        "ui_url": "/ui/jobs/_tmp_qa_job?tab=transcript&seg=2"
       },
       "impact": 0.2,
       "message": "Speaking rate high (11.00 wps).",
@@ -64,6 +100,15 @@
         "ratio": 1.6,
         "segment_duration_s": 1.0
       },
+      "fix": {
+        "cli": [
+          "anime-v2 review show _tmp_qa_job 1",
+          "anime-v2 review edit _tmp_qa_job 1 --text \"...\"",
+          "anime-v2 review regen _tmp_qa_job 1",
+          "anime-v2 review lock _tmp_qa_job 1"
+        ],
+        "ui_url": "/ui/jobs/_tmp_qa_job?tab=transcript&seg=1"
+      },
       "impact": 0.22,
       "message": "Audio duration exceeds segment window (1.60s > 1.00s).",
       "segment_id": 1,
@@ -74,6 +119,15 @@
       "check_id": "speaker_flip_suspicion",
       "details": {
         "flip_count": 1
+      },
+      "fix": {
+        "cli": [
+          "anime-v2 review show _tmp_qa_job 2",
+          "anime-v2 review edit _tmp_qa_job 2 --text \"...\"",
+          "anime-v2 review regen _tmp_qa_job 2",
+          "anime-v2 review lock _tmp_qa_job 2"
+        ],
+        "ui_url": "/ui/jobs/_tmp_qa_job?tab=transcript&seg=2"
       },
       "impact": 0.07,
       "message": "Frequent speaker changes in a short window (possible diarization flip).",
@@ -86,6 +140,15 @@
       "details": {
         "flip_count": 1
       },
+      "fix": {
+        "cli": [
+          "anime-v2 review show _tmp_qa_job 3",
+          "anime-v2 review edit _tmp_qa_job 3 --text \"...\"",
+          "anime-v2 review regen _tmp_qa_job 3",
+          "anime-v2 review lock _tmp_qa_job 3"
+        ],
+        "ui_url": "/ui/jobs/_tmp_qa_job?tab=transcript&seg=3"
+      },
       "impact": 0.07,
       "message": "Frequent speaker changes in a short window (possible diarization flip).",
       "segment_id": 3,
@@ -96,6 +159,15 @@
       "check_id": "speaker_flip_suspicion",
       "details": {
         "flip_count": 1
+      },
+      "fix": {
+        "cli": [
+          "anime-v2 review show _tmp_qa_job 4",
+          "anime-v2 review edit _tmp_qa_job 4 --text \"...\"",
+          "anime-v2 review regen _tmp_qa_job 4",
+          "anime-v2 review lock _tmp_qa_job 4"
+        ],
+        "ui_url": "/ui/jobs/_tmp_qa_job?tab=transcript&seg=4"
       },
       "impact": 0.07,
       "message": "Frequent speaker changes in a short window (possible diarization flip).",
@@ -109,6 +181,15 @@
         "confidence": 0.9,
         "music_kind": "music"
       },
+      "fix": {
+        "cli": [
+          "anime-v2 review show _tmp_qa_job 2",
+          "anime-v2 review edit _tmp_qa_job 2 --text \"...\"",
+          "anime-v2 review regen _tmp_qa_job 2",
+          "anime-v2 review lock _tmp_qa_job 2"
+        ],
+        "ui_url": "/ui/jobs/_tmp_qa_job?tab=transcript&seg=2"
+      },
       "impact": 0.0,
       "message": "Segment overlaps detected music region (dialogue may be suppressed).",
       "segment_id": 2,
@@ -117,5 +198,5 @@
     }
   ],
   "version": 1,
-  "wall_time_s": 0.010423832107335329
+  "wall_time_s": 0.01276510814204812
 }

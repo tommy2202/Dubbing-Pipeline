@@ -18,6 +18,7 @@
   "reasons": [],
   "requested_mode": "medium",
   "separation": "off",
+  "stream_context_seconds": 15.0,
   "sources": {
     "asr_model": "mode:medium",
     "diarizer": "base",
@@ -29,6 +30,7 @@
     "qa": "base",
     "separation": "base",
     "speaker_smoothing": "base",
+    "stream_context_seconds": "mode:medium",
     "timing_fit": "base",
     "voice_memory": "base",
     "voice_mode": "base"

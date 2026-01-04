@@ -71,10 +71,41 @@ def _check_canonical_modules(repo_root: Path) -> list[str]:
     errors: list[str] = []
 
     must_exist = [
-        "src/anime_v2/audio/music_detect.py",
-        "src/anime_v2/text/pg_filter.py",
-        "src/anime_v2/qa/scoring.py",
+        # config + modes
+        "config/public_config.py",
+        "config/settings.py",
+        "src/anime_v2/modes.py",
+        # profiles + text transforms
+        "src/anime_v2/projects/loader.py",
         "src/anime_v2/text/style_guide.py",
+        "src/anime_v2/text/pg_filter.py",
+        # timing + rewrite hook
+        "src/anime_v2/timing/fit_text.py",
+        "src/anime_v2/timing/rewrite_provider.py",
+        # audio/music + overrides
+        "src/anime_v2/audio/music_detect.py",
+        "src/anime_v2/review/overrides.py",
+        # QA
+        "src/anime_v2/qa/scoring.py",
+        # voice memory tools
+        "src/anime_v2/voice_memory/store.py",
+        "src/anime_v2/voice_memory/tools.py",
+        "src/anime_v2/voice_memory/audition.py",
+        # streaming
+        "src/anime_v2/streaming/runner.py",
+        "src/anime_v2/streaming/context.py",
+        # lipsync plugin
+        "src/anime_v2/plugins/lipsync/base.py",
+        "src/anime_v2/plugins/lipsync/registry.py",
+        "src/anime_v2/plugins/lipsync/wav2lip_plugin.py",
+        "src/anime_v2/plugins/lipsync/preview.py",
+        # subs formatting
+        "src/anime_v2/subs/formatting.py",
+        # retention/cache policy
+        "src/anime_v2/storage/retention.py",
+        # drift reports
+        "src/anime_v2/reports/drift.py",
+        # existing required modules
         "src/anime_v2/diarization/smoothing.py",
         "src/anime_v2/expressive/director.py",
         "src/anime_v2/stages/export.py",
@@ -91,6 +122,22 @@ def _check_canonical_modules(repo_root: Path) -> list[str]:
         if (repo_root / rel).exists():
             errors.append(f"obsolete module still present: {rel}")
 
+    # Duplicate implementation guardrails (tight allowlist).
+    # We permit two retention modules:
+    # - src/anime_v2/storage/retention.py (per-job cache policy retention)
+    # - src/anime_v2/ops/retention.py (global input/log retention)
+    allowed_retention = {
+        (repo_root / "src/anime_v2/storage/retention.py").resolve(),
+        (repo_root / "src/anime_v2/ops/retention.py").resolve(),
+    }
+    found_retention = {p.resolve() for p in repo_root.glob("src/anime_v2/**/retention.py")}
+    extra = sorted(str(p) for p in (found_retention - allowed_retention))
+    missing = sorted(str(p) for p in (allowed_retention - found_retention))
+    if missing:
+        errors.append(f"missing expected retention modules: {missing}")
+    if extra:
+        errors.append(f"unexpected retention modules found: {extra}")
+
     return errors
 
 
@@ -105,12 +152,26 @@ def main() -> int:
     steps = [
         Step("smoke_import_all", [sys.executable, str(repo_root / "scripts" / "smoke_import_all.py")]),
         Step("verify_env", [sys.executable, str(repo_root / "scripts" / "verify_env.py")]),
+        # Next-version contract tests + profiles
+        Step("verify_modes_contract", [sys.executable, str(repo_root / "scripts" / "verify_modes_contract.py")]),
+        Step("verify_project_profiles", [sys.executable, str(repo_root / "scripts" / "verify_project_profiles.py")]),
+        # Core synthetic checks
         Step("verify_audio_pipeline", [sys.executable, str(repo_root / "scripts" / "verify_audio_pipeline.py")]),
+        Step("verify_music_detect", [sys.executable, str(repo_root / "scripts" / "verify_music_detect.py")]),
+        Step("verify_overrides", [sys.executable, str(repo_root / "scripts" / "verify_overrides.py")]),
         Step("verify_timing_fit", [sys.executable, str(repo_root / "scripts" / "verify_timing_fit.py")]),
+        Step("verify_rewrite_provider", [sys.executable, str(repo_root / "scripts" / "verify_rewrite_provider.py")]),
         Step("verify_pg_filter", [sys.executable, str(repo_root / "scripts" / "verify_pg_filter.py")]),
         Step("verify_style_guide", [sys.executable, str(repo_root / "scripts" / "verify_style_guide.py")]),
+        Step("verify_sub_formatting", [sys.executable, str(repo_root / "scripts" / "verify_sub_formatting.py")]),
+        Step("verify_voice_tools", [sys.executable, str(repo_root / "scripts" / "verify_voice_tools.py")]),
+        Step("verify_stream_context", [sys.executable, str(repo_root / "scripts" / "verify_stream_context.py")]),
+        Step("verify_drift_reports", [sys.executable, str(repo_root / "scripts" / "verify_drift_reports.py")]),
+        Step("verify_retention", [sys.executable, str(repo_root / "scripts" / "verify_retention.py")]),
         Step("verify_qa", [sys.executable, str(repo_root / "scripts" / "verify_qa.py")]),
+        Step("verify_qa_rewrite_heavy", [sys.executable, str(repo_root / "scripts" / "verify_qa_rewrite_heavy.py")]),
         Step("verify_multitrack_mux", [sys.executable, str(repo_root / "scripts" / "verify_multitrack_mux.py")]),
+        Step("verify_lipsync_preview", [sys.executable, str(repo_root / "scripts" / "verify_lipsync_preview.py")]),
     ]
 
     results = []

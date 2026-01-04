@@ -140,10 +140,21 @@ def resolve_effective_settings(
     qa = bool(pick("qa", mode_default=(req == "high")))
     director = bool(pick("director", mode_default=(req == "high")))
     multitrack = bool(pick("multitrack", mode_default=(req == "high")))
-    stream_context_seconds = float(
-        pick("stream_context_seconds", mode_default=(float(base.get("stream_context_seconds", 15.0)) if req != "low" else 0.0))
-        or 0.0
-    )
+    # Streaming context bridging (Feature I): on by default for HIGH/MED (15s), off for LOW.
+    # This is intentionally resolved even when `base` doesn't include the key (contract tests depend on it).
+    if "stream_context_seconds" in overrides:
+        sources["stream_context_seconds"] = "override"
+        stream_context_seconds = float(overrides.get("stream_context_seconds") or 0.0)
+    elif req == "low":
+        sources["stream_context_seconds"] = "mode:low"
+        stream_context_seconds = 0.0
+    else:
+        if "stream_context_seconds" in base and base.get("stream_context_seconds") is not None:
+            sources["stream_context_seconds"] = "base"
+            stream_context_seconds = float(base.get("stream_context_seconds") or 0.0)
+        else:
+            sources["stream_context_seconds"] = f"mode:{req}"
+            stream_context_seconds = 15.0
 
     # ASR model: mode default unless explicitly overridden
     asr_override = overrides.get("asr_model")

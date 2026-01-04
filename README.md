@@ -6,6 +6,8 @@ This repository is an **offline-first dubbing pipeline**:
 - **FastAPI server + web UI** for job submission, monitoring, transcript editing, and playback: `anime-v2-web`
 - **Outputs** go to `Output/<video_stem>/...` (intermediate artifacts + final `dub.mkv` / `dub.mp4`)
 
+Web UI submission supports per-job toggles including **Mode**, **Project profile**, **Cache policy**, and **PG Mode** (session-only).
+
 ### Architecture (high level)
 
 ```text
@@ -237,6 +239,89 @@ By default the pipeline keeps everything. You can opt into cleanup of heavy inte
 - `--retention-dry-run` (plan + report, no deletes)
 
 Report: `Output/<job>/analysis/retention_report.json`
+
+---
+
+## Next Version Features (A–M)
+
+These are opt-in upgrades that extend the canonical v2 pipeline without introducing parallel systems.
+
+- **A Mode contract tests**: `scripts/verify_modes_contract.py`
+- **B Artifact retention + cache policy**: `--cache-policy`, `Output/<job>/analysis/retention_report.json`
+- **C Per-project profiles**: `--project <name>` with `projects/<name>/{profile,qa,mix,style_guide,delivery}.yaml`
+- **D UI/CLI overrides**: `anime-v2 overrides ...` (music regions + speaker overrides)
+- **E Subtitle formatting + variants**: `Output/<job>/subs/{src,tgt_literal,tgt_pg,tgt_fit}.{srt,vtt}`
+- **F Voice-memory character merge tools**: `anime-v2 voice merge/undo-merge`
+- **G Voice audition tool**: `anime-v2 voice audition --text ...`
+- **H QA rewrite-heavy/pacing-heavy/outlier checks + fix links**: `Output/<job>/qa/*` + UI deep-links
+- **I Streaming context bridging**: overlap de-dup + context hints across chunks (default HIGH/MED)
+- **J Lip-sync improvements**: offline preview + scene-limited lip-sync (optional)
+- **K Per-character delivery profiles**: rate/pause/expressive/voice-mode defaults per character
+- **L Cross-episode drift reports**: `Output/<job>/analysis/drift_report.md` + `data/reports/<project>/season_report.md`
+- **M Optional offline LLM rewrite provider hook**: local-only endpoint/model, falls back to heuristic
+
+### Mode + project + cache policy (example)
+
+```bash
+anime-v2 Input/Test.mp4 --mode high --project example --cache-policy balanced --retention-days 0
+```
+
+### Overrides (CLI)
+
+```bash
+# Music regions
+anime-v2 overrides music list <job>
+anime-v2 overrides music add <job> --start 12.3 --end 25.0 --kind music --confidence 1.0 --reason "manual"
+anime-v2 overrides apply <job>
+
+# Per-segment speaker override
+anime-v2 overrides speaker set <job> 12 SPEAKER_01
+anime-v2 overrides speaker unset <job> 12
+```
+
+### Subtitle variants (outputs)
+
+After a run, check:
+- `Output/<job>/subs/src.srt` (+ `.vtt`)
+- `Output/<job>/subs/tgt_literal.srt`
+- `Output/<job>/subs/tgt_pg.srt` (only when PG enabled)
+- `Output/<job>/subs/tgt_fit.srt` (only when timing-fit enabled)
+
+### Voice memory tools (merge + audition)
+
+```bash
+anime-v2 voice list
+anime-v2 voice merge SPEAKER_99 SPEAKER_01
+anime-v2 voice undo-merge <merge_id>
+anime-v2 voice audition --text "Testing line" --top 5 --character SPEAKER_01 --lang en
+```
+
+### Character delivery profiles (Feature K)
+
+```bash
+anime-v2 character set-rate SPEAKER_01 1.05
+anime-v2 character set-style SPEAKER_01 dramatic
+anime-v2 character set-expressive SPEAKER_01 0.7
+anime-v2 character set-voice-mode SPEAKER_01 clone
+```
+
+### Drift reports (Feature L)
+
+After a run, check:
+- `Output/<job>/analysis/drift_report.md`
+- `data/reports/<project>/season_report.md`
+
+### Optional offline LLM rewrite provider (Feature M)
+
+This is used only during timing-fit and is **OFF by default**. See `docs/offline_llm_rewrite.md`.
+
+```bash
+anime-v2 Input/Test.mp4 \
+  --timing-fit \
+  --rewrite-provider local_llm \
+  --rewrite-endpoint http://127.0.0.1:8080/completion \
+  --rewrite-strict
+```
 
 ### Legacy v1 (optional)
 
@@ -473,8 +558,22 @@ Run:
 anime-v2 Input/Test.mp4 --lipsync wav2lip --wav2lip-checkpoint /models/wav2lip/wav2lip.pth
 ```
 
+Preview (offline, best-effort face visibility scan):
+
+```bash
+anime-v2 lipsync preview Input/Test.mp4
+```
+
+Scene-limited lip-sync (only apply where face visibility is good; falls back to pass-through elsewhere):
+
+```bash
+anime-v2 Input/Test.mp4 --lipsync wav2lip --lipsync-scene-limited on
+```
+
 Output:
 - `Output/<job>/final_lipsynced.mp4` (when successful)
+- `Output/<job>/analysis/lipsync_preview.json` (preview report)
+- `Output/<job>/analysis/lipsync_ranges.jsonl` (per-range status log when scene-limited)
 
 Notes:
 - If Wav2Lip is missing, the job continues without lipsync unless `--strict-plugins` is set.

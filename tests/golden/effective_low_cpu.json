@@ -18,6 +18,7 @@
   "reasons": [],
   "requested_mode": "low",
   "separation": "off",
+  "stream_context_seconds": 0.0,
   "sources": {
     "asr_model": "mode:low",
     "diarizer": "mode:low",
@@ -29,6 +30,7 @@
     "qa": "mode:low",
     "separation": "mode:low",
     "speaker_smoothing": "mode:low",
+    "stream_context_seconds": "mode:low",
     "timing_fit": "mode:low",
     "voice_memory": "mode:low",
     "voice_mode": "mode:low"
