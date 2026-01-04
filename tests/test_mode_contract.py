@@ -64,7 +64,7 @@ def _expected_from_matrix(matrix: dict[str, dict[str, str]], *, mode: str, gpu: 
     exp["speaker_smoothing"] = bool(cell_bool(matrix["**Speaker smoothing**"][mode])) if mode == "high" else (
         False if "off" in matrix["**Speaker smoothing**"][mode].lower() else "as_base"
     )
-    exp["voice_memory"] = True if "on" in matrix["**Voice memory**"][mode].lower() else False
+    exp["voice_memory"] = "on" in matrix["**Voice memory**"][mode].lower()
 
     # diarizer: low expects off
     exp["diarizer"] = "off" if "off" in matrix["**Diarization**"][mode].lower() and mode == "low" else "auto"
@@ -85,13 +85,13 @@ def _expected_from_matrix(matrix: dict[str, dict[str, str]], *, mode: str, gpu: 
         exp["mix_mode"] = "as_base"
 
     # timing/pacing
-    exp["timing_fit"] = True if mode == "high" else False
+    exp["timing_fit"] = mode == "high"
     exp["pacing"] = True if mode == "high" else ("as_base" if mode == "medium" else False)
 
     # qa/director/multitrack
-    exp["qa"] = True if mode == "high" else False
-    exp["director"] = True if mode == "high" else False
-    exp["multitrack"] = True if mode == "high" else False
+    exp["qa"] = mode == "high"
+    exp["director"] = mode == "high"
+    exp["multitrack"] = mode == "high"
 
     # voice mode default
     if mode == "high":

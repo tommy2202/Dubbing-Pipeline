@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import ipaddress
+import json
 import re
 import time
-import json as _json
-import ipaddress
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -34,10 +34,6 @@ from anime_v2.ops.metrics import jobs_queued, pipeline_job_total
 from anime_v2.ops.storage import ensure_free_space
 from anime_v2.runtime import lifecycle
 from anime_v2.runtime.scheduler import JobRecord, Scheduler
-from anime_v2.utils.crypto import verify_secret
-from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_media_info
-from anime_v2.utils.log import request_id_var
-from anime_v2.utils.ratelimit import RateLimiter
 from anime_v2.security.crypto import (
     CryptoConfigError,
     encrypt_file,
@@ -45,6 +41,10 @@ from anime_v2.security.crypto import (
     is_encrypted_path,
     materialize_decrypted,
 )
+from anime_v2.utils.crypto import verify_secret
+from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_media_info
+from anime_v2.utils.log import request_id_var
+from anime_v2.utils.ratelimit import RateLimiter
 
 router = APIRouter()
 
@@ -188,9 +188,13 @@ def _validate_media_or_400(path: Path, *, limits) -> float:
         raise HTTPException(status_code=400, detail=f"Video width too large (> {int(limits.max_video_width)}px)")
     if int(getattr(limits, "max_video_height", 0) or 0) > 0 and h > int(limits.max_video_height):
         raise HTTPException(status_code=400, detail=f"Video height too large (> {int(limits.max_video_height)}px)")
-    if int(getattr(limits, "max_video_pixels", 0) or 0) > 0 and w > 0 and h > 0:
-        if int(w) * int(h) > int(limits.max_video_pixels):
-            raise HTTPException(status_code=400, detail="Video resolution too large")
+    if (
+        int(getattr(limits, "max_video_pixels", 0) or 0) > 0
+        and w > 0
+        and h > 0
+        and (int(w) * int(h) > int(limits.max_video_pixels))
+    ):
+        raise HTTPException(status_code=400, detail="Video resolution too large")
 
     return float(dur)
 
@@ -498,17 +502,17 @@ async def uploads_complete(
             enc_path = final_path.with_suffix(final_path.suffix + ".enc")
             try:
                 encrypt_file(final_path, enc_path, kind="uploads", job_id=None)
-            except CryptoConfigError:
+            except CryptoConfigError as ex:
                 # Fail-safe: do not keep plaintext when encryption is enabled but misconfigured.
                 with suppress(Exception):
                     final_path.unlink(missing_ok=True)
-                raise HTTPException(status_code=500, detail="Upload encryption misconfigured")
-            except Exception:
+                raise HTTPException(status_code=500, detail="Upload encryption misconfigured") from ex
+            except Exception as ex:
                 with suppress(Exception):
                     enc_path.unlink(missing_ok=True)
                 with suppress(Exception):
                     final_path.unlink(missing_ok=True)
-                raise HTTPException(status_code=500, detail="Upload encryption failed")
+                raise HTTPException(status_code=500, detail="Upload encryption failed") from ex
             with suppress(Exception):
                 final_path.unlink(missing_ok=True)
             final_path = enc_path
@@ -826,9 +830,7 @@ def _load_transcript_store(base_dir: Path) -> dict[str, Any]:
     if not store_path.exists():
         return {"version": 0, "segments": {}}
     with suppress(Exception):
-        import json as _json
-
-        data = _json.loads(store_path.read_text(encoding="utf-8", errors="replace"))
+        data = json.loads(store_path.read_text(encoding="utf-8", errors="replace"))
         if isinstance(data, dict):
             data.setdefault("version", 0)
             data.setdefault("segments", {})
@@ -841,20 +843,16 @@ def _load_transcript_store(base_dir: Path) -> dict[str, Any]:
 def _save_transcript_store(base_dir: Path, data: dict[str, Any]) -> None:
     store_path, _ = _transcript_store_paths(base_dir)
     store_path.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
-
     tmp = store_path.with_suffix(".tmp")
-    tmp.write_text(_json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     tmp.replace(store_path)
 
 
 def _append_transcript_version(base_dir: Path, entry: dict[str, Any]) -> None:
     _, vpath = _transcript_store_paths(base_dir)
     vpath.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
-
     with vpath.open("a", encoding="utf-8") as f:
-        f.write(_json.dumps(entry, sort_keys=True) + "\n")
+        f.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
 @router.post("/api/jobs")
@@ -1224,8 +1222,8 @@ async def create_job(
 
     # Store requested + effective settings summary (best-effort; no secrets).
     try:
-        from anime_v2.modes import resolve_effective_settings
         from anime_v2.config import get_settings as _gs
+        from anime_v2.modes import resolve_effective_settings
 
         s = _gs()
         base = {
@@ -1241,7 +1239,6 @@ async def create_job(
             "qa": False,
             "director": bool(getattr(s, "director", False)),
             "multitrack": bool(getattr(s, "multitrack", False)),
-            "voice_mode": str(getattr(s, "voice_mode", "clone")),
         }
         overrides: dict[str, Any] = {}
         if bool(qa):
@@ -1797,7 +1794,8 @@ async def list_project_profiles(_: Identity = Depends(require_scope("read:job"))
     Returned items are safe to expose (no secrets).
     """
     try:
-        from anime_v2.projects.loader import list_project_profiles as _list, load_project_profile
+        from anime_v2.projects.loader import list_project_profiles as _list
+        from anime_v2.projects.loader import load_project_profile
 
         items: list[dict[str, Any]] = []
         for name in _list():
@@ -2234,10 +2232,8 @@ async def put_job_characters(
         form = await request.form()
         raw = form.get("data")
         if raw:
-            import json as _json
-
             try:
-                data = _json.loads(str(raw))
+                data = json.loads(str(raw))
             except Exception:
                 data = {}
             if isinstance(data, dict) and isinstance(data.get("items"), list):
@@ -2648,7 +2644,7 @@ async def post_job_review_helper(
     if not text:
         # fall back to current chosen_text
         with suppress(Exception):
-            from anime_v2.review.state import load_state, find_segment
+            from anime_v2.review.state import find_segment, load_state
 
             st = load_state(base_dir)
             seg = find_segment(st, int(segment_id))
