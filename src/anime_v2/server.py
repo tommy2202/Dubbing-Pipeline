@@ -38,6 +38,7 @@ from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import install_egress_policy
 from anime_v2.utils.ratelimit import RateLimiter
+from anime_v2.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
 from anime_v2.web.routes_jobs import router as jobs_router
 from anime_v2.web.routes_ui import router as ui_router
 from anime_v2.web.routes_webrtc import router as webrtc_router
@@ -98,6 +99,11 @@ async def lifespan(app: FastAPI):
 
     # bootstrap admin user
     install_egress_policy()
+    # Remote-access mode summary (Tailscale / Cloudflare hardening)
+    try:
+        log_remote_access_boot_summary()
+    except Exception as ex:
+        logger.warning("remote_access_boot_summary_failed", error=str(ex))
     audit.emit(
         "policy.egress",
         request_id=None,
@@ -250,6 +256,8 @@ async def log_requests(request: Request, call_next):
 
 
 # Must be outermost so request_id is present for all logs (including log_requests).
+# Remote access enforcement should run *inside* request_context so denied requests still have request_id.
+app.middleware("http")(remote_access_middleware)
 app.middleware("http")(request_context_middleware)
 
 

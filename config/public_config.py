@@ -127,6 +127,22 @@ class PublicConfig(BaseSettings):
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
 
+    # --- remote access hardening (mobile) ---
+    # off: no IP allowlist enforcement (default for local dev)
+    # tailscale: allow only LAN/private + Tailscale CGNAT ranges by default
+    # cloudflare: expect a trusted proxy (cloudflared/caddy) and optionally enforce Cloudflare Access JWT
+    remote_access_mode: str = Field(default="off", alias="REMOTE_ACCESS_MODE")  # off|tailscale|cloudflare
+    allowed_subnets: str = Field(default="", alias="ALLOWED_SUBNETS")  # comma/space separated CIDRs
+    trust_proxy_headers: bool = Field(default=False, alias="TRUST_PROXY_HEADERS")
+    trusted_proxy_subnets: str = Field(default="", alias="TRUSTED_PROXY_SUBNETS")  # CIDRs
+
+    # Optional Cloudflare Access verification (recommended when REMOTE_ACCESS_MODE=cloudflare)
+    # These are not secrets (they identify the Access app), but verification may require fetching JWKS.
+    cloudflare_access_team_domain: str | None = Field(
+        default=None, alias="CLOUDFLARE_ACCESS_TEAM_DOMAIN"
+    )  # e.g. "myteam" (myteam.cloudflareaccess.com)
+    cloudflare_access_aud: str | None = Field(default=None, alias="CLOUDFLARE_ACCESS_AUD")
+
     # --- logging ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_max_bytes: int = Field(default=5 * 1024 * 1024, alias="LOG_MAX_BYTES")
