@@ -170,9 +170,9 @@ async def ui_upload(request: Request) -> HTMLResponse:
     user = _current_user_optional(request)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
-    # Viewer is view-only: no job submissions.
+    # Viewer/editor are view-only: no job submissions.
     try:
-        if getattr(user, "role", None) and str(user.role.value) == "viewer":
+        if getattr(user, "role", None) and str(user.role.value) in {"viewer", "editor"}:
             return RedirectResponse(url="/ui/dashboard", status_code=302)
     except Exception:
         pass

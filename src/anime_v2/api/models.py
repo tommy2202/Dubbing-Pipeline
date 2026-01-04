@@ -12,6 +12,7 @@ from typing import Any
 class Role(str, Enum):
     admin = "admin"
     operator = "operator"
+    editor = "editor"
     viewer = "viewer"
 
 

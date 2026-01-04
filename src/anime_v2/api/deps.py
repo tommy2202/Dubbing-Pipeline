@@ -112,7 +112,9 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
 
 
 def require_role(min_role: Role):
-    order = {Role.viewer: 0, Role.operator: 1, Role.admin: 2}
+    # Role ordering is used only for coarse UI/admin gating.
+    # Fine-grained permissions should use require_scope.
+    order = {Role.viewer: 0, Role.operator: 1, Role.editor: 1, Role.admin: 2}
 
     def dep(request: Request, ident: Identity = Depends(current_identity)) -> Identity:
         # CSRF: enforce for browser/cookie sessions on state-changing requests.

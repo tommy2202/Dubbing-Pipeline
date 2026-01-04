@@ -12,6 +12,8 @@ from anime_v2.utils.crypto import hash_secret, random_id, random_prefix
 
 router = APIRouter(prefix="/keys", tags=["api_keys"])
 
+_ALLOWED_SCOPES = {"read:job", "submit:job", "edit:job", "admin:*"}
+
 
 def _get_store(request: Request) -> AuthStore:
     s = getattr(request.app.state, "auth_store", None)
@@ -53,6 +55,12 @@ async def create_key(
     scopes = body.get("scopes") or ["read:job"]
     if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
         raise HTTPException(status_code=400, detail="Invalid scopes")
+    scopes = [str(s).strip() for s in scopes if str(s).strip()]
+    if not scopes:
+        scopes = ["read:job"]
+    bad = [s for s in scopes if s not in _ALLOWED_SCOPES]
+    if bad:
+        raise HTTPException(status_code=400, detail=f"Unsupported scope(s): {', '.join(bad)}")
     prefix = random_prefix(10)
     key_plain = f"dp_{prefix}_{random_id('', 24)}"
     key_hash = hash_secret(key_plain)

@@ -179,10 +179,16 @@ async def login(request: Request) -> Response:
     access = create_access_token(
         sub=user.id, role=user.role.value, scopes=["read:job"], minutes=s.access_token_minutes
     )
-    # role-based default scopes (viewer=read, operator=read+submit, admin implicit)
+    # role-based default scopes
+    # - viewer: read-only
+    # - operator: submit jobs
+    # - editor: segment edits/overrides (but not job submission)
+    # - admin: all
     scopes = ["read:job"]
     if user.role in {Role.operator, Role.admin}:
         scopes.append("submit:job")
+    if user.role in {Role.editor, Role.admin}:
+        scopes.append("edit:job")
     if user.role == Role.admin:
         scopes.append("admin:*")
     access = create_access_token(
@@ -308,6 +314,8 @@ async def refresh(request: Request) -> Response:
     scopes = ["read:job"]
     if user.role in {Role.operator, Role.admin}:
         scopes.append("submit:job")
+    if user.role in {Role.editor, Role.admin}:
+        scopes.append("edit:job")
     if user.role == Role.admin:
         scopes.append("admin:*")
     access = create_access_token(

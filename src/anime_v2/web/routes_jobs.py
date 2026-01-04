@@ -1577,7 +1577,7 @@ async def get_job_music_regions_effective(
 
 @router.put("/api/jobs/{id}/overrides")
 async def put_job_overrides(
-    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+    request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(id)
@@ -1599,7 +1599,7 @@ async def put_job_overrides(
 
 @router.post("/api/jobs/{id}/overrides/apply")
 async def apply_job_overrides(
-    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+    request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(id)
@@ -1903,7 +1903,7 @@ async def get_job_characters(
 
 @router.put("/api/jobs/{id}/characters")
 async def put_job_characters(
-    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+    request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(id)
@@ -2066,7 +2066,7 @@ async def get_job_transcript(
 
 @router.put("/api/jobs/{id}/transcript")
 async def put_job_transcript(
-    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+    request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(id)
@@ -2138,7 +2138,7 @@ async def put_job_transcript(
 
 @router.post("/api/jobs/{id}/overrides/speaker")
 async def set_speaker_overrides_from_ui(
-    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+    request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     """
     Set per-segment speaker overrides (used by transcript editor UI).
@@ -2189,7 +2189,7 @@ async def set_speaker_overrides_from_ui(
 
 @router.post("/api/jobs/{id}/transcript/synthesize")
 async def synthesize_from_approved(
-    request: Request, id: str, _: Identity = Depends(require_scope("submit:job"))
+    request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
     scheduler = _get_scheduler(request)
@@ -2308,7 +2308,7 @@ async def post_job_review_helper(
     request: Request,
     id: str,
     segment_id: int,
-    _: Identity = Depends(require_scope("submit:job")),
+    _: Identity = Depends(require_scope("edit:job")),
 ) -> dict[str, Any]:
     """
     Quick-edit helpers for mobile review loop.
@@ -2403,7 +2403,7 @@ async def post_job_review_edit(
     request: Request,
     id: str,
     segment_id: int,
-    _: Identity = Depends(require_scope("submit:job")),
+    _: Identity = Depends(require_scope("edit:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
     _enforce_rate_limit(
@@ -2438,7 +2438,7 @@ async def post_job_review_regen(
     request: Request,
     id: str,
     segment_id: int,
-    _: Identity = Depends(require_scope("submit:job")),
+    _: Identity = Depends(require_scope("edit:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
     _enforce_rate_limit(
@@ -2471,7 +2471,7 @@ async def post_job_review_lock(
     request: Request,
     id: str,
     segment_id: int,
-    _: Identity = Depends(require_scope("submit:job")),
+    _: Identity = Depends(require_scope("edit:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
     _enforce_rate_limit(
@@ -2504,7 +2504,7 @@ async def post_job_review_unlock(
     request: Request,
     id: str,
     segment_id: int,
-    _: Identity = Depends(require_scope("submit:job")),
+    _: Identity = Depends(require_scope("edit:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
     _enforce_rate_limit(

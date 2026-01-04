@@ -257,7 +257,7 @@ async def get_settings_me(
 
 @router.put("/api/settings")
 async def put_settings_me(
-    request: Request, ident: Identity = Depends(require_role(Role.operator))
+    request: Request, ident: Identity = Depends(require_role(Role.admin))
 ) -> dict[str, Any]:
     body = await request.json()
     store = _get_user_settings_store(request)
@@ -271,7 +271,7 @@ async def put_settings_me(
 
 @router.post("/api/settings/notifications/test")
 async def test_notifications(
-    request: Request, ident: Identity = Depends(require_role(Role.operator))
+    request: Request, ident: Identity = Depends(require_role(Role.admin))
 ) -> dict[str, Any]:
     store = _get_user_settings_store(request)
     cfg = store.get_user(ident.user.id)
