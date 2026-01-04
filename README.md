@@ -1,68 +1,35 @@
-## Dubbing-Pipeline (Anime dubbing pipeline, v2-first)
+## Dubbing-Pipeline (offline-first dubbing, v2-first)
 
-This repository is an **offline-first dubbing pipeline**:
+This repository is an **offline-first dubbing pipeline** for turning a source video into a dubbed output with a practical “edit → regen → review” loop.
 
-- **CLI** for running dubbing jobs locally: `anime-v2`
-- **FastAPI server + web UI** for job submission, monitoring, transcript editing, and playback: `anime-v2-web`
-- **Outputs** go to `Output/<video_stem>/...` (intermediate artifacts + final `dub.mkv` / `dub.mp4`)
+It ships with:
+- **CLI** for local processing: `anime-v2`
+- **FastAPI server + web UI** for mobile-friendly job submission, progress monitoring, QA, editing, and playback: `anime-v2-web`
 
-Web UI submission supports per-job toggles including **Mode**, **Project profile**, **Cache policy**, and **PG Mode** (session-only).
+Outputs are written under:
+- `Output/<stem>/...` (canonical)
+- plus a stable per-job pointer for web jobs at `Output/jobs/<job_id>/target.txt`
 
-### Architecture (high level)
+### What’s New (current feature-complete stack)
+- **Mobile/web job submission**: resumable chunked uploads + server-file picker fallback, queue/progress/cancel, job pages with tabs.
+- **Mobile playback**: auto-selected mobile-friendly MP4 + optional HLS + “Open in VLC” links.
+- **QA + review loop**: QA scoring, actionable “Fix” deep-links, segment edit/regen/preview/lock, overrides for music regions + speakers.
+- **Remote access (opt-in)**: Tailscale primary, Cloudflare Tunnel + Access optional, proxy-safe behavior.
+- **Security & privacy**: cookie sessions + CSRF, strict CORS, rate limits, RBAC + scoped API keys, audit logging, optional encryption-at-rest, privacy mode + retention.
+- **Ops**: model cache status + optional prewarm, library management (tags/archive/delete), verification gates.
 
-```text
-            +--------------------+
-Input video |   CLI / API job    |
-   (.mp4)   |  submission layer  |
-            +---------+----------+
-                      |
-                      v
-            +--------------------+
-            |  Extract audio     |  -> Output/<stem>/audio.wav
-            +--------------------+
-                      |
-                      v
-            +--------------------+
-            |   (Optional)       |
-            |  diarization       |  -> diarization.json + speaker refs
-            +--------------------+
-                      |
-                      v
-            +--------------------+
-            |   ASR (Whisper)    |  -> <stem>.srt + <stem>.json (segments_detail)
-            +--------------------+
-                      |
-                      v
-            +--------------------+
-            | (Optional) MT      |  -> translated.json + <stem>.translated.srt
-            +--------------------+
-                      |
-                      v
-            +--------------------+
-            |   TTS (XTTS/etc)   |  -> <stem>.tts.wav + clips + manifest
-            +--------------------+
-                      |
-                      v
-            +--------------------+
-            |   Mix / mux        |  -> dub.mkv / dub.mp4 (+ optional subs)
-            +--------------------+
-```
+### Documentation index (start here)
+- Overview & architecture: `docs/OVERVIEW.md`
+- Full feature list (defaults + optional + outputs): `docs/FEATURES.md`
+- Setup (local + Docker + GPU + security): `docs/SETUP.md`
+- CLI reference + recipes: `docs/CLI.md`
+- Web/mobile guide (LAN + remote): `docs/WEB_MOBILE.md`
+- Troubleshooting: `docs/TROUBLESHOOTING.md`
 
----
-
-## Feature list (F1–F9)
-
-- **F1 Voice cloning / speaker preservation (optional)**: XTTS cloning when reference audio is available; fallbacks to presets/basic/espeak.
-- **F2 Emotion transfer / expressive controls (optional)**: best-effort `emotion_mode` + (rate/pitch/energy) post-processing.
-- **F3 Realtime / streaming dubbing (optional)**: **pseudo-streaming** chunk mode (`--realtime`) producing chunk artifacts + optional stitched outputs.
-- **F4 Web UI / API support**: FastAPI server with job APIs, auth/RBAC/CSRF, UI pages, transcript editing, resynthesis.
-- **F5 Multi-language**: `--src-lang` + `--tgt-lang`, with multiple MT engines + fallbacks.
-- **F6 Timing & alignment precision (optional)**: segment timing + retime/pad/trim; optional aeneas alignment; optional Whisper word timestamps when supported.
-- **F7 Subtitle generation**: SRT default; VTT optional (`--subs-format vtt|both`).
-- **F8 Batch processing**: API batch endpoint + CLI `--batch` (folder/glob) with `--jobs` concurrency.
-- **F9 Model selection & fine-tuning hooks (optional)**: model cache/allocator; `--asr-model`, `--mt-provider`, `--tts-provider`; placeholder training hook (`scripts/train_voice.py`).
-
-Canonical audit: `docs/feature_audit.md`.
+Additional focused docs:
+- Remote access: `docs/remote_access.md` and `docs/mobile_remote.md`
+- Private notifications (ntfy): `docs/notifications.md`
+- Security details: `docs/security.md`
 
 ---
 
@@ -127,7 +94,7 @@ Notes:
 - `scripts/mobile_gate.py` is the **end-to-end mobile/remote readiness** suite (synthetic media, no real anime required).
 - `scripts/security_mobile_gate.py` runs a **combined security + mobile** verification set (auth incl QR, upload safety, job lifecycle, playback variants, optional ntfy, and secret-leak scan).
 
-Mobile guide: `docs/mobile_update.md`.
+Mobile/web guide: `docs/WEB_MOBILE.md` (legacy mobile doc: `docs/mobile_update.md`).
 
 ### Run a single dub job (CLI)
 
@@ -689,7 +656,8 @@ Artifacts land in:
 - `Output/<stem>/<stem>.srt` (+ optional `<stem>.vtt`)
 - `Output/<stem>/translated.json` + `<stem>.translated.srt` (+ optional `.vtt`)
 - `Output/<stem>/<stem>.tts.wav`
-- `Output/<stem>/dub.mkv`
+- `Output/<stem>/<stem>.dub.mkv`
+- `Output/<stem>/<stem>.dub.mp4`
 - `Output/<stem>/realtime/` (when `--realtime`)
 
 ---
@@ -706,10 +674,11 @@ docker build -f docker/Dockerfile -t dubbing-pipeline .
 
 ```bash
 docker run --rm \
+  --entrypoint anime-v2 \
   -v "$(pwd)":/app \
   -v "$(pwd)/Input":/app/Input \
   -v "$(pwd)/Output":/app/Output \
-  dubbing-pipeline anime-v2 /app/Input/Test.mp4 --mode low --device cpu
+  dubbing-pipeline /app/Input/Test.mp4 --mode low --device cpu
 ```
 
 ### Run (web server)
@@ -739,7 +708,12 @@ cp .env.secrets.example .env.secrets
 
 Minimum secrets for web usage:
 
-- `API_TOKEN` (set in `.env.secrets`)
+- `JWT_SECRET` (set in `.env.secrets`)
+- `SESSION_SECRET` (set in `.env.secrets`)
+- `CSRF_SECRET` (set in `.env.secrets`)
+
+Optional (legacy / special cases):
+- `API_TOKEN` (only for legacy token-in-URL login, which is **disabled by default**)
 
 Safety:
 
@@ -750,15 +724,13 @@ Safety:
 
 ## API usage (FastAPI)
 
-- Start server: `anime-v2-web`
-- Login: `http://<host>:8000/login?token=<API_TOKEN>`
-- Primary endpoints:
-  - `POST /api/jobs` (submit)
-  - `POST /api/jobs/batch` (batch submit)
-  - `GET /api/jobs/{id}` (status)
-  - `GET /api/jobs/{id}/result` (download)
-  - `GET/PUT /api/jobs/{id}/transcript` (edit transcript)
-  - `POST /api/jobs/{id}/transcript/synthesize` (resynthesize from edited transcript)
+The canonical server entrypoint is `anime-v2-web`.
+
+For browser/mobile use:
+- Open `http://<host>:8000/ui/login` (or `/login` alias) and sign in with username/password.
+
+For full details (job submission, uploads, monitoring, playback, QA/editing):
+- `docs/WEB_MOBILE.md`
 
 ---
 
