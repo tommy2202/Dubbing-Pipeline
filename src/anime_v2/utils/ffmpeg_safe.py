@@ -144,6 +144,81 @@ def ffprobe_duration_seconds(path: Path, *, timeout_s: int = 20) -> float:
         raise FFmpegError(f"ffprobe failed: {ex}") from ex
 
 
+def ffprobe_media_info(path: Path, *, timeout_s: int = 20) -> dict:
+    """
+    Safe ffprobe metadata probe.
+
+    Returns a dict:
+      - format_name: str
+      - duration_s: float
+      - width: int (0 if unknown)
+      - height: int (0 if unknown)
+    """
+    import json
+
+    s = get_settings()
+    argv = [
+        str(s.ffprobe_bin),
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(path),
+    ]
+    _validate_args(argv)
+    try:
+        out = subprocess.check_output(argv, stderr=subprocess.DEVNULL, timeout=timeout_s).decode(
+            "utf-8", errors="replace"
+        )
+    except subprocess.TimeoutExpired as ex:
+        raise FFmpegError("ffprobe timed out") from ex
+    except Exception as ex:
+        raise FFmpegError(f"ffprobe failed: {ex}") from ex
+
+    try:
+        data = json.loads(out) if out else {}
+    except Exception as ex:
+        raise FFmpegError(f"ffprobe returned invalid JSON: {ex}") from ex
+
+    fmt = data.get("format") if isinstance(data, dict) else {}
+    streams = data.get("streams") if isinstance(data, dict) else []
+    format_name = ""
+    duration_s = 0.0
+    width = 0
+    height = 0
+
+    try:
+        if isinstance(fmt, dict):
+            format_name = str(fmt.get("format_name") or "").strip()
+            duration_s = float(fmt.get("duration") or 0.0)
+    except Exception:
+        pass
+
+    # Prefer the first video stream.
+    if isinstance(streams, list):
+        for st in streams:
+            if not isinstance(st, dict):
+                continue
+            if str(st.get("codec_type") or "") != "video":
+                continue
+            try:
+                width = int(st.get("width") or 0)
+                height = int(st.get("height") or 0)
+            except Exception:
+                width = 0
+                height = 0
+            break
+
+    return {
+        "format_name": format_name,
+        "duration_s": float(duration_s),
+        "width": int(width),
+        "height": int(height),
+    }
+
+
 def extract_audio_mono_16k(
     *,
     src: Path,

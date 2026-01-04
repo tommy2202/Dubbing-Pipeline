@@ -351,6 +351,11 @@ class PublicConfig(BaseSettings):
     max_concurrency_tts: int = Field(default=1, alias="MAX_CONCURRENCY_TTS")
     backpressure_q_max: int = Field(default=6, alias="BACKPRESSURE_Q_MAX")
 
+    # Optional per-mode caps (0 => fall back to MAX_CONCURRENCY_GLOBAL)
+    max_jobs_high: int = Field(default=0, alias="MAX_JOBS_HIGH")
+    max_jobs_medium: int = Field(default=0, alias="MAX_JOBS_MEDIUM")
+    max_jobs_low: int = Field(default=0, alias="MAX_JOBS_LOW")
+
     # runtime model manager / allocator
     prewarm_whisper: str = Field(default="", alias="PREWARM_WHISPER")  # comma-separated models
     prewarm_tts: str = Field(default="", alias="PREWARM_TTS")  # comma-separated models
@@ -363,6 +368,10 @@ class PublicConfig(BaseSettings):
 
     # --- job limits/watchdogs ---
     max_video_min: int = Field(default=120, alias="MAX_VIDEO_MIN")
+    # Optional: reject videos above these caps (0 disables)
+    max_video_width: int = Field(default=0, alias="MAX_VIDEO_WIDTH")
+    max_video_height: int = Field(default=0, alias="MAX_VIDEO_HEIGHT")
+    max_video_pixels: int = Field(default=0, alias="MAX_VIDEO_PIXELS")
     max_upload_mb: int = Field(default=2048, alias="MAX_UPLOAD_MB")
     max_concurrent_per_user: int = Field(default=2, alias="MAX_CONCURRENT")
     daily_processing_minutes: int = Field(default=240, alias="DAILY_PROCESSING_MINUTES")
@@ -373,6 +382,10 @@ class PublicConfig(BaseSettings):
     watchdog_translate_s: int = Field(default=10 * 60, alias="WATCHDOG_TRANSLATE_S")
     watchdog_tts_s: int = Field(default=30 * 60, alias="WATCHDOG_TTS_S")
     watchdog_mix_s: int = Field(default=20 * 60, alias="WATCHDOG_MIX_S")
+    watchdog_mux_s: int = Field(default=20 * 60, alias="WATCHDOG_MUX_S")
+    watchdog_export_s: int = Field(default=20 * 60, alias="WATCHDOG_EXPORT_S")
+    # Optional: memory cap for watchdog child processes (0 disables)
+    watchdog_child_max_mem_mb: int = Field(default=0, alias="WATCHDOG_CHILD_MAX_MEM_MB")
 
     # --- retry / circuit breaker ---
     retry_max: int = Field(default=3, alias="RETRY_MAX")

@@ -107,6 +107,12 @@ class Scheduler:
         self._max_global = max(1, int(s.max_concurrency_global))
         self._max_transcribe = max(1, int(s.max_concurrency_transcribe))
         self._max_tts = max(1, int(s.max_concurrency_tts))
+        # Optional per-mode caps (0 => fall back to MAX_CONCURRENCY_GLOBAL)
+        self._max_by_mode: dict[str, int] = {
+            "high": max(0, int(getattr(s, "max_jobs_high", 0) or 0)),
+            "medium": max(0, int(getattr(s, "max_jobs_medium", 0) or 0)),
+            "low": max(0, int(getattr(s, "max_jobs_low", 0) or 0)),
+        }
         # Allow disabling backpressure by setting BACKPRESSURE_Q_MAX=-1
         try:
             self._bp_qmax = int(s.backpressure_q_max)
@@ -114,6 +120,8 @@ class Scheduler:
             self._bp_qmax = 6
 
         self._active_global = 0
+        self._active_by_mode: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+        self._active_job_mode: dict[str, str] = {}
         self._active_phase: dict[str, int] = {"audio": 0, "transcribe": 0, "tts": 0, "mux": 0}
         self._phase_sem: dict[str, threading.Semaphore] = {
             "audio": threading.Semaphore(max(1, self._max_global)),
@@ -236,6 +244,9 @@ class Scheduler:
     def on_job_done(self, job_id: str) -> None:
         with self._cv:
             self._active_global = max(0, int(self._active_global) - 1)
+            mode = self._active_job_mode.pop(str(job_id), "")
+            if mode:
+                self._active_by_mode[mode] = max(0, int(self._active_by_mode.get(mode, 0)) - 1)
             self._cv.notify_all()
 
     @contextmanager
@@ -282,11 +293,30 @@ class Scheduler:
                 if available_at > now:
                     self._cv.wait(timeout=min(0.5, available_at - now))
                     continue
+                # Per-mode caps (best-effort). If top-of-heap is blocked, delay it slightly
+                # so other queued jobs can proceed.
+                mode = (rec.mode or "medium").lower().strip()
+                if mode not in {"high", "medium", "low"}:
+                    mode = "medium"
+                cap = int(self._max_by_mode.get(mode, 0) or 0)
+                if cap <= 0:
+                    cap = int(self._max_global)
+                if int(self._active_by_mode.get(mode, 0)) >= cap:
+                    # Delay this record slightly; keep heap moving.
+                    heapq.heapreplace(
+                        self._heap,
+                        (now + 0.5, int(rec.priority), float(rec.created_at), self._seq + 1, rec),
+                    )
+                    self._seq += 1
+                    self._cv.wait(timeout=0.25)
+                    continue
                 if self._active_global >= self._max_global:
                     self._cv.wait(timeout=0.25)
                     continue
                 heapq.heappop(self._heap)
                 self._active_global += 1
+                self._active_by_mode[mode] = int(self._active_by_mode.get(mode, 0)) + 1
+                self._active_job_mode[str(rec.job_id)] = mode
 
             # Optional redis mutex (best-effort)
             if self._redis_mutex is not None:

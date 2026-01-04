@@ -35,7 +35,7 @@ from anime_v2.ops.storage import ensure_free_space
 from anime_v2.runtime import lifecycle
 from anime_v2.runtime.scheduler import JobRecord, Scheduler
 from anime_v2.utils.crypto import verify_secret
-from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_duration_seconds
+from anime_v2.utils.ffmpeg_safe import FFmpegError, ffprobe_media_info
 from anime_v2.utils.log import request_id_var
 from anime_v2.utils.ratelimit import RateLimiter
 from anime_v2.security.crypto import (
@@ -57,6 +57,18 @@ _ALLOWED_UPLOAD_MIME = {
     "application/octet-stream",  # some browsers
 }
 _ALLOWED_UPLOAD_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
+_ALLOWED_CONTAINER_TOKENS = {
+    # MP4/QuickTime family
+    "mov",
+    "mp4",
+    "m4a",
+    "3gp",
+    "3g2",
+    "mj2",
+    # Matroska/WebM
+    "matroska",
+    "webm",
+}
 
 # Upload session locks (per upload_id) for concurrent chunk writes
 _UPLOAD_LOCKS: dict[str, asyncio.Lock] = {}
@@ -147,6 +159,38 @@ def _sha256_hex(data: bytes) -> str:
     h = hashlib.sha256()
     h.update(data)
     return h.hexdigest()
+
+
+def _validate_media_or_400(path: Path, *, limits) -> float:
+    """
+    Validate a media file using ffprobe:
+      - container allowlist (format_name tokens)
+      - duration bounds
+      - optional resolution caps
+    Returns duration_s.
+    """
+    info = ffprobe_media_info(path, timeout_s=20)
+    fmt = str(info.get("format_name") or "").strip().lower()
+    tokens = {t.strip() for t in fmt.split(",") if t.strip()}
+    if not tokens or tokens.isdisjoint(_ALLOWED_CONTAINER_TOKENS):
+        raise HTTPException(status_code=400, detail="Invalid media file (unsupported container)")
+    dur = float(info.get("duration_s") or 0.0)
+    if dur <= 0.5:
+        raise HTTPException(status_code=400, detail="Video duration is too short or unreadable")
+    if dur > float(limits.max_video_min) * 60.0:
+        raise HTTPException(status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)")
+
+    w = int(info.get("width") or 0)
+    h = int(info.get("height") or 0)
+    if int(getattr(limits, "max_video_width", 0) or 0) > 0 and w > int(limits.max_video_width):
+        raise HTTPException(status_code=400, detail=f"Video width too large (> {int(limits.max_video_width)}px)")
+    if int(getattr(limits, "max_video_height", 0) or 0) > 0 and h > int(limits.max_video_height):
+        raise HTTPException(status_code=400, detail=f"Video height too large (> {int(limits.max_video_height)}px)")
+    if int(getattr(limits, "max_video_pixels", 0) or 0) > 0 and w > 0 and h > 0:
+        if int(w) * int(h) > int(limits.max_video_pixels):
+            raise HTTPException(status_code=400, detail="Video resolution too large")
+
+    return float(dur)
 
 
 @router.post("/api/uploads/init")
@@ -318,6 +362,13 @@ async def uploads_chunk(
         raise HTTPException(status_code=400, detail="offset out of bounds")
     if (offset + len(body)) > total:
         raise HTTPException(status_code=400, detail="chunk exceeds total_bytes")
+    # Per-chunk size guard (defense-in-depth)
+    try:
+        max_chunk = int(rec.get("chunk_bytes") or 0)
+    except Exception:
+        max_chunk = 0
+    if max_chunk > 0 and len(body) > (max_chunk + 1024):
+        raise HTTPException(status_code=400, detail="chunk too large")
 
     idx = int(index)
     if idx < 0:
@@ -427,6 +478,19 @@ async def uploads_complete(
 
         final_path.parent.mkdir(parents=True, exist_ok=True)
         part_path.replace(final_path)
+
+        # ffprobe validation before optional encryption (reject corrupt/unsupported uploads early).
+        try:
+            _ = _validate_media_or_400(final_path, limits=get_limits())
+        except HTTPException:
+            with suppress(Exception):
+                final_path.unlink(missing_ok=True)
+            raise
+        except Exception as ex:
+            with suppress(Exception):
+                final_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}") from ex
+
         # Optional: encrypt uploads at rest (best-effort, but fail-safe when enabled).
         if encryption_enabled_for("uploads"):
             enc_path = final_path.with_suffix(final_path.suffix + ".enc")
@@ -484,6 +548,9 @@ async def list_server_files(
     # only one level; keep it cheap
     for p in sorted(target.iterdir()):
         if p.name.startswith("."):
+            continue
+        # Do not expose resumable-upload staging directory via the file picker.
+        if p.is_dir() and p.name == "uploads":
             continue
         try:
             if p.is_dir():
@@ -554,6 +621,17 @@ def _sanitize_video_path(p: str) -> Path:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="video_path must be under INPUT_DIR"
         ) from None
+    # Uploaded files must be referenced via upload_id (prevents cross-user access via server file picker).
+    up = _input_uploads_dir().resolve()
+    try:
+        resolved.relative_to(up)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="video_path cannot be under INPUT_UPLOADS_DIR; use upload_id"
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     return resolved
 
 
@@ -1001,20 +1079,14 @@ async def create_job(
     # Extension allowlist (defense-in-depth). Encrypted-at-rest inputs are allowed (validated via ffprobe after decrypt).
     if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
         raise HTTPException(status_code=400, detail="Unsupported file type")
-    # Validate duration using ffprobe (no user-controlled args).
+    # Validate using ffprobe (no user-controlled args).
     try:
         with materialize_decrypted(video_path, kind="uploads", job_id=None, suffix=".input") as mat:
-            duration_s = float(ffprobe_duration_seconds(mat.path))
+            duration_s = float(_validate_media_or_400(mat.path, limits=limits))
+    except HTTPException:
+        raise
     except FFmpegError as ex:
-        raise HTTPException(
-            status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
-        ) from ex
-    if duration_s <= 0.5:
-        raise HTTPException(status_code=400, detail="Video duration is too short or unreadable")
-    if duration_s > float(limits.max_video_min) * 60.0:
-        raise HTTPException(
-            status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)"
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}") from ex
 
     jid = new_id()
     created = now_utc()
@@ -1233,19 +1305,13 @@ async def create_jobs_batch(
         project_name: str = "",
         style_guide_path: str = "",
     ) -> str:
-        # duration validation
+        # ffprobe validation
         try:
-            duration_s = float(ffprobe_duration_seconds(video_path))
-        except FFmpegError as ex:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
-            ) from ex
-        if duration_s <= 0.5:
-            raise HTTPException(status_code=400, detail="Video duration is too short or unreadable")
-        if duration_s > float(limits.max_video_min) * 60.0:
-            raise HTTPException(
-                status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)"
-            )
+            duration_s = float(_validate_media_or_400(video_path, limits=limits))
+        except HTTPException:
+            raise
+        except Exception as ex:
+            raise HTTPException(status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}") from ex
 
         jid = new_id()
         created = now_utc()
@@ -1655,6 +1721,24 @@ async def cancel_job(
     job = store.get(id)
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
+    return job.to_dict()
+
+
+@router.post("/api/jobs/{id}/kill")
+async def kill_job_admin(
+    request: Request, id: str, _: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
+    """
+    Admin-only force-stop.
+    This is stronger than "cancel" in that it is allowed even when the operator role is restricted.
+    """
+    store = _get_store(request)
+    queue = _get_queue(request)
+    await queue.kill(id, reason="Killed by admin")
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    audit_event("job.kill", request=request, user_id=_.user.id, meta={"job_id": id})
     return job.to_dict()
 
 

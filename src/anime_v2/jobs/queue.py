@@ -162,6 +162,17 @@ class JobQueue:
         j = self.store.update(id, state=JobState.CANCELED, message="Canceled")
         return j
 
+    async def kill(self, id: str, *, reason: str = "Killed by admin") -> Job | None:
+        """
+        Force-stop a job.
+        Implementation: mark as CANCELED and rely on watchdog cancel checks to terminate active phases quickly.
+        """
+        async with self._cancel_lock:
+            self._cancel.add(id)
+        # Preserve state semantics (no new enum) but include explicit reason.
+        j = self.store.update(id, state=JobState.CANCELED, message=str(reason), error=None)
+        return j
+
     async def pause(self, id: str) -> Job | None:
         j = self.store.get(id)
         if j is None:
@@ -305,6 +316,17 @@ class JobQueue:
         try:
             await self._check_canceled(job_id)
 
+            def _cancel_check_sync() -> bool:
+                """
+                Sync cancel check for watchdog phases.
+                Allows immediate termination of long-running stage processes when a job is canceled/killed.
+                """
+                try:
+                    cur = self.store.get(job_id)
+                    return cur is not None and cur.state == JobState.CANCELED
+                except Exception:
+                    return False
+
             # If input video is encrypted-at-rest, decrypt once into the work dir for the duration of the job.
             # Fail-safe: if encryption is enabled but misconfigured, the job must fail.
             video_in = video_path
@@ -358,6 +380,8 @@ class JobQueue:
                                 "wav_out": work_dir / "audio.wav",
                                 "job_id": job_id,
                             },
+                            cancel_check=_cancel_check_sync,
+                            cancel_exc=JobCanceled(),
                         )
                     else:
                         with sched.phase("audio"):
@@ -372,6 +396,8 @@ class JobQueue:
                                     "wav_out": work_dir / "audio.wav",
                                     "job_id": job_id,
                                 },
+                                cancel_check=_cancel_check_sync,
+                                cancel_exc=JobCanceled(),
                             )
                     try:
                         write_ckpt(
@@ -572,7 +598,15 @@ class JobQueue:
                 self.store.update(job_id, progress=0.12, message="Diarizing speakers")
                 self.store.append_log(job_id, f"[{now_utc()}] diarize")
                 cfg = DiarizeConfig(diarizer=str(settings.diarizer))
-                utts = diarize_v2(str(wav), device=_select_device(job.device), cfg=cfg)
+                utts = run_with_timeout(
+                    "diarize",
+                    timeout_s=limits.timeout_diarize_s,
+                    fn=diarize_v2,
+                    args=(str(wav),),
+                    kwargs={"device": _select_device(job.device), "cfg": cfg},
+                    cancel_check=_cancel_check_sync,
+                    cancel_exc=JobCanceled(),
+                )
 
                 # Tier-Next F: optional scene-aware speaker smoothing (opt-in; default off).
                 try:
@@ -860,31 +894,45 @@ class JobQueue:
                         self.store.append_log(job_id, f"[{now_utc()}] transcribe (checkpoint hit)")
                     else:
                         if sched is None:
-                            transcribe(
-                                audio_path=wav,
-                                srt_out=srt_out,
-                                device=device,
-                                model_name=model_name,
-                                task="transcribe",
-                                src_lang=job.src_lang,
-                                tgt_lang=job.tgt_lang,
-                                job_id=job_id,
-                                audio_hash=audio_hash,
-                                word_timestamps=bool(get_settings().whisper_word_timestamps),
+                            run_with_timeout(
+                                "transcribe",
+                                timeout_s=limits.timeout_whisper_s,
+                                fn=transcribe,
+                                kwargs={
+                                    "audio_path": wav,
+                                    "srt_out": srt_out,
+                                    "device": device,
+                                    "model_name": model_name,
+                                    "task": "transcribe",
+                                    "src_lang": job.src_lang,
+                                    "tgt_lang": job.tgt_lang,
+                                    "job_id": job_id,
+                                    "audio_hash": audio_hash,
+                                    "word_timestamps": bool(get_settings().whisper_word_timestamps),
+                                },
+                                cancel_check=_cancel_check_sync,
+                                cancel_exc=JobCanceled(),
                             )
                         else:
                             with sched.phase("transcribe"):
-                                transcribe(
-                                    audio_path=wav,
-                                    srt_out=srt_out,
-                                    device=device,
-                                    model_name=model_name,
-                                    task="transcribe",
-                                    src_lang=job.src_lang,
-                                    tgt_lang=job.tgt_lang,
-                                    job_id=job_id,
-                                    audio_hash=audio_hash,
-                                    word_timestamps=bool(get_settings().whisper_word_timestamps),
+                                run_with_timeout(
+                                    "transcribe",
+                                    timeout_s=limits.timeout_whisper_s,
+                                    fn=transcribe,
+                                    kwargs={
+                                        "audio_path": wav,
+                                        "srt_out": srt_out,
+                                        "device": device,
+                                        "model_name": model_name,
+                                        "task": "transcribe",
+                                        "src_lang": job.src_lang,
+                                        "tgt_lang": job.tgt_lang,
+                                        "job_id": job_id,
+                                        "audio_hash": audio_hash,
+                                        "word_timestamps": bool(get_settings().whisper_word_timestamps),
+                                    },
+                                    cancel_check=_cancel_check_sync,
+                                    cancel_exc=JobCanceled(),
                                 )
                         # reflect circuit state into job (only when we actually ran transcribe)
                         try:
@@ -1274,8 +1322,14 @@ class JobQueue:
                         audio_path=str(wav),
                         device=device,
                     )
-                    translated_segments = translate_segments(
-                        segments_for_mt, src_lang=job.src_lang, tgt_lang=job.tgt_lang, cfg=cfg
+                    translated_segments = run_with_timeout(
+                        "translate",
+                        timeout_s=limits.timeout_translate_s,
+                        fn=translate_segments,
+                        args=(segments_for_mt,),
+                        kwargs={"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "cfg": cfg},
+                        cancel_check=_cancel_check_sync,
+                        cancel_exc=JobCanceled(),
                     )
                     # Tier-Next E: optional project style guide (best-effort; OFF by default).
                     try:
@@ -1636,11 +1690,21 @@ class JobQueue:
                             with suppress(Exception):
                                 tts_manifest.unlink(missing_ok=True)
                         if sched is None:
-                            run_with_timeout("tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase)
+                            run_with_timeout(
+                                "tts",
+                                timeout_s=limits.timeout_tts_s,
+                                fn=_tts_phase,
+                                cancel_check=_cancel_check_sync,
+                                cancel_exc=JobCanceled(),
+                            )
                         else:
                             with sched.phase("tts"):
                                 run_with_timeout(
-                                    "tts", timeout_s=limits.timeout_tts_s, fn=_tts_phase
+                                    "tts",
+                                    timeout_s=limits.timeout_tts_s,
+                                    fn=_tts_phase,
+                                    cancel_check=_cancel_check_sync,
+                                    cancel_exc=JobCanceled(),
                                 )
                         with suppress(Exception):
                             rt = dict(
@@ -1931,27 +1995,53 @@ class JobQueue:
                                 return outs2
 
                             if sched is None:
-                                outs = _enhanced_phase()
-                            else:
-                                with sched.phase("mux"):
-                                    outs = _enhanced_phase()
-                        else:
-                            if sched is None:
-                                outs = mix(
-                                    video_in=video_in,
-                                    tts_wav=tts_wav,
-                                    srt=subs_srt_path,
-                                    out_dir=work_dir,
-                                    cfg=cfg_mix,
+                                outs = run_with_timeout(
+                                    "mix",
+                                    timeout_s=limits.timeout_mix_s,
+                                    fn=_enhanced_phase,
+                                    cancel_check=_cancel_check_sync,
+                                    cancel_exc=JobCanceled(),
                                 )
                             else:
                                 with sched.phase("mux"):
-                                    outs = mix(
-                                        video_in=video_in,
-                                        tts_wav=tts_wav,
-                                        srt=subs_srt_path,
-                                        out_dir=work_dir,
-                                        cfg=cfg_mix,
+                                    outs = run_with_timeout(
+                                        "mix",
+                                        timeout_s=limits.timeout_mix_s,
+                                        fn=_enhanced_phase,
+                                        cancel_check=_cancel_check_sync,
+                                        cancel_exc=JobCanceled(),
+                                    )
+                        else:
+                            if sched is None:
+                                outs = run_with_timeout(
+                                    "mix",
+                                    timeout_s=limits.timeout_mix_s,
+                                    fn=mix,
+                                    kwargs={
+                                        "video_in": video_in,
+                                        "tts_wav": tts_wav,
+                                        "srt": subs_srt_path,
+                                        "out_dir": work_dir,
+                                        "cfg": cfg_mix,
+                                    },
+                                    cancel_check=_cancel_check_sync,
+                                    cancel_exc=JobCanceled(),
+                                )
+                            else:
+                                with sched.phase("mux"):
+                                    outs = run_with_timeout(
+                                        "mix",
+                                        timeout_s=limits.timeout_mix_s,
+                                        fn=mix,
+                                        kwargs={
+                                            "video_in": video_in,
+                                            "tts_wav": tts_wav,
+                                            "srt": subs_srt_path,
+                                            "out_dir": work_dir,
+                                            "cfg": cfg_mix,
+                                        },
+                                        cancel_check=_cancel_check_sync,
+                                        cancel_exc=JobCanceled(),
                                     )
                         out_mkv = outs.get("mkv", out_mkv)
                         out_mp4 = outs.get("mp4", out_mp4)
@@ -2009,21 +2099,35 @@ class JobQueue:
                         job_id, f"[{now_utc()}] mix failed: {ex} (falling back to mux)"
                     )
                     if sched is None:
-                        mkv_export.mux(
-                            src_video=video_in,
-                            dub_wav=tts_wav,
-                            srt_path=subs_srt_path,
-                            out_mkv=out_mkv,
-                            job_id=job_id,
+                        run_with_timeout(
+                            "mux",
+                            timeout_s=limits.timeout_mux_s,
+                            fn=mkv_export.mux,
+                            kwargs={
+                                "src_video": video_in,
+                                "dub_wav": tts_wav,
+                                "srt_path": subs_srt_path,
+                                "out_mkv": out_mkv,
+                                "job_id": job_id,
+                            },
+                            cancel_check=_cancel_check_sync,
+                            cancel_exc=JobCanceled(),
                         )
                     else:
                         with sched.phase("mux"):
-                            mkv_export.mux(
-                                src_video=video_in,
-                                dub_wav=tts_wav,
-                                srt_path=subs_srt_path,
-                                out_mkv=out_mkv,
-                                job_id=job_id,
+                            run_with_timeout(
+                                "mux",
+                                timeout_s=limits.timeout_mux_s,
+                                fn=mkv_export.mux,
+                                kwargs={
+                                    "src_video": video_in,
+                                    "dub_wav": tts_wav,
+                                    "srt_path": subs_srt_path,
+                                    "out_mkv": out_mkv,
+                                    "job_id": job_id,
+                                },
+                                cancel_check=_cancel_check_sync,
+                                cancel_exc=JobCanceled(),
                             )
                 finally:
                     dt = elapsed_mux()
@@ -2061,23 +2165,44 @@ class JobQueue:
                         else tts_wav
                     )
                     # Dubbed mobile MP4 (default)
-                    export_mobile_mp4(
-                        video_in=video_in,
-                        audio_wav=dubbed_wav if dubbed_wav.exists() else None,
-                        out_path=mobile_dir / "mobile.mp4",
+                    run_with_timeout(
+                        "export_mobile_mp4_dubbed",
+                        timeout_s=limits.timeout_export_s,
+                        fn=export_mobile_mp4,
+                        kwargs={
+                            "video_in": video_in,
+                            "audio_wav": dubbed_wav if dubbed_wav.exists() else None,
+                            "out_path": mobile_dir / "mobile.mp4",
+                        },
+                        cancel_check=_cancel_check_sync,
+                        cancel_exc=JobCanceled(),
                     )
                     # Original mobile MP4 (user-selectable in UI)
-                    export_mobile_mp4(
-                        video_in=video_in,
-                        audio_wav=None,
-                        out_path=mobile_dir / "original.mp4",
+                    run_with_timeout(
+                        "export_mobile_mp4_original",
+                        timeout_s=limits.timeout_export_s,
+                        fn=export_mobile_mp4,
+                        kwargs={
+                            "video_in": video_in,
+                            "audio_wav": None,
+                            "out_path": mobile_dir / "original.mp4",
+                        },
+                        cancel_check=_cancel_check_sync,
+                        cancel_exc=JobCanceled(),
                     )
 
                     if bool(getattr(settings, "mobile_hls", False)) and dubbed_wav.exists():
-                        export_mobile_hls(
-                            video_in=video_in,
-                            dub_wav=dubbed_wav,
-                            out_dir=mobile_dir / "hls",
+                        run_with_timeout(
+                            "export_mobile_hls",
+                            timeout_s=limits.timeout_export_s,
+                            fn=export_mobile_hls,
+                            kwargs={
+                                "video_in": video_in,
+                                "dub_wav": dubbed_wav,
+                                "out_dir": mobile_dir / "hls",
+                            },
+                            cancel_check=_cancel_check_sync,
+                            cancel_exc=JobCanceled(),
                         )
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] mobile outputs skipped: {ex}")

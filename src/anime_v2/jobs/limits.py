@@ -10,6 +10,9 @@ from anime_v2.jobs.models import Job, JobState
 @dataclass(frozen=True, slots=True)
 class Limits:
     max_video_min: int = 120
+    max_video_width: int = 0
+    max_video_height: int = 0
+    max_video_pixels: int = 0
     max_upload_mb: int = 2048  # 2GB
     max_concurrent_per_user: int = 2
     daily_processing_minutes: int = 240  # sum of submitted durations per day
@@ -21,12 +24,17 @@ class Limits:
     timeout_translate_s: int = 10 * 60
     timeout_tts_s: int = 30 * 60
     timeout_mix_s: int = 20 * 60
+    timeout_mux_s: int = 20 * 60
+    timeout_export_s: int = 20 * 60
 
 
 def get_limits() -> Limits:
     s = get_settings()
     return Limits(
         max_video_min=max(0, int(s.max_video_min)),
+        max_video_width=max(0, int(getattr(s, "max_video_width", 0))),
+        max_video_height=max(0, int(getattr(s, "max_video_height", 0))),
+        max_video_pixels=max(0, int(getattr(s, "max_video_pixels", 0))),
         max_upload_mb=max(0, int(s.max_upload_mb)),
         max_concurrent_per_user=max(0, int(s.max_concurrent_per_user)),
         daily_processing_minutes=max(0, int(s.daily_processing_minutes)),
@@ -36,6 +44,8 @@ def get_limits() -> Limits:
         timeout_translate_s=max(0, int(s.watchdog_translate_s)),
         timeout_tts_s=max(0, int(s.watchdog_tts_s)),
         timeout_mix_s=max(0, int(s.watchdog_mix_s)),
+        timeout_mux_s=max(0, int(getattr(s, "watchdog_mux_s", 20 * 60))),
+        timeout_export_s=max(0, int(getattr(s, "watchdog_export_s", 20 * 60))),
     )
 
 
