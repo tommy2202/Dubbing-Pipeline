@@ -1,26 +1,32 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from anime_v2.config import get_settings
 from anime_v2.utils.log import _redact_str  # type: ignore[attr-defined]
 
 _lock = Lock()
 
 
 def _audit_dir() -> Path:
-    return Path(os.environ.get("ANIME_V2_LOG_DIR", "logs"))
+    return Path(get_settings().log_dir)
 
 
 def _audit_path(ts: datetime) -> Path:
     return _audit_dir() / f"audit-{ts:%Y%m%d}.log"
 
 
-def emit(event: str, *, request_id: str | None = None, user_id: str | None = None, meta: dict[str, Any] | None = None) -> None:
+def emit(
+    event: str,
+    *,
+    request_id: str | None = None,
+    user_id: str | None = None,
+    meta: dict[str, Any] | None = None,
+) -> None:
     """
     Append-only audit log (newline-delimited JSON), daily rotated by date.
     """
@@ -48,7 +54,5 @@ def emit(event: str, *, request_id: str | None = None, user_id: str | None = Non
     path = _audit_path(ts)
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(rec, ensure_ascii=False, separators=(",", ":"))
-    with _lock:
-        with path.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
-
+    with _lock, path.open("a", encoding="utf-8") as f:
+        f.write(line + "\n")

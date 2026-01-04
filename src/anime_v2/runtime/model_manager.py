@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 import threading
 import time
-from contextlib import contextmanager
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any
 
 from anime_v2.config import get_settings
 from anime_v2.gates.license import require_coqui_tos
@@ -32,7 +32,7 @@ class ModelManager:
     - thread safety
     """
 
-    _singleton: "ModelManager | None" = None
+    _singleton: ModelManager | None = None
     _singleton_lock = threading.Lock()
 
     def __init__(self) -> None:
@@ -40,7 +40,7 @@ class ModelManager:
         self._cache: dict[tuple[str, str, str], _Entry] = {}
 
     @classmethod
-    def instance(cls) -> "ModelManager":
+    def instance(cls) -> ModelManager:
         with cls._singleton_lock:
             if cls._singleton is None:
                 cls._singleton = cls()
@@ -90,13 +90,10 @@ class ModelManager:
         with egress_guard():
             tts = TTS(model_name)
         # Best-effort: move to GPU if requested and supported.
-        try:
-            if device == "cuda":
-                # Some versions support `.to(device)`; others use internal torch modules.
-                if hasattr(tts, "to"):
-                    tts.to("cuda")
-        except Exception:
-            pass
+        with suppress(Exception):
+            # Some versions support `.to(device)`; others use internal torch modules.
+            if device == "cuda" and hasattr(tts, "to"):
+                tts.to("cuda")
         return tts
 
     def get_whisper(self, model_name: str, device: str) -> Any:
@@ -116,7 +113,14 @@ class ModelManager:
                 e.refcount += 1
                 self._touch(e)
                 return e.model
-            e = _Entry(kind="whisper", model_name=str(model_name), device=str(device), model=model, refcount=1, last_used=time.monotonic())
+            e = _Entry(
+                kind="whisper",
+                model_name=str(model_name),
+                device=str(device),
+                model=model,
+                refcount=1,
+                last_used=time.monotonic(),
+            )
             self._cache[key] = e
             self._evict_if_needed()
             logger.info("model_loaded", kind="whisper", model=str(model_name), device=str(device))
@@ -137,7 +141,14 @@ class ModelManager:
                 e.refcount += 1
                 self._touch(e)
                 return e.model
-            e = _Entry(kind="tts", model_name=str(model_name), device=str(device), model=model, refcount=1, last_used=time.monotonic())
+            e = _Entry(
+                kind="tts",
+                model_name=str(model_name),
+                device=str(device),
+                model=model,
+                refcount=1,
+                last_used=time.monotonic(),
+            )
             self._cache[key] = e
             self._evict_if_needed()
             logger.info("model_loaded", kind="tts", model=str(model_name), device=str(device))
@@ -185,14 +196,17 @@ class ModelManager:
                 with self.acquire_whisper(m, dev):
                     pass
             except Exception as ex:
-                logger.warning("model_prewarm_failed", kind="whisper", model=m, device=dev, error=str(ex))
+                logger.warning(
+                    "model_prewarm_failed", kind="whisper", model=m, device=dev, error=str(ex)
+                )
 
         for m in tts_list:
             try:
                 with self.acquire_tts(m, dev):
                     pass
             except Exception as ex:
-                logger.warning("model_prewarm_failed", kind="tts", model=m, device=dev, error=str(ex))
+                logger.warning(
+                    "model_prewarm_failed", kind="tts", model=m, device=dev, error=str(ex)
+                )
 
         logger.info("model_prewarm_done", device=dev)
-

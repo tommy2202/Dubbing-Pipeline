@@ -1,13 +1,16 @@
 import pathlib
+
 import click
+from config.settings import get_settings
+
 from anime_v1.stages import (
     audio_extractor,
     diarisation,
+    downloader,
+    mkv_export,
+    separation,
     transcription,
     tts,
-    separation,
-    mkv_export,
-    downloader,
 )
 from anime_v1.utils import logger
 
@@ -23,29 +26,35 @@ def _resolve_defaults(mode: str, lipsync: bool | None, keep_bg: bool | None, voi
         "tts_preference": "default",  # default | clone
     }
     if mode == "high":
-        resolved.update({
-            "asr_model": "large-v2",
-            "prefer_translate": False,  # do pure ASR, translate in a separate stage (if available)
-            "lipsync": True,
-            "keep_bg": True,
-            "tts_preference": "clone" if voice in ("auto", "clone") else "default",
-        })
+        resolved.update(
+            {
+                "asr_model": "large-v2",
+                "prefer_translate": False,  # do pure ASR, translate in a separate stage (if available)
+                "lipsync": True,
+                "keep_bg": True,
+                "tts_preference": "clone" if voice in ("auto", "clone") else "default",
+            }
+        )
     elif mode == "medium":
-        resolved.update({
-            "asr_model": "small",
-            "prefer_translate": True,
-            "lipsync": False,
-            "keep_bg": True,
-            "tts_preference": "default",
-        })
+        resolved.update(
+            {
+                "asr_model": "small",
+                "prefer_translate": True,
+                "lipsync": False,
+                "keep_bg": True,
+                "tts_preference": "default",
+            }
+        )
     else:  # low
-        resolved.update({
-            "asr_model": "tiny",
-            "prefer_translate": True,
-            "lipsync": False,
-            "keep_bg": False,
-            "tts_preference": "default",
-        })
+        resolved.update(
+            {
+                "asr_model": "tiny",
+                "prefer_translate": True,
+                "lipsync": False,
+                "keep_bg": False,
+                "tts_preference": "default",
+            }
+        )
 
     if lipsync is not None:
         resolved["lipsync"] = lipsync
@@ -58,15 +67,48 @@ def _resolve_defaults(mode: str, lipsync: bool | None, keep_bg: bool | None, voi
 
 @click.command()
 @click.argument("video", type=str)
-@click.option("--src-lang", default=None, help="Source language code (e.g. ja). Autodetect if omitted.")
+@click.option(
+    "--src-lang", default=None, help="Source language code (e.g. ja). Autodetect if omitted."
+)
 @click.option("--tgt-lang", default="en", show_default=True, help="Target language code (e.g. en)")
-@click.option("--mode", type=click.Choice(["high", "medium", "low"], case_sensitive=False), default="medium", show_default=True)
-@click.option("--voice", type=click.Choice(["auto", "default", "clone"], case_sensitive=False), default="auto", show_default=True, help="Voice preference (clone tries XTTS/Tortoise)")
-@click.option("--out-dir", type=click.Path(file_okay=False), default="/data/out", show_default=True, help="Output directory for final file")
-@click.option("--lipsync", "lipsync_flag", flag_value=True, default=None, help="Enable lip-sync stage if available")
+@click.option(
+    "--mode",
+    type=click.Choice(["high", "medium", "low"], case_sensitive=False),
+    default="medium",
+    show_default=True,
+)
+@click.option(
+    "--voice",
+    type=click.Choice(["auto", "default", "clone"], case_sensitive=False),
+    default="auto",
+    show_default=True,
+    help="Voice preference (clone tries XTTS/Tortoise)",
+)
+@click.option(
+    "--out-dir",
+    type=click.Path(file_okay=False),
+    default=str(get_settings().v1_output_dir),
+    show_default=True,
+    help="Output directory for final file",
+)
+@click.option(
+    "--lipsync",
+    "lipsync_flag",
+    flag_value=True,
+    default=None,
+    help="Enable lip-sync stage if available",
+)
 @click.option("--no-lipsync", "lipsync_flag", flag_value=False, help="Disable lip-sync stage")
-@click.option("--keep-bg", "keep_bg_flag", flag_value=True, default=None, help="Mix original background audio under dub")
-@click.option("--no-keep-bg", "keep_bg_flag", flag_value=False, help="Do not mix original background audio")
+@click.option(
+    "--keep-bg",
+    "keep_bg_flag",
+    flag_value=True,
+    default=None,
+    help="Mix original background audio under dub",
+)
+@click.option(
+    "--no-keep-bg", "keep_bg_flag", flag_value=False, help="Do not mix original background audio"
+)
 def cli(video, src_lang, tgt_lang, mode, voice, out_dir, lipsync_flag, keep_bg_flag):
     """Run the dubbing pipeline on VIDEO.
 
@@ -93,7 +135,7 @@ def cli(video, src_lang, tgt_lang, mode, voice, out_dir, lipsync_flag, keep_bg_f
     # 1) Audio extraction
     wav = audio_extractor.run(video, ckpt_dir=ckpt)
 
-    # 2) (Optional) diarisation placeholder
+    # 2) (Optional) diarisation (best-effort; may be unavailable depending on deps)
     diarisation.run(wav, ckpt_dir=ckpt)
 
     # 3) Transcription (ASR), possibly direct translate if prefer_translate
@@ -110,6 +152,7 @@ def cli(video, src_lang, tgt_lang, mode, voice, out_dir, lipsync_flag, keep_bg_f
     #    If ASR already translated, this returns the same path.
     try:
         from anime_v1.stages import translation
+
         transcript_for_tts = translation.run(
             transcript_src_or_tgt,
             ckpt_dir=ckpt,
@@ -137,11 +180,12 @@ def cli(video, src_lang, tgt_lang, mode, voice, out_dir, lipsync_flag, keep_bg_f
         except Exception as ex:  # pragma: no cover
             logger.warning("Separation stage skipped (%s)", ex)
 
-    # 6) Optional lip-sync stage (stubbed by default)
+    # 6) Optional lip-sync stage (best-effort; may be unavailable depending on deps)
     video_for_mux = video
     if defaults["lipsync"]:
         try:
             from anime_v1.stages import lipsync
+
             lip_vid = lipsync.run(video=video, audio=dubbed_wav, ckpt_dir=ckpt)
             if lip_vid is not None:
                 video_for_mux = lip_vid
@@ -167,5 +211,6 @@ def cli(video, src_lang, tgt_lang, mode, voice, out_dir, lipsync_flag, keep_bg_f
         result,
     )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     cli()

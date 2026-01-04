@@ -1,0 +1,16 @@
+# Example cloudflared config (NO secrets).
+#
+# This file is a TEMPLATE. Do not commit credentials or tokens.
+# - Use `cloudflared tunnel create <name>` to generate a tunnel and credentials JSON.
+# - Store the credentials JSON outside of git (or mount it via docker volume).
+#
+# Docs: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+
+tunnel: <TUNNEL_UUID>
+credentials-file: /etc/cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  - hostname: <YOUR_HOSTNAME>
+    service: http://api:8080
+  - service: http_status:404
+

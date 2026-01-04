@@ -1,16 +1,22 @@
 import pathlib
 import time
-from typing import Optional, Dict
-from anime_v1.utils import logger, checkpoints
-import whisper
 
-_model_cache: Dict[str, object] = {}
+from anime_v1.utils import checkpoints, logger
+
+_model_cache: dict[str, object] = {}
 
 
 def _load(model_size: str):
     model_size = (model_size or "small").lower()
     if model_size in _model_cache:
         return _model_cache[model_size]
+    try:
+        import whisper  # type: ignore
+    except Exception as ex:
+        raise RuntimeError(
+            "Whisper is not installed. Install `openai-whisper` (or use the v2 pipeline) "
+            "or rely on the Vosk fallback if configured."
+        ) from ex
     try:
         logger.info("Loading Whisper-%s …", model_size)
         _model_cache[model_size] = whisper.load_model(model_size)
@@ -25,8 +31,10 @@ def _load(model_size: str):
 def _try_vosk_transcribe(audio_wav: pathlib.Path, lang: str | None):
     try:
         import json as _json
-        import vosk  # type: ignore
         import wave
+
+        import vosk  # type: ignore
+
         wf = wave.open(str(audio_wav), "rb")
         if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
             logger.warning("Vosk expects mono 16-bit PCM; got different format.")
@@ -56,7 +64,7 @@ def run(
     *,
     model_size: str = "small",
     prefer_translate: bool = True,
-    src_lang: Optional[str] = None,
+    src_lang: str | None = None,
     tgt_lang: str = "en",
 ):
     out = ckpt_dir / "transcript.json"

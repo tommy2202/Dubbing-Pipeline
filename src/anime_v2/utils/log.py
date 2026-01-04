@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 import sys
+from contextlib import suppress
 from contextvars import ContextVar
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -11,6 +11,7 @@ from typing import Any
 
 import structlog
 
+from anime_v2.config import get_settings
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 user_id_var: ContextVar[str | None] = ContextVar("user_id", default=None)
@@ -25,13 +26,16 @@ def set_user_id(uid: str | None) -> None:
 
 
 def _log_path() -> Path:
-    return Path(os.environ.get("ANIME_V2_LOG_DIR", "logs")) / "app.log"
+    s = get_settings()
+    return Path(s.log_dir) / "app.log"
 
 
 _JWT_RE = re.compile(r"\beyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\b")
 _API_KEY_RE = re.compile(r"\bdp_[a-z0-9]{6,}_[A-Za-z0-9_\-]{10,}\b", re.IGNORECASE)
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9_\-\.=]+)")
-_KV_RE = re.compile(r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|token|secret|password|api_key)\b\s*=\s*([^\s,;]+)")
+_KV_RE = re.compile(
+    r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|token|secret|password|api_key)\b\s*=\s*([^\s,;]+)"
+)
 
 
 def _redact_str(s: str) -> str:
@@ -66,7 +70,8 @@ def rename_event_to_msg(_, __, event_dict: dict[str, Any]) -> dict[str, Any]:
 
 
 def _configure_structlog() -> structlog.stdlib.BoundLogger:
-    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    s = get_settings()
+    level = str(s.log_level).upper()
     log_path = _log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -76,7 +81,9 @@ def _configure_structlog() -> structlog.stdlib.BoundLogger:
             with log_path.open("rb") as f:
                 first = f.read(1)
             if first and first != b"{":
-                legacy = log_path.with_name(f"app.log.legacy-{__import__('datetime').datetime.utcnow().strftime('%Y%m%d%H%M%S')}")
+                legacy = log_path.with_name(
+                    f"app.log.legacy-{__import__('datetime').datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+                )
                 log_path.replace(legacy)
     except Exception:
         pass
@@ -104,8 +111,8 @@ def _configure_structlog() -> structlog.stdlib.BoundLogger:
 
     file_handler = RotatingFileHandler(
         filename=str(log_path),
-        maxBytes=int(os.environ.get("LOG_MAX_BYTES", str(5 * 1024 * 1024))),
-        backupCount=int(os.environ.get("LOG_BACKUP_COUNT", "3")),
+        maxBytes=int(s.log_max_bytes),
+        backupCount=int(s.log_backup_count),
         encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
@@ -136,7 +143,7 @@ def _configure_structlog() -> structlog.stdlib.BoundLogger:
         cache_logger_on_first_use=True,
     )
 
-    setattr(root, "_anime_v2_structlog_configured", True)
+    root._anime_v2_structlog_configured = True
     return structlog.get_logger("anime_v2")
 
 
@@ -149,3 +156,19 @@ warning = logger.warning
 error = logger.error
 exception = logger.exception
 
+
+def set_log_level(level: str) -> None:
+    """
+    Best-effort runtime log level override (CLI convenience).
+    Does not change handlers/formatters; only raises/lowers filtering level.
+    """
+    try:
+        lvl = getattr(logging, str(level).upper(), logging.INFO)
+        root = logging.getLogger()
+        root.setLevel(lvl)
+        for h in root.handlers:
+            with suppress(Exception):
+                h.setLevel(lvl)
+    except Exception:
+        # keep existing configuration
+        return

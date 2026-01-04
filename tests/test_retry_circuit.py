@@ -38,4 +38,3 @@ def test_circuit_opens_and_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
     c.mark_failure()
     # should be open now
     assert c.allow() is False
-

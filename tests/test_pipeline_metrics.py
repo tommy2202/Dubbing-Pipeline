@@ -20,4 +20,3 @@ def test_metrics_exposes_pipeline_histograms() -> None:
         assert "pipeline_job_total" in body
         assert "pipeline_job_failed_total" in body
         assert "pipeline_job_degraded_total" in body
-

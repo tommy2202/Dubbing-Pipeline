@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from anime_v2.api.deps import Identity, require_role
-from anime_v2.api.models import ApiKey, AuthStore, Role, now_ts
 from anime_v2.api.middleware import audit_event
+from anime_v2.api.models import ApiKey, AuthStore, Role, now_ts
 from anime_v2.utils.crypto import hash_secret, random_id, random_prefix
-
 
 router = APIRouter(prefix="/keys", tags=["api_keys"])
 
@@ -22,7 +21,9 @@ def _get_store(request: Request) -> AuthStore:
 
 
 @router.get("")
-async def list_keys(request: Request, ident: Identity = Depends(require_role(Role.admin))) -> list[dict[str, Any]]:
+async def list_keys(
+    request: Request, ident: Identity = Depends(require_role(Role.admin))
+) -> list[dict[str, Any]]:
     store = _get_store(request)
     keys = store.list_api_keys(user_id=None)
     out = []
@@ -41,7 +42,9 @@ async def list_keys(request: Request, ident: Identity = Depends(require_role(Rol
 
 
 @router.post("")
-async def create_key(request: Request, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
+async def create_key(
+    request: Request, ident: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
     store = _get_store(request)
     body = await request.json()
     if not isinstance(body, dict):
@@ -69,13 +72,20 @@ async def create_key(request: Request, ident: Identity = Depends(require_role(Ro
         user_id=ident.user.id,
         meta={"key_id": k.id, "user_id": user_id, "scopes": scopes, "prefix": f"dp_{prefix}_..."},
     )
-    return {"id": k.id, "prefix": f"dp_{prefix}_...", "key": key_plain, "scopes": scopes, "user_id": user_id}
+    return {
+        "id": k.id,
+        "prefix": f"dp_{prefix}_...",
+        "key": key_plain,
+        "scopes": scopes,
+        "user_id": user_id,
+    }
 
 
 @router.post("/{key_id}/revoke")
-async def revoke_key(request: Request, key_id: str, ident: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
+async def revoke_key(
+    request: Request, key_id: str, ident: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
     store = _get_store(request)
     store.revoke_api_key(key_id)
     audit_event("api_key.revoke", request=request, user_id=ident.user.id, meta={"key_id": key_id})
     return {"ok": True}
-

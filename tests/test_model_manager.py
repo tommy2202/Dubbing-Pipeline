@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from anime_v2.runtime.device_allocator import GpuStatus, pick_device
@@ -25,7 +23,9 @@ def test_model_manager_lru_eviction(monkeypatch: pytest.MonkeyPatch) -> None:
     mm = ModelManager()
 
     # Make loads cheap/deterministic
-    monkeypatch.setattr(mm, "_load_whisper", lambda model_name, device: f"whisper:{model_name}:{device}")
+    monkeypatch.setattr(
+        mm, "_load_whisper", lambda model_name, device: f"whisper:{model_name}:{device}"
+    )
     monkeypatch.setattr(mm, "_load_tts", lambda model_name, device: f"tts:{model_name}:{device}")
     monkeypatch.setenv("MODEL_CACHE_MAX", "3")
     from anime_v2.config import get_settings
@@ -44,4 +44,3 @@ def test_model_manager_lru_eviction(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # At most 3 entries should remain
     assert len(mm._cache) <= 3  # noqa: SLF001
-

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import random
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from contextlib import suppress
+from typing import Any
 
 
 def retry_call(
@@ -31,9 +33,6 @@ def retry_call(
                 delay = delay * (0.5 + random.random())
             attempt += 1
             if on_retry is not None:
-                try:
+                with suppress(Exception):
                     on_retry(attempt, delay, ex)
-                except Exception:
-                    pass
             time.sleep(max(0.0, float(delay)))
-

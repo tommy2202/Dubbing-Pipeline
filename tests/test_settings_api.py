@@ -80,4 +80,3 @@ def test_discord_webhook_test_requires_configured_url(tmp_path: Path) -> None:
         headers = _login_admin(c)
         r = c.post("/api/settings/notifications/test", headers=headers)
         assert r.status_code == 400
-

@@ -53,7 +53,7 @@ class Job:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Job":
+    def from_dict(cls, d: dict[str, Any]) -> Job:
         dd = dict(d)
         # Backwards-compatible defaults for older persisted jobs.
         dd.setdefault("owner_id", "")
@@ -66,4 +66,3 @@ class Job:
             st = st.split(".", 1)[1]
         dd["state"] = JobState(st)
         return cls(**dd)
-

@@ -1,21 +1,31 @@
 from __future__ import annotations
 
 import math
-import os
-import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from anime_v2.config import get_settings
 from anime_v2.utils.log import logger
-from anime_v2.utils.vad import VADConfig, detect_speech_segments
 from anime_v2.utils.net import egress_guard
+from anime_v2.utils.vad import VADConfig, detect_speech_segments
+
+
+def _hf_token_value() -> str | None:
+    s = get_settings()
+    tok = s.huggingface_token or s.hf_token
+    if tok is None:
+        return None
+    # tokens are SecretStr in settings; avoid leaking by returning the raw value only to callers that need it.
+    return tok.get_secret_value() if hasattr(tok, "get_secret_value") else str(tok)
 
 
 @dataclass(frozen=True, slots=True)
 class DiarizeConfig:
-    diarizer: str = "auto"  # auto|pyannote|speechbrain|heuristic
-    enable_pyannote: bool = bool(int(os.environ.get("ENABLE_PYANNOTE", "0") or "0"))
-    hf_token: str | None = os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN")
+    diarizer: str = field(
+        default_factory=lambda: str(get_settings().diarizer)
+    )  # auto|pyannote|speechbrain|heuristic
+    enable_pyannote: bool = field(default_factory=lambda: bool(get_settings().enable_pyannote))
+    hf_token: str | None = field(default_factory=_hf_token_value)
     pyannote_model: str = "pyannote/speaker-diarization-3.1"
     vad: VADConfig = VADConfig()
     max_speakers: int = 4
@@ -47,7 +57,14 @@ def _pyannote(audio_path: Path, cfg: DiarizeConfig) -> list[dict]:
     for turn, _, speaker in diar.itertracks(yield_label=True):
         lab = str(speaker)
         labels.setdefault(lab, len(labels) + 1)
-        out.append({"start": float(turn.start), "end": float(turn.end), "speaker": f"SPEAKER_{labels[lab]:02d}", "conf": 0.9})
+        out.append(
+            {
+                "start": float(turn.start),
+                "end": float(turn.end),
+                "speaker": f"SPEAKER_{labels[lab]:02d}",
+                "conf": 0.9,
+            }
+        )
     return out
 
 
@@ -74,11 +91,14 @@ def _speechbrain_cluster(audio_path: Path, device: str, cfg: DiarizeConfig) -> l
     kept = []
     for idx, s, e in segs:
         seg_wav = tmp_dir / f"{idx:04d}.wav"
-        subprocess.run(
-            ["ffmpeg", "-y", "-ss", f"{s:.3f}", "-to", f"{e:.3f}", "-i", str(audio_path), "-ac", "1", "-ar", "16000", str(seg_wav)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        from anime_v2.utils.ffmpeg_safe import extract_audio_mono_16k
+
+        extract_audio_mono_16k(
+            src=audio_path,
+            dst=seg_wav,
+            start_s=float(s),
+            end_s=float(e),
+            timeout_s=180,
         )
         emb = ecapa_embedding(seg_wav, device=device)
         if emb is None:
@@ -114,7 +134,9 @@ def _speechbrain_cluster(audio_path: Path, device: str, cfg: DiarizeConfig) -> l
     D = 1.0 - S
     for k in range(2, max_k + 1):
         try:
-            labels = SpectralClustering(n_clusters=k, affinity="nearest_neighbors", assign_labels="kmeans").fit_predict(X)
+            labels = SpectralClustering(
+                n_clusters=k, affinity="nearest_neighbors", assign_labels="kmeans"
+            ).fit_predict(X)
             sc = float(silhouette_score(D, labels, metric="precomputed"))
             if sc > best_score:
                 best_score = sc
@@ -125,11 +147,20 @@ def _speechbrain_cluster(audio_path: Path, device: str, cfg: DiarizeConfig) -> l
     if best_k == 1:
         labels = np.zeros((n,), dtype=int)
     else:
-        labels = SpectralClustering(n_clusters=best_k, affinity="nearest_neighbors", assign_labels="kmeans").fit_predict(X)
+        labels = SpectralClustering(
+            n_clusters=best_k, affinity="nearest_neighbors", assign_labels="kmeans"
+        ).fit_predict(X)
 
     out = []
-    for (s, e), lab in zip(kept, labels):
-        out.append({"start": float(s), "end": float(e), "speaker": f"SPEAKER_{int(lab)+1:02d}", "conf": 0.7})
+    for (s, e), lab in zip(kept, labels, strict=False):
+        out.append(
+            {
+                "start": float(s),
+                "end": float(e),
+                "speaker": f"SPEAKER_{int(lab)+1:02d}",
+                "conf": 0.7,
+            }
+        )
     return out
 
 
@@ -150,7 +181,14 @@ def _heuristic(audio_path: Path, cfg: DiarizeConfig) -> list[dict]:
         return out
     # Alternate speakers between segments; if only one segment, single speaker.
     for i, (s, e) in enumerate(speech):
-        out.append({"start": float(s), "end": float(e), "speaker": f"SPEAKER_{(i % 2) + 1:02d}", "conf": 0.3})
+        out.append(
+            {
+                "start": float(s),
+                "end": float(e),
+                "speaker": f"SPEAKER_{(i % 2) + 1:02d}",
+                "conf": 0.3,
+            }
+        )
     return out
 
 
@@ -163,20 +201,21 @@ def diarize(audio_path: str, device: str, cfg: DiarizeConfig) -> list[dict]:
     if not p.exists():
         return []
 
+    choice = (cfg.diarizer or "auto").lower()
+    if choice == "off":
+        logger.info("diarize disabled")
+        return []
+
     # Base VAD segments to filter music-only windows
     speech = detect_speech_segments(p, cfg.vad)
 
-    choice = (cfg.diarizer or "auto").lower()
     tried = []
 
     def want_pyannote() -> bool:
         return cfg.enable_pyannote and bool(cfg.hf_token)
 
     if choice == "auto":
-        if want_pyannote():
-            choice = "pyannote"
-        else:
-            choice = "speechbrain"
+        choice = "pyannote" if want_pyannote() else "speechbrain"
 
     # try requested then fallbacks
     for engine in [choice, "speechbrain", "heuristic"]:
@@ -202,7 +241,10 @@ def diarize(audio_path: str, device: str, cfg: DiarizeConfig) -> list[dict]:
                     merged.append(u)
                     continue
                 prev = merged[-1]
-                if u["speaker"] == prev["speaker"] and float(u["start"]) - float(prev["end"]) <= 0.4:
+                if (
+                    u["speaker"] == prev["speaker"]
+                    and float(u["start"]) - float(prev["end"]) <= 0.4
+                ):
                     prev["end"] = max(float(prev["end"]), float(u["end"]))
                     prev["conf"] = max(float(prev.get("conf", 0.0)), float(u.get("conf", 0.0)))
                 else:
@@ -216,4 +258,3 @@ def diarize(audio_path: str, device: str, cfg: DiarizeConfig) -> list[dict]:
             continue
 
     return []
-

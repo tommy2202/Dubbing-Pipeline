@@ -53,6 +53,14 @@
     <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 rounded bg-indigo-600 px-3 py-2 text-sm">
       Skip to content
     </a>
+    <!-- Legacy token-in-URL warning (unsafe on public networks) -->
+    <div id="legacyTokenBanner" class="hidden bg-red-900/40 border-b border-red-900/60 text-red-100 px-4 py-3 text-sm">
+      <div class="mx-auto max-w-6xl">
+        <strong>Warning:</strong> This page URL includes a <code>token=...</code> query parameter.
+        That is unsafe on public networks (can leak via screenshots/history/referrers). Prefer logging in via
+        <a class="underline" href="/ui/login">/ui/login</a>.
+      </div>
+    </div>
     <!-- CSRF token for JS/HTMX -->
     <input type="hidden" id="csrf" value="{{ csrf_token }}" />
 
@@ -137,6 +145,16 @@
           if (csrf) evt.detail.headers["X-CSRF-Token"] = csrf;
         } catch (e) {}
       });
+
+      // Detect legacy token-in-URL usage (UI warning only; enforcement is server-side)
+      (function () {
+        try {
+          if (window.location.search && window.location.search.includes("token=")) {
+            const el = document.getElementById("legacyTokenBanner");
+            if (el) el.classList.remove("hidden");
+          }
+        } catch (e) {}
+      })();
 
       // Toast helper
       (function () {

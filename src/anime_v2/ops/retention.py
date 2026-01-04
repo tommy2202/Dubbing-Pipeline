@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from anime_v2.config import get_settings
 from anime_v2.utils.log import logger
@@ -48,22 +49,27 @@ def _best_effort_secure_delete(path: Path, *, passes: int = 1) -> None:
         path.unlink(missing_ok=True)
     except Exception as ex:
         logger.warning("secure_delete_failed", path=str(path), error=str(ex))
-        try:
+        with suppress(Exception):
             path.unlink(missing_ok=True)
-        except Exception:
-            pass
 
 
 def _iter_files(root: Path) -> Iterable[Path]:
     if not root.exists():
-        return []
-    for p in root.rglob("*"):
-        yield p
+        return
+    yield from root.rglob("*")
 
 
 def purge_old_inputs(*, app_root: Path, days: int) -> int:
     cutoff = _cutoff_days(days)
-    uploads = (app_root / "Input" / "uploads").resolve()
+    # Prefer configured uploads dir (web/API); fall back to historical APP_ROOT/Input/uploads.
+    s = get_settings()
+    uploads: Path
+    if getattr(s, "input_uploads_dir", None):
+        uploads = Path(str(s.input_uploads_dir)).resolve()
+    elif getattr(s, "input_dir", None):
+        uploads = (Path(str(s.input_dir)).resolve() / "uploads").resolve()
+    else:
+        uploads = (app_root / "Input" / "uploads").resolve()
     removed = 0
     for p in _iter_files(uploads):
         try:
@@ -91,8 +97,9 @@ def purge_old_logs(*, app_root: Path, days: int) -> int:
     cutoff = _cutoff_days(days)
     removed = 0
 
+    s = get_settings()
     # global logs/
-    logs_dir = (app_root / "logs").resolve()
+    logs_dir = Path(s.log_dir).resolve()
     for p in _iter_files(logs_dir):
         try:
             if not p.is_file():
@@ -106,7 +113,7 @@ def purge_old_logs(*, app_root: Path, days: int) -> int:
             continue
 
     # per-job logs: Output/**/job.log
-    out_dir = (app_root / "Output").resolve()
+    out_dir = Path(s.output_dir).resolve()
     for p in out_dir.glob("**/job.log"):
         try:
             if p.is_file() and p.stat().st_mtime < cutoff:
@@ -125,7 +132,7 @@ class RetentionResult:
 
 def run_once(*, app_root: Path | None = None) -> RetentionResult:
     s = get_settings()
-    root = (Path(app_root) if app_root else Path(os.environ.get("APP_ROOT") or ("/app" if Path("/app").exists() else Path.cwd()))).resolve()
+    root = (Path(app_root) if app_root else Path(s.app_root)).resolve()
     inputs_removed = purge_old_inputs(app_root=root, days=s.retention_days_input)
     logs_removed = purge_old_logs(app_root=root, days=s.retention_days_logs)
     logger.info("retention_done", inputs_removed=inputs_removed, logs_removed=logs_removed)
@@ -138,4 +145,3 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

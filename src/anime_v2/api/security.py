@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import HTTPException, Request, status
 
 from anime_v2.config import get_settings
-from anime_v2.utils.crypto import random_id, verify_secret
+from anime_v2.utils.crypto import random_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +57,9 @@ def decode_token(token: str, *, expected_typ: str) -> dict[str, Any]:
     try:
         data = _jwt().decode(token, s.jwt_secret.get_secret_value(), algorithms=[s.jwt_alg])
     except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+        ) from None
     if not isinstance(data, dict) or data.get("typ") != expected_typ:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
     return data
@@ -95,7 +97,7 @@ def verify_csrf(request: Request) -> None:
     try:
         ser.loads(cookie, max_age=60 * 60 * 24 * 7)
     except BadSignature:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF invalid")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF invalid") from None
 
 
 def extract_bearer(request: Request) -> str | None:
@@ -114,4 +116,3 @@ def extract_api_key(request: Request) -> str | None:
     if b and b.startswith("dp_"):
         return b
     return None
-

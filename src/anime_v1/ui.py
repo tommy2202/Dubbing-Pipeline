@@ -1,5 +1,8 @@
-import gradio as gr
 import pathlib
+
+import gradio as gr
+from config.settings import get_settings
+
 from anime_v1.cli import cli as _cli
 
 
@@ -22,7 +25,7 @@ def _run(video, src, tgt, mode, lipsync, keep_bg):
         args += ["--no-keep-bg"]
     _cli.main(args=args, standalone_mode=False)
     stem = pathlib.Path(video).stem if pathlib.Path(video).exists() else "remote"
-    out = pathlib.Path("/data/out")/f"{stem}_dubbed.mkv"
+    out = pathlib.Path(str(get_settings().v1_output_dir)) / f"{stem}_dubbed.mkv"
     return str(out)
 
 
@@ -34,7 +37,7 @@ def make_app():
             src = gr.Textbox(label="Source lang (e.g. ja)")
             tgt = gr.Textbox(label="Target lang (e.g. en)", value="en")
         with gr.Row():
-            mode = gr.Dropdown(["high","medium","low"], value="high", label="Mode")
+            mode = gr.Dropdown(["high", "medium", "low"], value="high", label="Mode")
             lipsync = gr.Checkbox(value=True, label="Lip-sync")
             keep_bg = gr.Checkbox(value=True, label="Keep background")
         btn = gr.Button("Dub")
@@ -45,4 +48,5 @@ def make_app():
 
 if __name__ == "__main__":
     app = make_app()
-    app.launch(server_name="0.0.0.0", server_port=7860)
+    s = get_settings()
+    app.launch(server_name=str(s.v1_ui_host), server_port=int(s.v1_ui_port))

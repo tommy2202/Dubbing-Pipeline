@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+from contextlib import suppress
 from pathlib import Path
 
-from anime_v2.utils.log import logger
+from anime_v2.config import get_settings
 
 
 def hash_wav(path: str | Path) -> str:
@@ -27,8 +28,9 @@ def hash_audio_from_video(path: str | Path) -> str:
     if not p.exists() or not p.is_file():
         raise FileNotFoundError(str(p))
 
+    s = get_settings()
     cmd = [
-        "ffmpeg",
+        str(s.ffmpeg_bin),
         "-nostdin",
         "-i",
         str(p),
@@ -52,10 +54,8 @@ def hash_audio_from_video(path: str | Path) -> str:
         for chunk in iter(lambda: proc.stdout.read(1024 * 1024), b""):
             h.update(chunk)
     finally:
-        try:
+        with suppress(Exception):
             proc.stdout.close()
-        except Exception:
-            pass
         rc = proc.wait(timeout=30)
         if rc != 0:
             raise RuntimeError(f"ffmpeg failed hashing audio (exit={rc})")
@@ -77,4 +77,3 @@ def speaker_signature(lang: str, speaker: str, speaker_wav_path: str | Path | No
             except Exception:
                 parts.append("wav=err")
     return "|".join(parts)
-

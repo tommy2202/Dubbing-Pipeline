@@ -6,9 +6,6 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
-
-from anime_v2.utils.log import logger
 
 
 class Role(str, Enum):
@@ -93,6 +90,24 @@ class AuthStore:
                 """
             )
             con.execute("CREATE INDEX IF NOT EXISTS api_keys_prefix ON api_keys(prefix);")
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS refresh_tokens (
+                  jti TEXT PRIMARY KEY,
+                  user_id TEXT NOT NULL,
+                  token_hash TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  expires_at INTEGER NOT NULL,
+                  revoked INTEGER NOT NULL,
+                  replaced_by TEXT,
+                  last_used_at INTEGER,
+                  FOREIGN KEY(user_id) REFERENCES users(id)
+                );
+                """
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS refresh_tokens_user_id ON refresh_tokens(user_id);"
+            )
             con.commit()
         finally:
             con.close()
@@ -197,7 +212,9 @@ class AuthStore:
         con = self._conn()
         try:
             if user_id:
-                rows = con.execute("SELECT * FROM api_keys WHERE user_id=? ORDER BY created_at DESC", (user_id,)).fetchall()
+                rows = con.execute(
+                    "SELECT * FROM api_keys WHERE user_id=? ORDER BY created_at DESC", (user_id,)
+                ).fetchall()
             else:
                 rows = con.execute("SELECT * FROM api_keys ORDER BY created_at DESC").fetchall()
             out = []
@@ -228,7 +245,9 @@ class AuthStore:
     def find_api_keys_by_prefix(self, prefix: str) -> list[ApiKey]:
         con = self._conn()
         try:
-            rows = con.execute("SELECT * FROM api_keys WHERE prefix=? AND revoked=0", (prefix,)).fetchall()
+            rows = con.execute(
+                "SELECT * FROM api_keys WHERE prefix=? AND revoked=0", (prefix,)
+            ).fetchall()
             out = []
             for r in rows:
                 out.append(
@@ -246,7 +265,78 @@ class AuthStore:
         finally:
             con.close()
 
+    # --- rotating refresh tokens (server-side) ---
+
+    def put_refresh_token(
+        self,
+        *,
+        jti: str,
+        user_id: str,
+        token_hash: str,
+        created_at: int,
+        expires_at: int,
+    ) -> None:
+        con = self._conn()
+        try:
+            con.execute(
+                """
+                INSERT OR REPLACE INTO refresh_tokens
+                  (jti, user_id, token_hash, created_at, expires_at, revoked, replaced_by, last_used_at)
+                VALUES (?, ?, ?, ?, ?, 0, NULL, NULL)
+                """,
+                (jti, user_id, token_hash, int(created_at), int(expires_at)),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def get_refresh_token(self, jti: str) -> dict[str, object] | None:
+        con = self._conn()
+        try:
+            row = con.execute("SELECT * FROM refresh_tokens WHERE jti=?", (jti,)).fetchone()
+            if row is None:
+                return None
+            return dict(row)
+        finally:
+            con.close()
+
+    def rotate_refresh_token(self, *, old_jti: str, new_jti: str) -> None:
+        con = self._conn()
+        try:
+            con.execute(
+                """
+                UPDATE refresh_tokens
+                SET revoked=1, replaced_by=?, last_used_at=?
+                WHERE jti=?
+                """,
+                (new_jti, now_ts(), old_jti),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def revoke_refresh_token(self, jti: str) -> None:
+        con = self._conn()
+        try:
+            con.execute(
+                "UPDATE refresh_tokens SET revoked=1, last_used_at=? WHERE jti=?",
+                (now_ts(), jti),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def revoke_all_refresh_tokens_for_user(self, user_id: str) -> None:
+        con = self._conn()
+        try:
+            con.execute(
+                "UPDATE refresh_tokens SET revoked=1, last_used_at=? WHERE user_id=?",
+                (now_ts(), user_id),
+            )
+            con.commit()
+        finally:
+            con.close()
+
 
 def now_ts() -> int:
     return int(time.time())
-

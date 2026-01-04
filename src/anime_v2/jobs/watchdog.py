@@ -4,8 +4,10 @@ import multiprocessing as mp
 import os
 import signal
 import traceback
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 
 class PhaseTimeout(TimeoutError):
@@ -27,7 +29,9 @@ def _child_main(q: mp.Queue, fn: Callable, args: tuple, kwargs: dict) -> None:
         q.put(PhaseResult(ok=False, error=traceback.format_exc()))
 
 
-def run_with_timeout(name: str, *, timeout_s: int, fn: Callable, args: tuple = (), kwargs: dict | None = None) -> Any:
+def run_with_timeout(
+    name: str, *, timeout_s: int, fn: Callable, args: tuple = (), kwargs: dict | None = None
+) -> Any:
     """
     Run a blocking phase in a separate process so we can SIGKILL on timeout.
     """
@@ -39,25 +43,20 @@ def run_with_timeout(name: str, *, timeout_s: int, fn: Callable, args: tuple = (
 
     if p.is_alive():
         # Try graceful terminate first, then SIGKILL
-        try:
+        with suppress(Exception):
             p.terminate()
-        except Exception:
-            pass
         p.join(timeout=2.0)
         if p.is_alive():
-            try:
+            with suppress(Exception):
                 os.kill(p.pid, signal.SIGKILL)  # type: ignore[arg-type]
-            except Exception:
-                pass
             p.join(timeout=2.0)
         raise PhaseTimeout(f"Phase '{name}' exceeded timeout ({timeout_s}s) and was killed")
 
     try:
         res: PhaseResult = q.get_nowait()
-    except Exception:
-        raise RuntimeError(f"Phase '{name}' failed without returning a result")
+    except Exception as ex:
+        raise RuntimeError(f"Phase '{name}' failed without returning a result") from ex
 
     if not res.ok:
         raise RuntimeError(f"Phase '{name}' failed:\n{res.error}")
     return res.value
-

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from fastapi import Request, Response
 
@@ -13,7 +14,9 @@ def _new_request_id() -> str:
     return uuid.uuid4().hex
 
 
-async def request_context_middleware(request: Request, call_next: Callable[[Request], Any]) -> Response:
+async def request_context_middleware(
+    request: Request, call_next: Callable[[Request], Any]
+) -> Response:
     """
     Request-scoped context:
     - Inject X-Request-ID if absent
@@ -31,7 +34,8 @@ async def request_context_middleware(request: Request, call_next: Callable[[Requ
         set_user_id(None)
 
 
-def audit_event(event: str, *, request: Request, user_id: str | None, meta: dict | None = None) -> None:
+def audit_event(
+    event: str, *, request: Request, user_id: str | None, meta: dict | None = None
+) -> None:
     rid = request_id_var.get() or request.headers.get("x-request-id") or None
     audit.emit(event, request_id=rid, user_id=user_id, meta=meta or None)
-

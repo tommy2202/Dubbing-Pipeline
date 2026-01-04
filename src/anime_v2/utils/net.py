@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import socket
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, Iterator
 
 from anime_v2.config import get_settings
 
@@ -19,7 +19,12 @@ def _is_local_host(host: str) -> bool:
 
 def _is_hf_host(host: str) -> bool:
     h = (host or "").lower()
-    return h == "huggingface.co" or h.endswith(".huggingface.co") or h == "hf.co" or h.endswith(".hf.co")
+    return (
+        h == "huggingface.co"
+        or h.endswith(".huggingface.co")
+        or h == "hf.co"
+        or h.endswith(".hf.co")
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,4 +86,3 @@ def egress_guard() -> Iterator[None]:
     """
     install_egress_policy()
     yield
-

@@ -18,4 +18,3 @@ def require_coqui_tos() -> None:
     if not _coqui_logged:
         logger.info("Coqui TTS license acknowledged via COQUI_TOS_AGREED=1")
         _coqui_logged = True
-

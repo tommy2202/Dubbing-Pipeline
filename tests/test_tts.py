@@ -1,1 +1,2 @@
-def test_tts(): assert True
+def test_tts():
+    assert True

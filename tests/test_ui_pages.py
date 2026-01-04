@@ -45,7 +45,9 @@ def test_ui_dashboard_renders_when_logged_in(tmp_path: Path) -> None:
     get_settings.cache_clear()
 
     with TestClient(app) as c:
-        r = c.post("/api/auth/login", json={"username": "admin", "password": "adminpass", "session": True})
+        r = c.post(
+            "/api/auth/login", json={"username": "admin", "password": "adminpass", "session": True}
+        )
         assert r.status_code == 200
         d = c.get("/ui/dashboard")
         assert d.status_code == 200
@@ -61,9 +63,10 @@ def test_ui_job_detail_shows_created_toast(tmp_path: Path) -> None:
     get_settings.cache_clear()
 
     with TestClient(app) as c:
-        r = c.post("/api/auth/login", json={"username": "admin", "password": "adminpass", "session": True})
+        r = c.post(
+            "/api/auth/login", json={"username": "admin", "password": "adminpass", "session": True}
+        )
         assert r.status_code == 200
         d = c.get("/ui/jobs/abc123?created=1")
         assert d.status_code == 200
         assert "Job created." in d.text
-

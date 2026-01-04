@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import wave
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,7 +33,9 @@ def _rms_int16(frame: bytes) -> float:
     return math.sqrt(s / n) / 32768.0
 
 
-def detect_speech_segments(wav_path: str | Path, cfg: VADConfig = VADConfig()) -> list[tuple[float, float]]:
+def detect_speech_segments(
+    wav_path: str | Path, cfg: VADConfig = VADConfig()
+) -> list[tuple[float, float]]:
     """
     Return speech segments [(start_s, end_s)] using:
       - webrtcvad if available, gated by energy
@@ -59,7 +62,6 @@ def detect_speech_segments(wav_path: str | Path, cfg: VADConfig = VADConfig()) -
         if sr != cfg.sample_rate or ch != 1 or sw != 2:
             logger.warning("VAD expects 16kHz mono int16; got sr=%s ch=%s sw=%s", sr, ch, sw)
 
-        frame_len = int(sr * (cfg.frame_ms / 1000.0)) * sw * ch
         frames: list[tuple[float, float, bool]] = []
         t = 0.0
         while True:
@@ -69,10 +71,8 @@ def detect_speech_segments(wav_path: str | Path, cfg: VADConfig = VADConfig()) -
             rms = _rms_int16(buf)
             speech = rms >= cfg.energy_gate
             if use_webrtc and speech:
-                try:
+                with suppress(Exception):
                     speech = bool(vad.is_speech(buf, sr))
-                except Exception:
-                    pass
             frames.append((t, t + cfg.frame_ms / 1000.0, speech))
             t += cfg.frame_ms / 1000.0
 
@@ -106,4 +106,3 @@ def detect_speech_segments(wav_path: str | Path, cfg: VADConfig = VADConfig()) -
         else:
             out.append((s, e))
     return out
-

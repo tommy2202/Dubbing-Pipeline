@@ -18,6 +18,7 @@ services:
       - CORS_ORIGINS=https://${DOMAIN}
     env_file:
       - ../.env
+      - ../.env.secrets
     volumes:
       - ../Output:/app/Output
       - ../data:/app/data

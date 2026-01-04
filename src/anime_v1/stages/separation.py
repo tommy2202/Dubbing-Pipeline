@@ -1,5 +1,6 @@
 import pathlib
 import subprocess
+
 from anime_v1.utils import logger
 
 
@@ -19,9 +20,13 @@ def run(audio_wav: pathlib.Path, ckpt_dir: pathlib.Path):
         out_dir = ckpt_dir / "demucs_out"
         out_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
-            "python", "-m", "demucs.separate",
-            "-n", "htdemucs",
-            "-o", str(out_dir),
+            "python",
+            "-m",
+            "demucs.separate",
+            "-n",
+            "htdemucs",
+            "-o",
+            str(out_dir),
             str(audio_wav),
         ]
         subprocess.run(cmd, check=True)

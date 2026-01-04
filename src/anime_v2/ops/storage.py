@@ -54,4 +54,3 @@ def prune_stale_workdirs(*, output_root: Path, max_age_hours: int = 24) -> int:
 def periodic_prune_tick(*, output_root: Path) -> int:
     s = get_settings()
     return prune_stale_workdirs(output_root=output_root, max_age_hours=int(s.work_stale_max_hours))
-

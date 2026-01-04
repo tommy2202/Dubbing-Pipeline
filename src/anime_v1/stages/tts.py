@@ -1,11 +1,13 @@
-import pathlib
 import json
-import tempfile
+import pathlib
 import subprocess
-from typing import Optional, List
-from anime_v1.utils import logger, checkpoints
-from pydub import AudioSegment
-import importlib
+import tempfile
+from typing import Any
+
+from config.settings import get_settings
+
+from anime_v1.utils import logger
+
 try:
     import torch  # type: ignore
 except Exception:  # pragma: no cover
@@ -14,6 +16,21 @@ except Exception:  # pragma: no cover
 SAMPLE_RATE = 22050
 _tts_model = None
 _tts_model_name = None
+
+
+def _AudioSegment():  # type: ignore
+    """
+    Lazy import to keep anime_v1 import-safe when optional deps are missing.
+    """
+    try:
+        from pydub import AudioSegment  # type: ignore
+
+        return AudioSegment
+    except Exception as ex:  # pragma: no cover
+        raise RuntimeError(
+            "anime-v1 requires `pydub`. Install it (and ensure ffmpeg is installed) "
+            "or use the v2 pipeline (`anime-v2`)."
+        ) from ex
 
 
 def _load_coqui(model_name: str = "tts_models/en/vctk/vits"):
@@ -40,7 +57,9 @@ def _load_coqui(model_name: str = "tts_models/en/vctk/vits"):
         return None
 
 
-def _speak_with_coqui(tts, text: str, outfile: pathlib.Path, *, speaker_wav: Optional[pathlib.Path] = None) -> bool:
+def _speak_with_coqui(
+    tts, text: str, outfile: pathlib.Path, *, speaker_wav: pathlib.Path | None = None
+) -> bool:
     try:
         kwargs = {"text": text, "file_path": str(outfile)}
         # Speaker (if model supports multi-speaker)
@@ -56,14 +75,17 @@ def _speak_with_coqui(tts, text: str, outfile: pathlib.Path, *, speaker_wav: Opt
         return False
 
 
-def _speak_with_espeak(text: str, outfile: pathlib.Path, lang: str = "en", speed_wpm: int = 175) -> bool:
+def _speak_with_espeak(
+    text: str, outfile: pathlib.Path, lang: str = "en", speed_wpm: int = 175
+) -> bool:
     try:
         # espeak-ng writes WAV via -w
         cmd = [
             "espeak-ng",
             f"-v{lang}",
             f"-s{speed_wpm}",
-            "-w", str(outfile),
+            "-w",
+            str(outfile),
             text,
         ]
         subprocess.run(cmd, check=True)
@@ -73,14 +95,16 @@ def _speak_with_espeak(text: str, outfile: pathlib.Path, lang: str = "en", speed
         return False
 
 
-def _speak_with_tortoise(text: str, outfile: pathlib.Path, *, speaker_wav: Optional[pathlib.Path] = None) -> bool:
+def _speak_with_tortoise(
+    text: str, outfile: pathlib.Path, *, speaker_wav: pathlib.Path | None = None
+) -> bool:
     """Try to synthesize using Tortoise-TTS if installed.
 
     This supports optional cloning via a single reference WAV when provided.
     """
     try:
-        from tortoise.api import TextToSpeech  # type: ignore
         import torchaudio  # type: ignore
+        from tortoise.api import TextToSpeech  # type: ignore
     except Exception as ex:  # pragma: no cover
         logger.warning("Tortoise-TTS not available (%s)", ex)
         return False
@@ -113,7 +137,7 @@ def _time_stretch_with_ffmpeg(in_wav: pathlib.Path, out_wav: pathlib.Path, tempo
     """Time-stretch using ffmpeg atempo (chain if out of range)."""
     try:
         # Build a chain of atempo filters within [0.5, 2.0]
-        factors: List[float] = []
+        factors: list[float] = []
         remaining = tempo
         while remaining > 2.0:
             factors.append(2.0)
@@ -125,8 +149,12 @@ def _time_stretch_with_ffmpeg(in_wav: pathlib.Path, out_wav: pathlib.Path, tempo
             factors.append(remaining)
         filt = ",".join(f"atempo={f:.5f}" for f in factors)
         cmd = [
-            "ffmpeg", "-y", "-i", str(in_wav),
-            "-filter:a", filt,
+            str(get_settings().public.ffmpeg_bin),
+            "-y",
+            "-i",
+            str(in_wav),
+            "-filter:a",
+            filt,
             str(out_wav),
         ]
         subprocess.run(cmd, check=True)
@@ -136,7 +164,8 @@ def _time_stretch_with_ffmpeg(in_wav: pathlib.Path, out_wav: pathlib.Path, tempo
         return False
 
 
-def _align_to_duration(seg_wav: pathlib.Path, target_ms: int) -> AudioSegment:
+def _align_to_duration(seg_wav: pathlib.Path, target_ms: int) -> Any:
+    AudioSegment = _AudioSegment()
     audio = AudioSegment.from_wav(seg_wav)
     if target_ms <= 0:
         return audio
@@ -152,7 +181,9 @@ def _align_to_duration(seg_wav: pathlib.Path, target_ms: int) -> AudioSegment:
             tmp_out.unlink(missing_ok=True)
     # Fallback: pad or trim without time-stretch
     if current_ms < target_ms:
-        return audio + AudioSegment.silent(duration=(target_ms - current_ms), frame_rate=audio.frame_rate)
+        return audio + AudioSegment.silent(
+            duration=(target_ms - current_ms), frame_rate=audio.frame_rate
+        )
     return audio[:target_ms]
 
 
@@ -162,7 +193,7 @@ def run(
     *,
     tgt_lang: str = "en",
     preference: str = "default",
-    source_audio: Optional[pathlib.Path] = None,
+    source_audio: pathlib.Path | None = None,
     **_,
 ):
     out = ckpt_dir / "dubbed.wav"
@@ -170,6 +201,7 @@ def run(
         logger.info("Dubbed audio exists, skip.")
         return out
 
+    AudioSegment = _AudioSegment()
     data = json.loads(transcript_json.read_text())
     segments = data.get("segments", [])
     if not segments:

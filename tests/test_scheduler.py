@@ -6,8 +6,8 @@ import pytest
 
 from anime_v2.jobs.models import Job, JobState
 from anime_v2.jobs.store import JobStore
-from anime_v2.runtime.scheduler import JobRecord, Scheduler
 from anime_v2.runtime import lifecycle
+from anime_v2.runtime.scheduler import JobRecord, Scheduler
 
 
 def _mk_job(jid: str, *, owner: str = "u1") -> Job:
@@ -66,4 +66,3 @@ def test_backpressure_degrades_mode(tmp_path, monkeypatch: pytest.MonkeyPatch) -
     assert j2 is not None
     assert j2.mode in {"medium", "low"}
     assert bool((j2.runtime or {}).get("metadata", {}).get("degraded")) is True
-

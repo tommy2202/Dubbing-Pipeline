@@ -1,0 +1,8 @@
+version: 1
+# These values feed the existing mixing system; they are per-job and can be overridden by CLI flags.
+mix_profile: streaming   # streaming|broadcast|simple
+mix_mode: enhanced       # legacy|enhanced
+lufs_target: -16.0
+ducking_strength: 1.0
+limiter: true
+

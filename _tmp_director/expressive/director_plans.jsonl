@@ -1,0 +1,2 @@
+{"energy_mul": 1.1664, "pause_tail_ms": 56, "pitch_mul": 1.07328, "rate_mul": 1.032, "reasons": ["punct:!", "punct:?", "scene:intense"], "segment_id": 1, "strength": 0.8}
+{"energy_mul": 1.08, "pause_tail_ms": 112, "pitch_mul": 1.0, "rate_mul": 0.9588848640000001, "reasons": ["punct:ellipsis", "intent:polite", "scene:intense"], "segment_id": 2, "strength": 0.8}

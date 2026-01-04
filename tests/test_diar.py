@@ -1,1 +1,2 @@
-def test_diar(): assert True
+def test_diar():
+    assert True

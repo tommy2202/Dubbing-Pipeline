@@ -1,18 +1,26 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from anime_v2.api.middleware import audit_event
-from anime_v2.api.models import AuthStore, Role, User, now_ts
-from anime_v2.api.security import create_access_token, create_refresh_token, decode_token, issue_csrf_token
+from anime_v2.api.models import AuthStore, Role
+from anime_v2.api.security import verify_csrf
+from anime_v2.api.auth.refresh_tokens import (
+    RefreshTokenError,
+    issue_and_store_refresh_token,
+    revoke_refresh_token_best_effort,
+    rotate_refresh_token,
+)
+from anime_v2.api.security import (
+    create_access_token,
+    decode_token,
+    issue_csrf_token,
+)
 from anime_v2.config import get_settings
-from anime_v2.utils.crypto import PasswordHasher, random_id
+from anime_v2.utils.crypto import PasswordHasher
 from anime_v2.utils.ratelimit import RateLimiter
-
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -52,7 +60,7 @@ async def login(request: Request) -> Response:
         body = raw
     elif "application/x-www-form-urlencoded" in ctype or "multipart/form-data" in ctype:
         form = await request.form()
-        body = {str(k): form.get(k) for k in form.keys()}
+        body = {str(k): form.get(k) for k in form}
     else:
         # best-effort: try JSON
         try:
@@ -71,6 +79,10 @@ async def login(request: Request) -> Response:
     else:
         session = bool(session_val)
 
+    # Brute-force protection: also limit by username (best-effort, avoids user enumeration by using same error msg).
+    if username and not rl.allow(f"auth:login:user:{username.lower()}", limit=5, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
     store = _get_store(request)
     user = store.get_user_by_username(username)
     if user is None:
@@ -83,37 +95,57 @@ async def login(request: Request) -> Response:
 
     if user.totp_enabled:
         if not totp:
-            audit_event("auth.login_failed_totp", request=request, user_id=user.id, meta={"username": username})
+            audit_event(
+                "auth.login_failed_totp",
+                request=request,
+                user_id=user.id,
+                meta={"username": username},
+            )
             raise HTTPException(status_code=401, detail="TOTP required")
         try:
             import pyotp  # type: ignore
 
-            if not user.totp_secret or not pyotp.TOTP(user.totp_secret).verify(totp, valid_window=1):
-                audit_event("auth.login_failed_totp", request=request, user_id=user.id, meta={"username": username})
+            if not user.totp_secret or not pyotp.TOTP(user.totp_secret).verify(
+                totp, valid_window=1
+            ):
+                audit_event(
+                    "auth.login_failed_totp",
+                    request=request,
+                    user_id=user.id,
+                    meta={"username": username},
+                )
                 raise HTTPException(status_code=401, detail="Invalid TOTP")
         except HTTPException:
             raise
-        except Exception:
-            raise HTTPException(status_code=500, detail="TOTP unavailable")
+        except Exception as ex:
+            raise HTTPException(status_code=500, detail="TOTP unavailable") from ex
 
     s = get_settings()
-    access = create_access_token(sub=user.id, role=user.role.value, scopes=["read:job"], minutes=s.access_token_minutes)
+    access = create_access_token(
+        sub=user.id, role=user.role.value, scopes=["read:job"], minutes=s.access_token_minutes
+    )
     # role-based default scopes (viewer=read, operator=read+submit, admin implicit)
     scopes = ["read:job"]
     if user.role in {Role.operator, Role.admin}:
         scopes.append("submit:job")
     if user.role == Role.admin:
         scopes.append("admin:*")
-    access = create_access_token(sub=user.id, role=user.role.value, scopes=scopes, minutes=s.access_token_minutes)
+    access = create_access_token(
+        sub=user.id, role=user.role.value, scopes=scopes, minutes=s.access_token_minutes
+    )
 
-    refresh = create_refresh_token(sub=user.id, days=s.refresh_token_days)
     csrf = issue_csrf_token()
-    audit_event("auth.login_ok", request=request, user_id=user.id, meta={"username": username, "role": user.role.value, "session": session})
+    audit_event(
+        "auth.login_ok",
+        request=request,
+        user_id=user.id,
+        meta={"username": username, "role": user.role.value, "session": session},
+    )
 
     resp = Response()
     resp.set_cookie(
         "refresh",
-        refresh,
+        issue_and_store_refresh_token(store=store, user_id=user.id, days=s.refresh_token_days),
         httponly=True,
         samesite="lax",
         secure=s.cookie_secure,
@@ -149,9 +181,18 @@ async def login(request: Request) -> Response:
             pass
 
     resp.headers["content-type"] = "application/json"
-    resp.body = __import__("json").dumps(  # type: ignore[attr-defined]
-        {"access_token": access, "token_type": "bearer", "csrf_token": csrf, "role": user.role.value}
-    ).encode("utf-8")
+    resp.body = (
+        __import__("json")
+        .dumps(  # type: ignore[attr-defined]
+            {
+                "access_token": access,
+                "token_type": "bearer",
+                "csrf_token": csrf,
+                "role": user.role.value,
+            }
+        )
+        .encode("utf-8")
+    )
     return resp
 
 
@@ -164,15 +205,36 @@ async def refresh(request: Request) -> Response:
 
     rt = request.cookies.get("refresh")
     if not rt:
-        audit_event("auth.refresh_failed", request=request, user_id=None, meta={"reason": "missing_refresh_cookie"})
+        audit_event(
+            "auth.refresh_failed",
+            request=request,
+            user_id=None,
+            meta={"reason": "missing_refresh_cookie"},
+        )
         raise HTTPException(status_code=401, detail="Missing refresh token")
-    data = decode_token(rt, expected_typ="refresh")
-    sub = str(data.get("sub") or "")
+    # Cookie flow: require CSRF (double-submit)
+    verify_csrf(request)
+
     store = _get_store(request)
-    user = store.get_user(sub)
-    if user is None:
-        audit_event("auth.refresh_failed", request=request, user_id=None, meta={"reason": "unknown_user"})
-        raise HTTPException(status_code=401, detail="Unknown user")
+    try:
+        rot = rotate_refresh_token(store=store, refresh_token=str(rt), days=get_settings().refresh_token_days)
+        user = store.get_user(rot.access_sub)
+        if user is None:
+            audit_event(
+                "auth.refresh_failed",
+                request=request,
+                user_id=None,
+                meta={"reason": "unknown_user"},
+            )
+            raise HTTPException(status_code=401, detail="Unknown user")
+    except RefreshTokenError as ex:
+        audit_event(
+            "auth.refresh_failed",
+            request=request,
+            user_id=None,
+            meta={"reason": str(ex)},
+        )
+        raise HTTPException(status_code=401, detail="Invalid refresh token") from None
 
     s = get_settings()
     scopes = ["read:job"]
@@ -180,7 +242,9 @@ async def refresh(request: Request) -> Response:
         scopes.append("submit:job")
     if user.role == Role.admin:
         scopes.append("admin:*")
-    access = create_access_token(sub=user.id, role=user.role.value, scopes=scopes, minutes=s.access_token_minutes)
+    access = create_access_token(
+        sub=user.id, role=user.role.value, scopes=scopes, minutes=s.access_token_minutes
+    )
     csrf = issue_csrf_token()
     audit_event("auth.refresh_ok", request=request, user_id=user.id, meta={"role": user.role.value})
 
@@ -194,15 +258,42 @@ async def refresh(request: Request) -> Response:
         max_age=s.refresh_token_days * 86400,
         path="/",
     )
+    resp.set_cookie(
+        "refresh",
+        rot.new_refresh_token,
+        httponly=True,
+        samesite="lax",
+        secure=s.cookie_secure,
+        max_age=s.refresh_token_days * 86400,
+        path="/",
+    )
     resp.headers["content-type"] = "application/json"
-    resp.body = __import__("json").dumps(  # type: ignore[attr-defined]
-        {"access_token": access, "token_type": "bearer", "csrf_token": csrf}
-    ).encode("utf-8")
+    resp.body = (
+        __import__("json")
+        .dumps(  # type: ignore[attr-defined]
+            {"access_token": access, "token_type": "bearer", "csrf_token": csrf}
+        )
+        .encode("utf-8")
+    )
     return resp
 
 
 @router.post("/logout")
-async def logout() -> Response:
+async def logout(request: Request) -> Response:
+    # Cookie flow: require CSRF (double-submit) when cookies are present.
+    # (Clients using pure Bearer tokens can ignore logout; they can just drop the token.)
+    verify_csrf(request)
+    store = _get_store(request)
+    rt = request.cookies.get("refresh") or ""
+    uid = None
+    if rt:
+        try:
+            data = decode_token(str(rt), expected_typ="refresh")
+            uid = str(data.get("sub") or "") or None
+        except Exception:
+            uid = None
+        revoke_refresh_token_best_effort(store=store, refresh_token=str(rt))
+    audit_event("auth.logout", request=request, user_id=uid, meta=None)
     resp = Response(content=b'{"ok":true}', media_type="application/json")
     resp.delete_cookie("refresh", path="/")
     resp.delete_cookie("csrf", path="/")
@@ -219,8 +310,8 @@ async def totp_setup(request: Request) -> dict[str, Any]:
     user = ident.user
     try:
         import pyotp  # type: ignore
-    except Exception:
-        raise HTTPException(status_code=500, detail="TOTP unavailable")
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail="TOTP unavailable") from ex
     secret = pyotp.random_base32()
     uri = pyotp.TOTP(secret).provisioning_uri(name=user.username, issuer_name="anime_v2")
     # Store secret but not enabled until verified
@@ -247,8 +338,7 @@ async def totp_verify(request: Request) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="Invalid code")
     except HTTPException:
         raise
-    except Exception:
-        raise HTTPException(status_code=500, detail="TOTP unavailable")
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail="TOTP unavailable") from ex
     _get_store(request).set_totp(user.id, secret=user.totp_secret, enabled=True)
     return {"ok": True}
-

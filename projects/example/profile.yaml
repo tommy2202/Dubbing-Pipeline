@@ -1,0 +1,7 @@
+version: 1
+name: example
+include:
+  style_guide: style_guide.yaml
+  qa: qa.yaml
+  mix: mix.yaml
+

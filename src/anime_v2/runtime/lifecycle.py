@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from anime_v2.utils.log import logger
 
-
 _draining = threading.Event()
 _deadline_lock = threading.Lock()
 _deadline_at: float | None = None
@@ -66,4 +65,3 @@ def end_draining() -> None:
     with _deadline_lock:
         global _deadline_at
         _deadline_at = None
-

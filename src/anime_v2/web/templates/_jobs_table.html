@@ -6,6 +6,18 @@
       <div class="min-w-0">
         <div class="text-sm font-mono text-slate-200 truncate">{{ j.id }}</div>
         <div class="mt-1 text-sm text-slate-200 truncate" data-job-filename>{{ j.video_path.split('/')[-1] }}</div>
+        <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
+          {% if j.project_name %}
+            <span class="rounded bg-slate-900/60 border border-slate-800 px-2 py-1 text-slate-200">
+              {{ j.project_name }}
+            </span>
+          {% endif %}
+          {% if j.qa_score is not none %}
+            <span class="rounded bg-indigo-700/20 border border-indigo-700/50 px-2 py-1 text-indigo-200">
+              QA {{ j.qa_score|round(1) }}/100
+            </span>
+          {% endif %}
+        </div>
         <div class="mt-1 text-xs text-slate-500">{{ j.created_at }}</div>
       </div>
       <a href="/ui/jobs/{{ j.id }}" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm">Open</a>
@@ -52,8 +64,10 @@
         </th>
         <th class="py-2 pr-3 text-left">Job ID</th>
         <th class="py-2 pr-3 text-left">Filename</th>
+        <th class="py-2 pr-3 text-left">Project</th>
         <th class="py-2 pr-3 text-left">Mode</th>
         <th class="py-2 pr-3 text-left">Lang</th>
+        <th class="py-2 pr-3 text-left">QA</th>
         <th class="py-2 pr-3 text-left">Progress</th>
         <th class="py-2 pr-3 text-left">Status</th>
         <th class="py-2 pr-3 text-left">Created</th>
@@ -74,8 +88,14 @@
           {{ j.id[:8] }}…
         </td>
         <td class="py-2 pr-3 text-slate-200" data-job-filename>{{ j.video_path.split('/')[-1] }}</td>
+        <td class="py-2 pr-3 text-slate-200">{{ j.project_name or '' }}</td>
         <td class="py-2 pr-3 text-slate-200" data-job-mode>{{ j.mode }}</td>
         <td class="py-2 pr-3 text-slate-400" data-job-lang>{{ j.src_lang }}→{{ j.tgt_lang }}</td>
+        <td class="py-2 pr-3 text-slate-200">
+          {% if j.qa_score is not none %}
+            {{ j.qa_score|round(1) }}
+          {% endif %}
+        </td>
         <td class="py-2 pr-3 text-slate-200" data-job-progress>{{ (j.progress * 100.0) | round(0) }}%</td>
         <td class="py-2 pr-3 text-slate-200" data-job-state>{{ j.state }}</td>
         <td class="py-2 pr-3 text-slate-500" data-job-created>{{ j.created_at }}</td>
