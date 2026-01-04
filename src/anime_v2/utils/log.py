@@ -33,15 +33,82 @@ def _log_path() -> Path:
 _JWT_RE = re.compile(r"\beyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\b")
 _API_KEY_RE = re.compile(r"\bdp_[a-z0-9]{6,}_[A-Za-z0-9_\-]{10,}\b", re.IGNORECASE)
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9_\-\.=]+)")
+_BASIC_RE = re.compile(r"(?i)\bBasic\s+([A-Za-z0-9_\-+/=]+)")
 _KV_RE = re.compile(
     r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|token|secret|password|api_key)\b\s*=\s*([^\s,;]+)"
 )
 
 
+def _secret_literals() -> list[str]:
+    """
+    Return configured secret values that must never appear in logs.
+    Best-effort (safe even if settings aren't fully initialized yet).
+    """
+    vals: list[str] = []
+    try:
+        s = get_settings()
+        sec = getattr(s, "secret", None)
+        if sec is not None:
+            # SecretStr values
+            for name in (
+                "jwt_secret",
+                "csrf_secret",
+                "session_secret",
+                "huggingface_token",
+                "hf_token",
+                "admin_password",
+                "char_store_key",
+                "artifacts_key",
+                "ntfy_auth",
+            ):
+                try:
+                    v = getattr(sec, name)
+                except Exception:
+                    v = None
+                try:
+                    if v is not None and hasattr(v, "get_secret_value"):
+                        raw = str(v.get_secret_value() or "")
+                        if raw:
+                            vals.append(raw)
+                except Exception:
+                    pass
+            # Plain string secrets
+            try:
+                api_token = str(getattr(sec, "api_token", "") or "")
+                if api_token:
+                    vals.append(api_token)
+            except Exception:
+                pass
+            try:
+                turn_pw = str(getattr(sec, "turn_password", "") or "")
+                if turn_pw:
+                    vals.append(turn_pw)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # De-dupe and ignore tiny values to avoid over-redaction.
+    out: list[str] = []
+    for v in vals:
+        v = str(v)
+        if len(v) < 8:
+            continue
+        if v not in out:
+            out.append(v)
+    return out
+
+
 def _redact_str(s: str) -> str:
+    # Exact-value replacement first (covers non-token secrets like passwords)
+    with suppress(Exception):
+        for lit in _secret_literals():
+            if lit and lit in s:
+                s = s.replace(lit, "***REDACTED***")
     s = _JWT_RE.sub("***REDACTED***", s)
     s = _API_KEY_RE.sub("***REDACTED***", s)
     s = _BEARER_RE.sub("Bearer ***REDACTED***", s)
+    s = _BASIC_RE.sub("Basic ***REDACTED***", s)
     s = _KV_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
     return s
 

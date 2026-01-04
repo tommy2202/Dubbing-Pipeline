@@ -49,26 +49,61 @@ def _validate_secrets(s: Settings) -> None:
 
     This preserves current behavior (dev-insecure defaults) unless the user opts in.
     """
+    import logging
+
     # Prefer env var to avoid having to add another public setting.
     strict = bool(int(__import__("os").environ.get("STRICT_SECRETS", "0") or "0"))
-    if not strict:
-        return
 
-    missing: list[str] = []
+    weak: list[str] = []
     if _is_insecure_default(s.secret.jwt_secret, "dev-insecure-jwt-secret"):
-        missing.append("JWT_SECRET")
+        weak.append("JWT_SECRET")
     if _is_insecure_default(s.secret.csrf_secret, "dev-insecure-csrf-secret"):
-        missing.append("CSRF_SECRET")
+        weak.append("CSRF_SECRET")
     if _is_insecure_default(s.secret.session_secret, "dev-insecure-session-secret"):
-        missing.append("SESSION_SECRET")
-    if s.secret.api_token == "change-me":
-        missing.append("API_TOKEN")
-    if missing:
-        raise ConfigError(
-            "Missing required secrets (or still using insecure dev defaults): "
-            + ", ".join(missing)
-            + ". Set them via environment variables or `.env.secrets`."
+        weak.append("SESSION_SECRET")
+    if str(s.secret.api_token or "") == "change-me":
+        weak.append("API_TOKEN")
+
+    # Optional admin bootstrap: reject common placeholders in strict mode; warn otherwise.
+    try:
+        apw = s.secret.admin_password.get_secret_value() if s.secret.admin_password else ""
+    except Exception:
+        apw = ""
+    if apw and apw.strip().lower() in {"change-me", "admin", "adminpass", "password", "123456"}:
+        weak.append("ADMIN_PASSWORD")
+
+    if weak:
+        if strict:
+            raise ConfigError(
+                "Weak/insecure secrets detected: "
+                + ", ".join(sorted(set(weak)))
+                + ". Set them via environment variables or `.env.secrets`."
+            )
+        logging.getLogger("anime_v2").warning(
+            "weak_secrets_detected",
+            extra={"weak": sorted(set(weak)), "strict_secrets": False},
         )
+
+    # Remote-mode hardening warnings (never fail boot automatically; fail is via STRICT_SECRETS).
+    try:
+        mode = str(getattr(s.public, "remote_access_mode", "off") or "off").strip().lower()
+    except Exception:
+        mode = "off"
+    if mode != "off":
+        warnings: list[str] = []
+        if not bool(getattr(s.public, "cookie_secure", False)):
+            warnings.append("COOKIE_SECURE=0 (cookies not marked Secure)")
+        if not str(getattr(s.public, "cors_origins", "") or "").strip():
+            warnings.append("CORS_ORIGINS empty (browser clients may be less constrained)")
+        if bool(getattr(s.public, "allow_legacy_token_login", False)):
+            warnings.append("ALLOW_LEGACY_TOKEN_LOGIN=1 (unsafe on public networks)")
+        if mode == "cloudflare" and not bool(getattr(s.public, "trust_proxy_headers", False)):
+            warnings.append("TRUST_PROXY_HEADERS=0 (may break HTTPS detection behind Cloudflare)")
+        if warnings:
+            logging.getLogger("anime_v2").warning(
+                "remote_mode_hardening_warning",
+                extra={"mode": mode, "warnings": warnings},
+            )
 
 
 def get_safe_config_report() -> dict[str, Any]:
