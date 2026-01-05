@@ -41,7 +41,9 @@
 
   <div class="mt-4 space-y-3">
     <template x-for="seg in items" :key="seg.index">
-      <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+      <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3"
+           :id="'seg-' + String(seg.index)"
+           :class="(focusSeg && Number(seg.index)===Number(focusSeg)) ? 'ring-2 ring-emerald-600/70' : ''">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="text-xs font-mono text-slate-400">
             #<span x-text="seg.index"></span>
@@ -79,6 +81,18 @@
                       placeholder="(target text)"></textarea>
           </div>
         </div>
+
+        <div class="mt-3 flex flex-wrap items-center gap-3">
+          <div class="text-xs text-slate-500">Speaker override</div>
+          <input class="rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100 {% if user and user.role and user.role.value == 'viewer' %}opacity-80{% endif %}"
+                 :value="seg.speaker_override || ''"
+                 @input="seg.speaker_override = $event.target.value; markDirty(seg)"
+                 :aria-label="`Speaker override for segment ${seg.index}`"
+                 {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}
+                 placeholder="(optional character_id)" />
+          <span class="text-xs rounded bg-amber-700/30 border border-amber-700/60 px-2 py-1 text-amber-200"
+                x-show="(seg.speaker_override||'').trim().length" x-cloak>changed by user</span>
+        </div>
       </div>
     </template>
   </div>
@@ -94,6 +108,7 @@
       totalPages: 1,
       version: null,
       items: [],
+      focusSeg: null,
       dirty: {}, // index -> patch
       saving: false,
       synthRunning: false,
@@ -101,7 +116,22 @@
       toast: "",
       _debounce: null,
       async init() {
-        await this.loadPage(1);
+        try {
+          const u = new URL(window.location.href);
+          const seg = u.searchParams.get("seg");
+          const n = seg ? Number(seg) : null;
+          if (n && Number.isFinite(n) && n > 0) this.focusSeg = Math.floor(n);
+        } catch (e) {}
+        const p0 = (this.focusSeg && this.perPage) ? Math.max(1, Math.ceil(this.focusSeg / this.perPage)) : 1;
+        await this.loadPage(p0);
+        if (this.focusSeg) {
+          setTimeout(() => {
+            try {
+              const el = document.getElementById("seg-" + String(this.focusSeg));
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+            } catch (e) {}
+          }, 120);
+        }
       },
       hasFlag(seg, flag) {
         const f = seg.flags;
@@ -139,6 +169,7 @@
           tgt_text: seg.tgt_text,
           approved: !!seg.approved,
           flags: Array.isArray(seg.flags) ? seg.flags : [],
+          speaker_override: seg.speaker_override || "",
         };
         if (this._debounce) clearTimeout(this._debounce);
         this._debounce = setTimeout(() => this.saveNow(), 900);
@@ -163,6 +194,20 @@
             this.error = data.detail || ("Save failed (" + r.status + ")");
             return;
           }
+          // Speaker overrides are stored separately (Output/<job>/review/overrides.json).
+          try {
+            const spUpdates = updates
+              .filter(u => u && (u.speaker_override !== undefined))
+              .map(u => ({ index: u.index, speaker_override: u.speaker_override }));
+            if (spUpdates.length) {
+              await fetch(`/api/jobs/${encodeURIComponent(this.jobId)}/overrides/speaker`, {
+                method: "POST",
+                credentials: "include",
+                headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+                body: JSON.stringify({ updates: spUpdates }),
+              });
+            }
+          } catch (e) {}
           this.dirty = {};
           if (data.version !== undefined) this.version = data.version;
           this.toast = "Saved.";

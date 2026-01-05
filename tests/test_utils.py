@@ -15,7 +15,10 @@ from anime_v2.utils.time import format_srt_timestamp
 def test_format_srt_timestamp_basic():
     assert format_srt_timestamp(0.0) == "00:00:00,000"
     assert format_srt_timestamp(1.234) == "00:00:01,234"
-    assert format_srt_timestamp(61.005) == "00:01:01,004" or format_srt_timestamp(61.005) == "00:01:01,005"
+    assert (
+        format_srt_timestamp(61.005) == "00:01:01,004"
+        or format_srt_timestamp(61.005) == "00:01:01,005"
+    )
 
 
 def test_path_helpers(tmp_path: Path):
@@ -30,4 +33,3 @@ def test_path_helpers(tmp_path: Path):
     assert voices_root(work) == work / "voices"
     assert voices_registry_path(work) == work / "voices" / "registry.json"
     assert voices_embeddings_dir(work) == work / "voices" / "embeddings"
-

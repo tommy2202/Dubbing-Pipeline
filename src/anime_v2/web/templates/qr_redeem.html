@@ -1,0 +1,70 @@
+{% extends "_base.html" %}
+
+{% block title %}QR Login • anime_v2{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-md">
+  <div class="rounded-xl border border-slate-800 bg-slate-900/50 p-6" x-data="qrRedeem()"
+       x-init="init()">
+    <h1 class="text-xl font-semibold">Signing you in…</h1>
+    <p class="mt-1 text-sm text-slate-400">This QR code is single-use and expires quickly.</p>
+
+    <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-200" x-show="status" x-text="status"></div>
+    <div class="mt-4 rounded-lg bg-red-900/30 border border-red-900/50 p-3 text-sm text-red-200"
+         role="alert" aria-live="polite"
+         x-show="error" x-cloak x-text="error"></div>
+
+    <div class="mt-4 flex items-center gap-2">
+      <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
+              :disabled="busy" @click="redeem()">
+        <span x-show="!busy">Retry</span>
+        <span x-show="busy" x-cloak>Working…</span>
+      </button>
+      <a class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" href="/ui/login">Back to login</a>
+    </div>
+  </div>
+</div>
+
+<script>
+  function qrRedeem() {
+    return {
+      busy: false,
+      error: "",
+      status: "Contacting server…",
+      code: "{{ (code | e) }}",
+      async init() {
+        await this.redeem();
+      },
+      async redeem() {
+        this.busy = true;
+        this.error = "";
+        this.status = "Redeeming code…";
+        try {
+          const r = await fetch("/api/auth/qr/redeem", {
+            method: "POST",
+            headers: {"content-type":"application/json"},
+            credentials: "include",
+            body: JSON.stringify({code: this.code}),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.error = (d && (d.detail || d.error)) ? (d.detail || d.error) : ("Redeem failed (" + r.status + ")");
+            this.status = "";
+            return;
+          }
+          // Sync CSRF hidden input with server cookie.
+          if (d && d.csrf_token) document.getElementById("csrf").value = d.csrf_token;
+          this.status = "Signed in. Redirecting…";
+          window.location = "/ui/dashboard";
+        } catch (e) {
+          this.error = "Redeem failed";
+          this.status = "";
+        } finally {
+          this.busy = false;
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}
+

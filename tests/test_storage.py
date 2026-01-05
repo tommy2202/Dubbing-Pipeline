@@ -48,6 +48,9 @@ def test_submit_job_returns_507_when_disk_guard_trips(tmp_path: Path) -> None:
         r = c.post("/auth/login", json={"username": "admin", "password": "adminpass"})
         token = r.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}", "X-CSRF-Token": r.json()["csrf_token"]}
-        r2 = c.post("/api/jobs", headers=headers, json={"video_path": "/workspace/Input/Test.mp4", "device": "cpu", "mode": "low"})
+        r2 = c.post(
+            "/api/jobs",
+            headers=headers,
+            json={"video_path": "/workspace/Input/Test.mp4", "device": "cpu", "mode": "low"},
+        )
         assert r2.status_code == 507
-

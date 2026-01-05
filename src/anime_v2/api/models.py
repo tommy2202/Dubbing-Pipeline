@@ -8,12 +8,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from anime_v2.utils.log import logger
-
 
 class Role(str, Enum):
     admin = "admin"
     operator = "operator"
+    editor = "editor"
     viewer = "viewer"
 
 
@@ -93,9 +92,101 @@ class AuthStore:
                 """
             )
             con.execute("CREATE INDEX IF NOT EXISTS api_keys_prefix ON api_keys(prefix);")
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS refresh_tokens (
+                  jti TEXT PRIMARY KEY,
+                  user_id TEXT NOT NULL,
+                  token_hash TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  expires_at INTEGER NOT NULL,
+                  revoked INTEGER NOT NULL,
+                  replaced_by TEXT,
+                  last_used_at INTEGER,
+                  device_id TEXT,
+                  device_name TEXT,
+                  created_ip TEXT,
+                  last_ip TEXT,
+                  user_agent TEXT,
+                  FOREIGN KEY(user_id) REFERENCES users(id)
+                );
+                """
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS refresh_tokens_user_id ON refresh_tokens(user_id);"
+            )
+            # Best-effort schema migration for older DBs (SQLite).
+            self._ensure_refresh_token_columns(con)
+            self._ensure_qr_tables(con)
+            self._ensure_recovery_tables(con)
             con.commit()
         finally:
             con.close()
+
+    def _ensure_refresh_token_columns(self, con: sqlite3.Connection) -> None:
+        """
+        Add new columns to refresh_tokens if missing (best-effort, idempotent).
+        """
+        try:
+            cols = [
+                str(r["name"]) for r in con.execute("PRAGMA table_info(refresh_tokens);").fetchall()
+            ]
+        except Exception:
+            return
+        want = {
+            "device_id": "TEXT",
+            "device_name": "TEXT",
+            "created_ip": "TEXT",
+            "last_ip": "TEXT",
+            "user_agent": "TEXT",
+        }
+        for name, typ in want.items():
+            if name in cols:
+                continue
+            try:
+                con.execute(f"ALTER TABLE refresh_tokens ADD COLUMN {name} {typ};")
+            except Exception:
+                continue
+
+    def _ensure_qr_tables(self, con: sqlite3.Connection) -> None:
+        try:
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS qr_login_codes (
+                  nonce_hash TEXT PRIMARY KEY,
+                  user_id TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  expires_at INTEGER NOT NULL,
+                  used_at INTEGER,
+                  created_ip TEXT,
+                  used_ip TEXT
+                );
+                """
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS qr_login_codes_user_id ON qr_login_codes(user_id);"
+            )
+        except Exception:
+            return
+
+    def _ensure_recovery_tables(self, con: sqlite3.Connection) -> None:
+        try:
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS totp_recovery_codes (
+                  user_id TEXT NOT NULL,
+                  code_hash TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  used_at INTEGER,
+                  PRIMARY KEY(user_id, code_hash)
+                );
+                """
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS totp_recovery_codes_user_id ON totp_recovery_codes(user_id);"
+            )
+        except Exception:
+            return
 
     def get_user_by_username(self, username: str) -> User | None:
         con = self._conn()
@@ -197,7 +288,9 @@ class AuthStore:
         con = self._conn()
         try:
             if user_id:
-                rows = con.execute("SELECT * FROM api_keys WHERE user_id=? ORDER BY created_at DESC", (user_id,)).fetchall()
+                rows = con.execute(
+                    "SELECT * FROM api_keys WHERE user_id=? ORDER BY created_at DESC", (user_id,)
+                ).fetchall()
             else:
                 rows = con.execute("SELECT * FROM api_keys ORDER BY created_at DESC").fetchall()
             out = []
@@ -228,7 +321,9 @@ class AuthStore:
     def find_api_keys_by_prefix(self, prefix: str) -> list[ApiKey]:
         con = self._conn()
         try:
-            rows = con.execute("SELECT * FROM api_keys WHERE prefix=? AND revoked=0", (prefix,)).fetchall()
+            rows = con.execute(
+                "SELECT * FROM api_keys WHERE prefix=? AND revoked=0", (prefix,)
+            ).fetchall()
             out = []
             for r in rows:
                 out.append(
@@ -246,7 +341,235 @@ class AuthStore:
         finally:
             con.close()
 
+    # --- rotating refresh tokens (server-side) ---
+
+    def put_refresh_token(
+        self,
+        *,
+        jti: str,
+        user_id: str,
+        token_hash: str,
+        created_at: int,
+        expires_at: int,
+        device_id: str | None = None,
+        device_name: str | None = None,
+        created_ip: str | None = None,
+        last_ip: str | None = None,
+        user_agent: str | None = None,
+    ) -> None:
+        con = self._conn()
+        try:
+            # Prefer inserting with extended device/session metadata; fall back to legacy schema if needed.
+            try:
+                con.execute(
+                    """
+                    INSERT OR REPLACE INTO refresh_tokens
+                      (jti, user_id, token_hash, created_at, expires_at, revoked, replaced_by, last_used_at,
+                       device_id, device_name, created_ip, last_ip, user_agent)
+                    VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(jti),
+                        str(user_id),
+                        str(token_hash),
+                        int(created_at),
+                        int(expires_at),
+                        str(device_id or "") or None,
+                        str(device_name or "") or None,
+                        str(created_ip or "") or None,
+                        str(last_ip or "") or None,
+                        (str(user_agent)[:160] if user_agent else None),
+                    ),
+                )
+            except Exception:
+                con.execute(
+                    """
+                    INSERT OR REPLACE INTO refresh_tokens
+                      (jti, user_id, token_hash, created_at, expires_at, revoked, replaced_by, last_used_at)
+                    VALUES (?, ?, ?, ?, ?, 0, NULL, NULL)
+                    """,
+                    (str(jti), str(user_id), str(token_hash), int(created_at), int(expires_at)),
+                )
+                # Best-effort metadata update if columns exist.
+                with __import__("contextlib").suppress(Exception):
+                    con.execute(
+                        """
+                        UPDATE refresh_tokens
+                        SET device_id=?, device_name=?, created_ip=?, last_ip=?, user_agent=?
+                        WHERE jti=?
+                        """,
+                        (
+                            str(device_id or "") or None,
+                            str(device_name or "") or None,
+                            str(created_ip or "") or None,
+                            str(last_ip or "") or None,
+                            (str(user_agent)[:160] if user_agent else None),
+                            str(jti),
+                        ),
+                    )
+            con.commit()
+        finally:
+            con.close()
+
+    def get_refresh_token(self, jti: str) -> dict[str, object] | None:
+        con = self._conn()
+        try:
+            row = con.execute("SELECT * FROM refresh_tokens WHERE jti=?", (jti,)).fetchone()
+            if row is None:
+                return None
+            return dict(row)
+        finally:
+            con.close()
+
+    def rotate_refresh_token(self, *, old_jti: str, new_jti: str) -> None:
+        con = self._conn()
+        try:
+            con.execute(
+                """
+                UPDATE refresh_tokens
+                SET revoked=1, replaced_by=?, last_used_at=?
+                WHERE jti=?
+                """,
+                (new_jti, now_ts(), old_jti),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def revoke_refresh_token(self, jti: str) -> None:
+        con = self._conn()
+        try:
+            con.execute(
+                "UPDATE refresh_tokens SET revoked=1, last_used_at=? WHERE jti=?",
+                (now_ts(), jti),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def revoke_all_refresh_tokens_for_user(self, user_id: str) -> None:
+        con = self._conn()
+        try:
+            con.execute(
+                "UPDATE refresh_tokens SET revoked=1, last_used_at=? WHERE user_id=?",
+                (now_ts(), user_id),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def list_active_sessions(self, *, user_id: str) -> list[dict[str, Any]]:
+        """
+        "Sessions" are active (non-revoked) refresh-token chains.
+        """
+        con = self._conn()
+        try:
+            now = int(time.time())
+            rows = con.execute(
+                """
+                SELECT * FROM refresh_tokens
+                WHERE user_id=? AND revoked=0 AND (expires_at IS NULL OR expires_at>?)
+                ORDER BY created_at DESC
+                """,
+                (str(user_id), int(now)),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            con.close()
+
+    def revoke_sessions_by_device(self, *, user_id: str, device_id: str) -> int:
+        con = self._conn()
+        try:
+            cur = con.execute(
+                "UPDATE refresh_tokens SET revoked=1, last_used_at=? WHERE user_id=? AND device_id=?",
+                (now_ts(), str(user_id), str(device_id)),
+            )
+            con.commit()
+            return int(getattr(cur, "rowcount", 0) or 0)
+        finally:
+            con.close()
+
+    def put_qr_code(
+        self, *, nonce_hash: str, user_id: str, created_at: int, expires_at: int, created_ip: str
+    ) -> None:
+        con = self._conn()
+        try:
+            con.execute(
+                """
+                INSERT OR REPLACE INTO qr_login_codes (nonce_hash, user_id, created_at, expires_at, used_at, created_ip, used_ip)
+                VALUES (?, ?, ?, ?, NULL, ?, NULL)
+                """,
+                (str(nonce_hash), str(user_id), int(created_at), int(expires_at), str(created_ip)),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def consume_qr_code(self, *, nonce_hash: str, used_ip: str) -> str | None:
+        """
+        Mark nonce as used if valid and return user_id. Returns None if invalid/expired/used.
+        """
+        con = self._conn()
+        try:
+            now = int(time.time())
+            row = con.execute(
+                "SELECT * FROM qr_login_codes WHERE nonce_hash=?",
+                (str(nonce_hash),),
+            ).fetchone()
+            if row is None:
+                return None
+            rec = dict(row)
+            if rec.get("used_at"):
+                return None
+            exp = int(rec.get("expires_at") or 0)
+            if exp and now > exp:
+                return None
+            con.execute(
+                "UPDATE qr_login_codes SET used_at=?, used_ip=? WHERE nonce_hash=?",
+                (now_ts(), str(used_ip), str(nonce_hash)),
+            )
+            con.commit()
+            return str(rec.get("user_id") or "") or None
+        finally:
+            con.close()
+
+    def put_recovery_codes(self, *, user_id: str, code_hashes: list[str]) -> None:
+        con = self._conn()
+        try:
+            ts = now_ts()
+            for h in code_hashes:
+                con.execute(
+                    """
+                    INSERT OR REPLACE INTO totp_recovery_codes (user_id, code_hash, created_at, used_at)
+                    VALUES (?, ?, ?, NULL)
+                    """,
+                    (str(user_id), str(h), int(ts)),
+                )
+            con.commit()
+        finally:
+            con.close()
+
+    def consume_recovery_code(self, *, user_id: str, code_hash: str) -> bool:
+        con = self._conn()
+        try:
+            row = con.execute(
+                """
+                SELECT * FROM totp_recovery_codes
+                WHERE user_id=? AND code_hash=? AND used_at IS NULL
+                """,
+                (str(user_id), str(code_hash)),
+            ).fetchone()
+            if row is None:
+                return False
+            con.execute(
+                "UPDATE totp_recovery_codes SET used_at=? WHERE user_id=? AND code_hash=?",
+                (now_ts(), str(user_id), str(code_hash)),
+            )
+            con.commit()
+            return True
+        finally:
+            con.close()
+
 
 def now_ts() -> int:
     return int(time.time())
-

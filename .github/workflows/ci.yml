@@ -35,20 +35,22 @@ jobs:
           python -m pip install -e ".[dev]"
           python -m pip install "openai-whisper==20231117"
 
-      - name: Cache Whisper models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/whisper
-          key: whisper-${{ runner.os }}-small
-
-      - name: Run tests
+      - name: Lint, typecheck, test
         env:
           LOG_LEVEL: INFO
           COQUI_TOS_AGREED: "0"
           OFFLINE_MODE: "0"
           ALLOW_EGRESS: "1"
         run: |
-          pytest -q
+          make check
+
+      - name: Cache Whisper models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/whisper
+          key: whisper-${{ runner.os }}-small
+
+      # tests are executed via `make check`
 
   docker:
     runs-on: ubuntu-latest
@@ -88,14 +90,39 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build (and push on push)
+      # NOTE:
+      # - `--load` cannot load manifest lists / multi-attestation indexes into the local Docker engine.
+      # - For PRs we build a single-platform image and load it locally (so Trivy/SBOM can scan it without GHCR auth).
+      # - For pushes we build multi-platform and push to GHCR with provenance enabled.
+
+      - name: Build (PR: load local)
+        if: github.event_name != 'push'
+        id: build_pr
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          load: true
+          # Keep PR builds compatible with `--load` (no attestation index/manifest list).
+          provenance: false
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build (push: multi-platform + provenance + push)
+        if: github.event_name == 'push'
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
-          push: ${{ github.event_name == 'push' }}
-          load: ${{ github.event_name != 'push' }}
+          push: true
+          load: false
+          platforms: linux/amd64,linux/arm64
           tags: |
             ${{ steps.meta.outputs.tags }}
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -106,7 +133,7 @@ jobs:
 
       - name: Generate SBOM (Syft)
         id: syft
-        uses: anchore/syft-action@v0
+        uses: anchore/sbom-action@v0
         with:
           image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           output-format: spdx-json

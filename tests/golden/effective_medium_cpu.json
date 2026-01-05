@@ -1,0 +1,42 @@
+{
+  "asr_model": "medium",
+  "caps": {
+    "gpu_available": false,
+    "has_coqui_tts": false,
+    "has_demucs": false,
+    "has_pyannote": false,
+    "has_whisper": false
+  },
+  "diarizer": "auto",
+  "director": false,
+  "effective_mode": "medium",
+  "mix_mode": "legacy",
+  "multitrack": false,
+  "music_detect": false,
+  "pacing": false,
+  "qa": false,
+  "reasons": [],
+  "requested_mode": "medium",
+  "separation": "off",
+  "stream_context_seconds": 15.0,
+  "sources": {
+    "asr_model": "mode:medium",
+    "diarizer": "base",
+    "director": "base",
+    "mix_mode": "base",
+    "multitrack": "base",
+    "music_detect": "base",
+    "pacing": "base",
+    "qa": "base",
+    "separation": "base",
+    "speaker_smoothing": "base",
+    "stream_context_seconds": "mode:medium",
+    "timing_fit": "base",
+    "voice_memory": "base",
+    "voice_mode": "base"
+  },
+  "speaker_smoothing": false,
+  "timing_fit": false,
+  "voice_memory": false,
+  "voice_mode": "clone"
+}

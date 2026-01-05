@@ -1,0 +1,34 @@
+{
+  "changes": [
+    {
+      "end": 1.05,
+      "reason": "micro_turn_surrounded",
+      "speaker_from": "SPEAKER_02",
+      "speaker_to": "SPEAKER_01",
+      "start": 0.96
+    }
+  ],
+  "config": {
+    "min_turn_s": 0.25,
+    "surround_gap_s": 0.2
+  },
+  "enabled": true,
+  "scenes": [
+    {
+      "end": 0.25,
+      "reason": "audio",
+      "start": 0.0
+    },
+    {
+      "end": 1.75,
+      "reason": "audio",
+      "start": 0.25
+    },
+    {
+      "end": 3.0,
+      "reason": "audio",
+      "start": 1.75
+    }
+  ],
+  "version": 1
+}

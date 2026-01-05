@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 import json
-import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 
 from anime_v2.api.deps import Identity, current_identity
-from anime_v2.ops import audit
+from anime_v2.config import get_settings
 
 
 def _audit_dir() -> Path:
-    return Path(os.environ.get("ANIME_V2_LOG_DIR", "logs")).resolve()
+    return Path(get_settings().log_dir).resolve()
 
 
 def _audit_path_today() -> Path:
-    ts = datetime.now(tz=UTC)
+    ts = datetime.now(tz=timezone.utc)
     return _audit_dir() / f"audit-{ts:%Y%m%d}.log"
 
 
@@ -83,4 +82,3 @@ async def audit_recent(
         )
     items = items[-lim:]
     return {"items": items, "limit": lim}
-

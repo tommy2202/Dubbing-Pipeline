@@ -16,7 +16,7 @@
 </div>
 
 <div class="mt-6 grid gap-4 lg:grid-cols-3">
-  <div id="dashJobs" class="rounded-xl border border-slate-800 bg-slate-900/40 p-4 lg:col-span-2" x-data="{status:'', q:''}">
+  <div id="dashJobs" class="rounded-xl border border-slate-800 bg-slate-900/40 p-4 lg:col-span-2" x-data="{status:'', q:'', project:'', mode:'', tag:'', include_archived:false}">
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div class="text-sm text-slate-300">Jobs</div>
       <div class="flex flex-wrap items-center gap-2 text-sm">
@@ -39,6 +39,29 @@
                  @keydown.enter.prevent="reloadJobs()" />
           <div id="jobSearchHelp" class="sr-only">Press Enter to apply filters.</div>
         </div>
+        <div>
+          <label class="block text-xs text-slate-500" for="jobProject">Project</label>
+          <input id="jobProject" class="mt-1 rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                 placeholder="project name" x-model="project" @keydown.enter.prevent="reloadJobs()" />
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500" for="jobMode">Mode</label>
+          <select id="jobMode" class="mt-1 rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm" x-model="mode" @change="reloadJobs()">
+            <option value="">All</option>
+            <option value="high">high</option>
+            <option value="medium">medium</option>
+            <option value="low">low</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500" for="jobTag">Tag</label>
+          <input id="jobTag" class="mt-1 rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                 placeholder="tag" x-model="tag" @keydown.enter.prevent="reloadJobs()" />
+        </div>
+        <label class="flex items-center gap-2 pt-5 text-xs text-slate-300">
+          <input type="checkbox" class="h-4 w-4" x-model="include_archived" @change="reloadJobs()" />
+          <span>Include archived</span>
+        </label>
         <button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
                 @click="reloadJobs()">Apply</button>
       </div>
@@ -85,9 +108,17 @@
     const root = document.getElementById("dashJobs");
     const status = root && root.__x ? root.__x.$data.status : "";
     const q = root && root.__x ? root.__x.$data.q : "";
+    const project = root && root.__x ? root.__x.$data.project : "";
+    const mode = root && root.__x ? root.__x.$data.mode : "";
+    const tag = root && root.__x ? root.__x.$data.tag : "";
+    const include_archived = root && root.__x ? root.__x.$data.include_archived : false;
     const url = "/ui/partials/jobs_table?limit=25"
       + (status ? ("&status=" + encodeURIComponent(status)) : "")
-      + (q ? ("&q=" + encodeURIComponent(q)) : "");
+      + (q ? ("&q=" + encodeURIComponent(q)) : "")
+      + (project ? ("&project=" + encodeURIComponent(project)) : "")
+      + (mode ? ("&mode=" + encodeURIComponent(mode)) : "")
+      + (tag ? ("&tag=" + encodeURIComponent(tag)) : "")
+      + (include_archived ? ("&include_archived=1") : "");
     if (window.htmx) window.htmx.ajax("GET", url, "#job-table");
   }
 

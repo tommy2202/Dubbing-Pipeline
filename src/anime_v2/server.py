@@ -3,14 +3,13 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import os
-import re
 import signal
 import time
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Iterator
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,30 +18,34 @@ from starlette.templating import Jinja2Templates
 from anime_v2.api.deps import require_role, require_scope
 from anime_v2.api.middleware import request_context_middleware
 from anime_v2.api.models import AuthStore, Role, User, now_ts
-from anime_v2.api.routes_auth import router as auth_router
+from anime_v2.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
 from anime_v2.api.routes_audit import router as audit_router
+from anime_v2.api.routes_auth import router as auth_router
 from anime_v2.api.routes_keys import router as keys_router
 from anime_v2.api.routes_runtime import router as runtime_router
-from anime_v2.api.routes_settings import UserSettingsStore, router as settings_router
+from anime_v2.api.routes_settings import UserSettingsStore
+from anime_v2.api.routes_settings import router as settings_router
 from anime_v2.config import get_settings
+from anime_v2.jobs.models import Job
 from anime_v2.jobs.queue import JobQueue
 from anime_v2.jobs.store import JobStore
 from anime_v2.ops import audit
 from anime_v2.ops.metrics import REGISTRY
 from anime_v2.ops.storage import periodic_prune_tick
+from anime_v2.runtime import lifecycle
 from anime_v2.runtime.model_manager import ModelManager
 from anime_v2.runtime.scheduler import Scheduler
-from anime_v2.runtime import lifecycle
 from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.log import logger
-from anime_v2.utils.ratelimit import RateLimiter
 from anime_v2.utils.net import install_egress_policy
+from anime_v2.utils.ratelimit import RateLimiter
 from anime_v2.web.routes_jobs import router as jobs_router
-from anime_v2.web.routes_webrtc import router as webrtc_router
 from anime_v2.web.routes_ui import router as ui_router
+from anime_v2.web.routes_webrtc import router as webrtc_router
+
 
 def _output_root() -> Path:
-    return Path(os.environ.get("ANIME_V2_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
+    return Path(get_settings().output_dir).resolve()
 
 
 TEMPLATES_DIR = (Path(__file__).parent / "web" / "templates").resolve()
@@ -53,14 +56,13 @@ TEMPLATES = Jinja2Templates(directory=str(TEMPLATES_DIR))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Ensure clean boot state (tests reuse the same process).
-    try:
+    with suppress(Exception):
         lifecycle.end_draining()
-    except Exception:
-        pass
     # core pipeline stores
-    out_root = _output_root()
+    s = get_settings()
+    out_root = Path(s.output_dir).resolve()
     store = JobStore(out_root / "jobs.db")
-    q = JobQueue(store, concurrency=int(os.environ.get("JOBS_CONCURRENCY", "1")))
+    q = JobQueue(store, concurrency=int(s.jobs_concurrency))
     app.state.job_store = store
     app.state.job_queue = q
     app.state.output_root = out_root
@@ -75,10 +77,8 @@ async def lifespan(app: FastAPI):
         try:
             fut = _asyncio.run_coroutine_threadsafe(coro, loop)
         except Exception:
-            try:
+            with suppress(Exception):
                 coro.close()
-            except Exception:
-                pass
             raise
         fut.result(timeout=5.0)
 
@@ -98,8 +98,12 @@ async def lifespan(app: FastAPI):
         app.state.user_settings_store = None
 
     # bootstrap admin user
-    s = get_settings()
     install_egress_policy()
+    # Remote-access mode summary (Tailscale / Cloudflare hardening)
+    try:
+        log_remote_access_boot_summary()
+    except Exception as ex:
+        logger.warning("remote_access_boot_summary_failed", error=str(ex))
     audit.emit(
         "policy.egress",
         request_id=None,
@@ -135,14 +139,14 @@ async def lifespan(app: FastAPI):
     async def _prune_loop() -> None:
         while True:
             try:
-                periodic_prune_tick(output_root=OUTPUT_ROOT)
+                periodic_prune_tick(output_root=out_root)
             except Exception as ex:
                 logger.warning("workdir_prune_failed", error=str(ex))
-            await _asyncio2.sleep(float(os.environ.get("WORK_PRUNE_INTERVAL_SEC", "3600")))
+            await _asyncio2.sleep(float(s.work_prune_interval_sec))
 
     try:
         # run one tick at boot, then start loop
-        periodic_prune_tick(output_root=OUTPUT_ROOT)
+        periodic_prune_tick(output_root=out_root)
         _prune_task = _asyncio2.create_task(_prune_loop())
     except Exception:
         _prune_task = None
@@ -154,13 +158,11 @@ async def lifespan(app: FastAPI):
         logger.warning("model_prewarm_exception", error=str(ex))
     yield
     # Graceful drain on shutdown (or if signals have already initiated drain).
-    lifecycle.begin_draining(timeout_sec=int(os.environ.get("DRAIN_TIMEOUT_SEC", "120")))
-    try:
+    lifecycle.begin_draining(timeout_sec=int(s.drain_timeout_sec))
+    with suppress(Exception):
         sched.stop()
-    except Exception:
-        pass
     try:
-        await q.graceful_shutdown(timeout_s=int(os.environ.get("DRAIN_TIMEOUT_SEC", "120")))
+        await q.graceful_shutdown(timeout_s=int(s.drain_timeout_sec))
     finally:
         if _prune_task is not None:
             _prune_task.cancel()
@@ -169,10 +171,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="anime_v2 server", lifespan=lifespan)
 app.state.templates = TEMPLATES
-try:
+with suppress(Exception):
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
-except Exception:
-    pass
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Signal handlers (best-effort, uvicorn will also trigger lifespan shutdown)
@@ -181,7 +181,7 @@ try:
 
     def _handle_term(signum, _frame=None):
         if not lifecycle.is_draining():
-            lifecycle.begin_draining(timeout_sec=int(os.environ.get("DRAIN_TIMEOUT_SEC", "120")))
+            lifecycle.begin_draining(timeout_sec=int(get_settings().drain_timeout_sec))
 
     for _sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(_sig, _handle_term)
@@ -190,17 +190,19 @@ except Exception:
     _sig_registered = False
 
 # OpenTelemetry (opt-in via OTEL_EXPORTER_OTLP_ENDPOINT)
-_otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+_otel_endpoint = get_settings().otel_exporter_otlp_endpoint
 if _otel_endpoint:
     try:
         from opentelemetry import trace  # type: ignore
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter  # type: ignore
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,  # type: ignore
+        )
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # type: ignore
         from opentelemetry.sdk.resources import Resource  # type: ignore
         from opentelemetry.sdk.trace import TracerProvider  # type: ignore
         from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore
 
-        resource = Resource.create({"service.name": os.environ.get("OTEL_SERVICE_NAME", "anime_v2")})
+        resource = Resource.create({"service.name": str(get_settings().otel_service_name)})
         provider = TracerProvider(resource=resource)
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=_otel_endpoint)))
         trace.set_tracer_provider(provider)
@@ -232,6 +234,66 @@ app.include_router(webrtc_router)
 app.include_router(ui_router)
 
 
+def _is_https_request(request: Request) -> bool:
+    """
+    Determine HTTPS without trusting forwarded headers unless in Cloudflare mode.
+    """
+    try:
+        if str(request.url.scheme).lower() == "https":
+            return True
+    except Exception:
+        pass
+    s = get_settings()
+    mode = str(getattr(s, "remote_access_mode", "off") or "off").strip().lower()
+    trust = bool(getattr(s, "trust_proxy_headers", False)) and mode == "cloudflare"
+    if not trust:
+        return False
+    xf = (request.headers.get("x-forwarded-proto") or "").strip().lower()
+    if xf == "https":
+        return True
+    cfv = (request.headers.get("cf-visitor") or "").lower()
+    return "https" in cfv
+
+
+def _csp_header_value() -> str:
+    """
+    CSP baseline for this UI.
+
+    Note: the UI currently relies on CDN-hosted Tailwind/HTMX/Alpine and video.js/hls.js.
+    """
+    return (
+        "default-src 'self'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'; "
+        "object-src 'none'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline' https://vjs.zencdn.net https://cdn.tailwindcss.com; "
+        "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com https://vjs.zencdn.net https://cdn.jsdelivr.net; "
+        "connect-src 'self'; "
+        "media-src 'self' blob: data:; "
+    )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("x-content-type-options", "nosniff")
+    resp.headers.setdefault("x-frame-options", "DENY")
+    resp.headers.setdefault("referrer-policy", "no-referrer")
+    resp.headers.setdefault(
+        "permissions-policy",
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+    )
+    ct = (resp.headers.get("content-type") or "").lower()
+    if "text/html" in ct:
+        resp.headers.setdefault("content-security-policy", _csp_header_value())
+    if _is_https_request(request):
+        resp.headers.setdefault("strict-transport-security", "max-age=31536000; includeSubDomains")
+    return resp
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     t0 = time.perf_counter()
@@ -242,11 +304,20 @@ async def log_requests(request: Request, call_next):
     finally:
         dt_ms = (time.perf_counter() - t0) * 1000.0
         status_code = getattr(locals().get("response"), "status_code", 0)
-        logger.info("http_done", ip=ip, method=request.method, path=path, status=status_code, duration_ms=dt_ms)
+        logger.info(
+            "http_done",
+            ip=ip,
+            method=request.method,
+            path=path,
+            status=status_code,
+            duration_ms=dt_ms,
+        )
     return response
 
 
 # Must be outermost so request_id is present for all logs (including log_requests).
+# Remote access enforcement should run *inside* request_context so denied requests still have request_id.
+app.middleware("http")(remote_access_middleware)
 app.middleware("http")(request_context_middleware)
 
 
@@ -325,7 +396,7 @@ def _safe_output_path(rel: str) -> Path:
     try:
         p.relative_to(OUTPUT_ROOT)
     except Exception:
-        raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(status_code=404, detail="Not found") from None
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=404, detail="Not found")
     return p
@@ -347,7 +418,7 @@ async def metrics():
     try:
         from prometheus_client import CONTENT_TYPE_LATEST, generate_latest  # type: ignore
     except Exception as ex:  # pragma: no cover
-        raise HTTPException(status_code=500, detail=f"prometheus-client unavailable: {ex}")
+        raise HTTPException(status_code=500, detail=f"prometheus-client unavailable: {ex}") from ex
     return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -371,7 +442,7 @@ async def readyz(request: Request):
         if not os.access(str(out_root), os.W_OK):
             raise RuntimeError("Output not writable")
     except Exception as ex:
-        raise HTTPException(status_code=503, detail=f"not ready: {ex}")
+        raise HTTPException(status_code=503, detail=f"not ready: {ex}") from ex
     return {"ok": True}
 
 
@@ -379,6 +450,12 @@ async def readyz(request: Request):
 async def home(request: Request, _: object = Depends(require_role(Role.viewer))):
     videos = _iter_videos()
     return TEMPLATES.TemplateResponse(request, "index.html", {"videos": videos})
+
+
+@app.get("/login")
+async def login_redirect() -> Response:
+    # Canonical UI login page (mobile-friendly). Keep /login for muscle memory.
+    return RedirectResponse(url="/ui/login", status_code=302)
 
 
 @app.get("/video/{job}")
@@ -416,4 +493,3 @@ async def files(request: Request, path: str, _: object = Depends(require_scope("
         "Content-Length": str(end - start + 1),
     }
     return StreamingResponse(gen, status_code=206, media_type=ctype, headers=headers)
-

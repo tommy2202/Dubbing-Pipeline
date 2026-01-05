@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from anime_v2.api.deps import require_scope
+from anime_v2.config import get_settings
 from anime_v2.jobs.models import JobState
 from anime_v2.utils.log import logger
-from anime_v2.api.deps import require_scope
+from anime_v2.utils.ratelimit import RateLimiter
 
 router = APIRouter()
 
@@ -26,16 +28,31 @@ def _get_store(request: Request):
 
 
 def _ice_servers() -> list[dict]:
-    stun = os.environ.get("WEBRTC_STUN", "stun:stun.l.google.com:19302").strip()
+    s = get_settings()
+    stun = str(s.webrtc_stun).strip()
     servers: list[dict] = []
     if stun:
         servers.append({"urls": [u.strip() for u in stun.split(",") if u.strip()]})
-    turn_url = os.environ.get("TURN_URL")
-    turn_user = os.environ.get("TURN_USERNAME")
-    turn_pass = os.environ.get("TURN_PASSWORD")
-    if turn_url and turn_user and turn_pass:
+    turn_url = s.turn_url
+    turn_user = s.turn_username
+    turn_pass = s.turn_password
+    # Avoid leaking TURN secrets by default; only include if explicitly enabled.
+    if (
+        bool(getattr(s, "webrtc_expose_turn_credentials", False))
+        and turn_url
+        and turn_user
+        and turn_pass
+    ):
         servers.append({"urls": [turn_url], "username": turn_user, "credential": turn_pass})
     return servers
+
+
+def _get_rl(request: Request) -> RateLimiter:
+    rl = getattr(request.app.state, "rate_limiter", None)
+    if rl is None:
+        rl = RateLimiter()
+        request.app.state.rate_limiter = rl
+    return rl
 
 
 def _resolve_job_media_path(request: Request, job_id: str, video_path: str | None = None) -> Path:
@@ -69,8 +86,14 @@ class _Peer:
 
 _peers: dict[str, _Peer] = {}
 _peers_lock = asyncio.Lock()
-_IDLE_TIMEOUT_S = int(os.environ.get("WEBRTC_IDLE_TIMEOUT_S", "300"))
-_MAX_PCS_PER_IP = int(os.environ.get("WEBRTC_MAX_PCS_PER_IP", "2"))
+
+
+def _idle_timeout_s() -> int:
+    return int(get_settings().webrtc_idle_timeout_s)
+
+
+def _max_pcs_per_ip() -> int:
+    return int(get_settings().webrtc_max_pcs_per_ip)
 
 
 async def _close_peer(token: str, reason: str) -> None:
@@ -99,22 +122,21 @@ async def _idle_watch(token: str) -> None:
             if peer is None:
                 return
             idle = time.monotonic() - peer.last_activity
-        if idle > _IDLE_TIMEOUT_S:
+        if idle > _idle_timeout_s():
             await _close_peer(token, "idle_timeout")
             return
 
 
 @router.post("/webrtc/offer")
-async def webrtc_offer(request: Request) -> dict:
-    # read-only access required
-    require_scope("read:job")(request)  # type: ignore[misc]
+async def webrtc_offer(request: Request, _: object = Depends(require_scope("read:job"))) -> dict:
+    # auth required (cookie/bearer/api-key), CSRF enforced by require_scope for cookie flows.
 
     # Lazy import so local installs don't break if aiortc/av aren't installed.
     try:
         from aiortc import RTCPeerConnection, RTCSessionDescription  # type: ignore
         from aiortc.contrib.media import MediaPlayer  # type: ignore
     except Exception as ex:
-        raise HTTPException(status_code=503, detail=f"WebRTC deps not installed: {ex}")
+        raise HTTPException(status_code=503, detail=f"WebRTC deps not installed: {ex}") from ex
 
     body = await request.json()
     if not isinstance(body, dict):
@@ -127,13 +149,19 @@ async def webrtc_offer(request: Request) -> dict:
     if not job_id or not isinstance(sdp, str) or not isinstance(typ, str):
         raise HTTPException(status_code=400, detail="Required: job_id, sdp, type")
 
-    media_path = _resolve_job_media_path(request, job_id=job_id, video_path=str(video_path) if video_path else None)
+    media_path = _resolve_job_media_path(
+        request, job_id=job_id, video_path=str(video_path) if video_path else None
+    )
 
     ip = request.client.host if request.client else "unknown"
+    # Rate limit offers (per IP) to avoid resource exhaustion.
+    rl = _get_rl(request)
+    if not rl.allow(f"webrtc:offer:ip:{ip}", limit=10, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     async with _peers_lock:
         active_for_ip = sum(1 for p in _peers.values() if p.ip == ip)
-        if active_for_ip >= _MAX_PCS_PER_IP:
+        if active_for_ip >= _max_pcs_per_ip():
             raise HTTPException(status_code=429, detail="Too many peer connections for this IP")
 
     cfg = {"iceServers": _ice_servers()}
@@ -154,7 +182,9 @@ async def webrtc_offer(request: Request) -> dict:
 
         now = time.monotonic()
         async with _peers_lock:
-            _peers[peer_token] = _Peer(pc=pc, player=player, created_at=now, last_activity=now, ip=ip)
+            _peers[peer_token] = _Peer(
+                pc=pc, player=player, created_at=now, last_activity=now, ip=ip
+            )
 
         def touch() -> None:
             # best-effort update
@@ -163,6 +193,7 @@ async def webrtc_offer(request: Request) -> dict:
                     p = _peers.get(peer_token)
                     if p:
                         p.last_activity = time.monotonic()
+
             asyncio.create_task(_t())
 
         @pc.on("iceconnectionstatechange")
@@ -184,26 +215,33 @@ async def webrtc_offer(request: Request) -> dict:
         await pc.setLocalDescription(answer)
 
         asyncio.create_task(_idle_watch(peer_token))
-        logger.info("webrtc peer created token=%s job_id=%s ip=%s file=%s", peer_token, job_id, ip, media_path.name)
+        logger.info(
+            "webrtc peer created token=%s job_id=%s ip=%s file=%s",
+            peer_token,
+            job_id,
+            ip,
+            media_path.name,
+        )
 
-        return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type, "peer_token": peer_token}
+        return {
+            "sdp": pc.localDescription.sdp,
+            "type": pc.localDescription.type,
+            "peer_token": peer_token,
+        }
     except HTTPException:
         raise
     except Exception as ex:
-        try:
+        with suppress(Exception):
             await pc.close()
-        except Exception:
-            pass
-        try:
+        with suppress(Exception):
             if player is not None:
                 player.stop()
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=f"WebRTC offer failed: {ex}")
+        raise HTTPException(status_code=500, detail=f"WebRTC offer failed: {ex}") from ex
 
 
 @router.get("/webrtc/demo", response_class=HTMLResponse)
 async def webrtc_demo(request: Request) -> HTMLResponse:
+    # Demo page is protected.
     require_scope("read:job")(request)  # type: ignore[misc]
     store = _get_store(request)
     jobs = [j for j in store.list(limit=100) if j.state == JobState.DONE and j.output_mkv]
@@ -211,7 +249,12 @@ async def webrtc_demo(request: Request) -> HTMLResponse:
     ice = _ice_servers()
     ice_json = json.dumps(ice)
 
-    opts = "\n".join([f'<option value="{j.id}">{j.id} — {Path(j.output_mkv).name}</option>' for j in jobs]) or "<option value=\"\">(no done jobs)</option>"
+    opts = (
+        "\n".join(
+            [f'<option value="{j.id}">{j.id} — {Path(j.output_mkv).name}</option>' for j in jobs]
+        )
+        or '<option value="">(no done jobs)</option>'
+    )
 
     html = f"""<!doctype html>
 <html>
@@ -293,4 +336,3 @@ async def webrtc_demo(request: Request) -> HTMLResponse:
   </body>
 </html>"""
     return HTMLResponse(html)
-

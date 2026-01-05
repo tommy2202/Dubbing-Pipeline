@@ -71,7 +71,11 @@ def test_transcript_get_put_and_persist(tmp_path: Path) -> None:
         p = c.put(
             "/api/jobs/j_tr_1/transcript",
             headers=headers,
-            json={"updates": [{"index": 1, "tgt_text": "Hello there", "approved": True, "flags": ["approved"]}]},
+            json={
+                "updates": [
+                    {"index": 1, "tgt_text": "Hello there", "approved": True, "flags": ["approved"]}
+                ]
+            },
         )
         assert p.status_code == 200
 
@@ -125,4 +129,3 @@ def test_transcript_synthesize_sets_resynth_flag(tmp_path: Path) -> None:
         assert j is not None
         assert j.state == JobState.QUEUED
         assert isinstance(j.runtime.get("resynth"), dict)
-

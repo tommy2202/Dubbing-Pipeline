@@ -5,9 +5,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from anime_v2.api.models import Role, User, now_ts
 from anime_v2.config import get_settings
 from anime_v2.server import app
-from anime_v2.api.models import Role, User, now_ts
 from anime_v2.utils.crypto import PasswordHasher, random_id
 
 
@@ -45,7 +45,11 @@ def test_viewer_is_read_only_for_state_changing_apis(tmp_path: Path) -> None:
         headers = _login(c, username="viewer1", password="viewerpass")
 
         # viewer cannot submit jobs
-        rj = c.post("/api/jobs", headers=headers, json={"video_path": "/workspace/Input/Test.mp4", "device": "cpu", "mode": "low"})
+        rj = c.post(
+            "/api/jobs",
+            headers=headers,
+            json={"video_path": "/workspace/Input/Test.mp4", "device": "cpu", "mode": "low"},
+        )
         assert rj.status_code in {403, 401}
 
         # viewer cannot update settings
@@ -103,6 +107,7 @@ def test_admin_state_change_requires_csrf_when_using_cookies(tmp_path: Path) -> 
         assert r.status_code == 200
         token = r.json()["access_token"]
 
-        r2 = c.post("/api/presets", headers={"Authorization": f"Bearer {token}"}, json={"name": "no_csrf"})
+        r2 = c.post(
+            "/api/presets", headers={"Authorization": f"Bearer {token}"}, json={"name": "no_csrf"}
+        )
         assert r2.status_code == 403
-

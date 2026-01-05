@@ -53,7 +53,17 @@ def test_job_characters_persist(tmp_path: Path) -> None:
         put = c.put(
             "/api/jobs/j_char_1/characters",
             headers=headers,
-            json={"items": [{"character_id": "SPEAKER_01", "label": "Alice", "speaker_strategy": "preset", "tts_speaker": "default", "language": "en"}]},
+            json={
+                "items": [
+                    {
+                        "character_id": "SPEAKER_01",
+                        "label": "Alice",
+                        "speaker_strategy": "preset",
+                        "tts_speaker": "default",
+                        "language": "en",
+                    }
+                ]
+            },
         )
         assert put.status_code == 200
         get = c.get("/api/jobs/j_char_1/characters", headers=headers)
@@ -105,4 +115,3 @@ def test_logs_stream_endpoint_returns_sse(tmp_path: Path) -> None:
         assert r.status_code == 200
         assert "text/event-stream" in (r.headers.get("content-type") or "")
         assert "hello" in r.text
-

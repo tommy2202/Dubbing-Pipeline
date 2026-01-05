@@ -1,0 +1,28 @@
+.env
+.env.secrets
+
+# local secret files
+secrets/
+*.key
+*.pem
+
+# python caches
+__pycache__/
+*.pyc
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# runtime artifacts
+logs/
+Output/
+Input/
+uploads/
+outputs/
+_tmp*/
+*.db
+Input/uploads/
+
+# ntfy local/private config (do not commit)
+docker/ntfy/server.yml

@@ -23,7 +23,10 @@ def test_audit_recent_filters_to_current_user(tmp_path: Path) -> None:
         r = c.post("/api/auth/login", json={"username": "admin", "password": "adminpass"})
         assert r.status_code == 200
         data = r.json()
-        headers = {"Authorization": f"Bearer {data['access_token']}", "X-CSRF-Token": data["csrf_token"]}
+        headers = {
+            "Authorization": f"Bearer {data['access_token']}",
+            "X-CSRF-Token": data["csrf_token"],
+        }
 
         r2 = c.get("/api/audit/recent?limit=50", headers=headers)
         assert r2.status_code == 200
@@ -32,4 +35,3 @@ def test_audit_recent_filters_to_current_user(tmp_path: Path) -> None:
         assert isinstance(items, list)
         # At least one auth event should exist.
         assert any(isinstance(it, dict) and (it.get("event") == "auth.login_ok") for it in items)
-

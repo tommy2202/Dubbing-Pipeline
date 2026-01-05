@@ -35,4 +35,3 @@ def test_translate_falls_back_to_original_text_when_empty(monkeypatch):
     lines = [{"start": 0.0, "end": 1.0, "speaker_id": "Speaker1", "text": "Bonjour."}]
     out = tr.translate_lines(lines, src_lang="fr", tgt_lang="en")
     assert out[0]["text"] == "Bonjour."
-

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -17,7 +17,7 @@ class JobState(str, Enum):
 
 
 def now_utc() -> str:
-    return datetime.now(tz=UTC).isoformat()
+    return datetime.now(tz=timezone.utc).isoformat()
 
 
 def new_id() -> str:
@@ -53,7 +53,7 @@ class Job:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Job":
+    def from_dict(cls, d: dict[str, Any]) -> Job:
         dd = dict(d)
         # Backwards-compatible defaults for older persisted jobs.
         dd.setdefault("owner_id", "")
@@ -66,4 +66,3 @@ class Job:
             st = st.split(".", 1)[1]
         dd["state"] = JobState(st)
         return cls(**dd)
-

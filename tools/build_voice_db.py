@@ -14,7 +14,7 @@ def _build(preset_dir: Path, db_path: Path, embeddings_dir: Path) -> None:
             "Missing dependencies. Install resemblyzer + numpy, e.g.\n"
             "  pip install -e '.[tts]'\n"
             f"Original error: {ex}"
-        )
+        ) from ex
 
     preset_dir = preset_dir.resolve()
     db_path = db_path.resolve()
@@ -63,9 +63,13 @@ def _build(preset_dir: Path, db_path: Path, embeddings_dir: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build preset voice embeddings DB (Resemblyzer).")
-    ap.add_argument("--preset-dir", default="voices/presets", help="Directory containing preset subfolders")
+    ap.add_argument(
+        "--preset-dir", default="voices/presets", help="Directory containing preset subfolders"
+    )
     ap.add_argument("--db", default="voices/presets.json", help="Output JSON DB path")
-    ap.add_argument("--embeddings-dir", default="voices/embeddings", help="Directory for .npy embeddings")
+    ap.add_argument(
+        "--embeddings-dir", default="voices/embeddings", help="Directory for .npy embeddings"
+    )
     args = ap.parse_args()
 
     _build(Path(args.preset_dir), Path(args.db), Path(args.embeddings_dir))
@@ -73,4 +77,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

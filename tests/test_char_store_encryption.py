@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from anime_v2.stages.character_store import Character, CharacterStore
 from anime_v2.config import get_settings
+from anime_v2.stages.character_store import Character, CharacterStore
 
 
 def _b64_32() -> str:
@@ -26,7 +26,9 @@ def test_character_store_requires_key(tmp_path: Path, monkeypatch: pytest.Monkey
     assert "CHAR_STORE_KEY" in str(ex.value)
 
 
-def test_character_store_roundtrip_encrypted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_character_store_roundtrip_encrypted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     p = tmp_path / "characters.json"
     monkeypatch.setenv("CHAR_STORE_KEY", _b64_32())
     monkeypatch.setenv("CHAR_STORE_KEY_FILE", str(tmp_path / "missing.key"))
@@ -50,4 +52,3 @@ def test_character_store_roundtrip_encrypted(tmp_path: Path, monkeypatch: pytest
     s2.load()
     assert "SPEAKER_01" in s2.characters
     assert s2.characters["SPEAKER_01"].shows.get("show") == 1
-
