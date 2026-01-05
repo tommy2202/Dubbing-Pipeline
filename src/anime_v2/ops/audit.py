@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -53,7 +53,7 @@ def emit(
     """
     Append-only audit log (newline-delimited JSON), daily rotated by date.
     """
-    ts = datetime.now(tz=UTC)
+    ts = datetime.now(tz=timezone.utc)
     rec: dict[str, Any] = {"ts": ts.isoformat(), "event": event}
     if request_id:
         rec["request_id"] = request_id

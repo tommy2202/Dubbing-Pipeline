@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from anime_v2.config import get_settings
 from anime_v2.jobs.models import Job, JobState
@@ -51,8 +51,8 @@ def get_limits() -> Limits:
 
 def _same_utc_day(a_iso: str, b_iso: str) -> bool:
     try:
-        a = datetime.fromisoformat(a_iso.replace("Z", "+00:00")).astimezone(UTC).date()
-        b = datetime.fromisoformat(b_iso.replace("Z", "+00:00")).astimezone(UTC).date()
+        a = datetime.fromisoformat(a_iso.replace("Z", "+00:00")).astimezone(timezone.utc).date()
+        b = datetime.fromisoformat(b_iso.replace("Z", "+00:00")).astimezone(timezone.utc).date()
         return a == b
     except Exception:
         return False

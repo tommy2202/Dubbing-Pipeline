@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ from anime_v2.voice_memory.store import VoiceMemoryStore, compute_episode_key
 
 
 def _now() -> str:
-    return __import__("datetime").datetime.now(tz=__import__("datetime").UTC).isoformat()
+    return datetime.now(tz=timezone.utc).isoformat()
 
 
 def _safe_float(x: Any) -> float | None:

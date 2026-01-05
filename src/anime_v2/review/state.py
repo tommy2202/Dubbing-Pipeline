@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from contextlib import suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from anime_v2.utils.io import atomic_write_text, read_json
 
 
 def now_utc() -> str:
-    return __import__("datetime").datetime.now(tz=__import__("datetime").UTC).isoformat()
+    return datetime.now(tz=timezone.utc).isoformat()
 
 
 def review_dir(job_dir: Path) -> Path:

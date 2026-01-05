@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,7 @@ def _audit_dir() -> Path:
 
 
 def _audit_path_today() -> Path:
-    ts = datetime.now(tz=UTC)
+    ts = datetime.now(tz=timezone.utc)
     return _audit_dir() / f"audit-{ts:%Y%m%d}.log"
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ from anime_v2.voice_memory.embeddings import compute_embedding, match_embedding
 
 def _now() -> str:
     # keep iso-ish string without new deps
-    return __import__("datetime").datetime.now(tz=__import__("datetime").UTC).isoformat()
+    return datetime.now(tz=timezone.utc).isoformat()
 
 
 def _safe_mkdir(p: Path) -> None:

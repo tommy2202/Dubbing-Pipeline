@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ def overrides_applied_log_path(job_dir: Path) -> Path:
 
 
 def _now_utc() -> str:
-    return __import__("datetime").datetime.now(tz=__import__("datetime").UTC).isoformat()
+    return datetime.now(tz=timezone.utc).isoformat()
 
 
 def _sha256_bytes(b: bytes) -> str:
