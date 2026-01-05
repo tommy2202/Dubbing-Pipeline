@@ -70,9 +70,7 @@ def _sanitize_project_name(name: str) -> str:
     return s or ""
 
 
-def resolve_style_guide_path(
-    *, project: str | None, style_guide_path: Path | None
-) -> Path | None:
+def resolve_style_guide_path(*, project: str | None, style_guide_path: Path | None) -> Path | None:
     if style_guide_path is not None:
         p = Path(style_guide_path).expanduser()
         return p.resolve()
@@ -414,6 +412,7 @@ def apply_style_guide_to_segments(
                 )
     if out_jsonl is not None:
         out_jsonl.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(out_jsonl, "\n".join(records) + ("\n" if records else ""), encoding="utf-8")
+        atomic_write_text(
+            out_jsonl, "\n".join(records) + ("\n" if records else ""), encoding="utf-8"
+        )
     return out
-

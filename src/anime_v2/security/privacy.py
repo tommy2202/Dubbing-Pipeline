@@ -41,7 +41,16 @@ def resolve_privacy(runtime: dict[str, Any] | None = None) -> PrivacyOptions:
     rt = dict(runtime or {}) if isinstance(runtime, dict) else {}
     s = get_settings()
 
-    mode = str(rt.get("privacy_mode") or rt.get("privacy") or getattr(s, "privacy_mode", "off") or "off").strip().lower()
+    mode = (
+        str(
+            rt.get("privacy_mode")
+            or rt.get("privacy")
+            or getattr(s, "privacy_mode", "off")
+            or "off"
+        )
+        .strip()
+        .lower()
+    )
     privacy_on = mode in {"on", "1", "true", "yes"}
 
     no_store_transcript = _truthy(rt.get("no_store_transcript")) or bool(
@@ -67,4 +76,3 @@ def resolve_privacy(runtime: dict[str, Any] | None = None) -> PrivacyOptions:
         no_store_source_audio=bool(no_store_source_audio),
         minimal_artifacts=bool(minimal_artifacts),
     )
-

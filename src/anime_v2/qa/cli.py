@@ -26,7 +26,9 @@ def qa_run(job: str, top_n: int, fail_only: bool, no_write: bool) -> None:
     - a job directory path, or
     - a job name under Output/ (same behavior as review commands).
     """
-    summary = score_job(job, enabled=True, write_outputs=(not no_write), top_n=top_n, fail_only=fail_only)
+    summary = score_job(
+        job, enabled=True, write_outputs=(not no_write), top_n=top_n, fail_only=fail_only
+    )
     click.echo(json.dumps(summary, indent=2, sort_keys=True))
 
 
@@ -41,4 +43,3 @@ def qa_show(job: str) -> None:
     if not p.exists():
         raise click.ClickException(f"Missing QA summary: {p} (run `anime-v2 qa run {job}`)")
     click.echo(p.read_text(encoding="utf-8", errors="replace"))
-

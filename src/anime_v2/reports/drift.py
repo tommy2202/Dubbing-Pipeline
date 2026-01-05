@@ -151,7 +151,9 @@ def write_drift_snapshot(
     (job_dir / "analysis").mkdir(parents=True, exist_ok=True)
     project = _job_project_name(job_dir)
     job_id = str(job_dir.name)
-    episode_key = compute_episode_key(audio_hash=None, video_path=Path(video_path) if video_path else None)
+    episode_key = compute_episode_key(
+        audio_hash=None, video_path=Path(video_path) if video_path else None
+    )
 
     vm = VoiceMemoryStore(Path(voice_memory_dir).resolve())
     chars = vm.list_characters()
@@ -279,13 +281,23 @@ def write_drift_reports(
         lines.append("No previous episode snapshot found for comparison.")
     else:
         lines.append("")
-        lines.append(f"Comparing against previous episode `{_md_escape(str(prev.get('episode_key') or ''))}`.")
+        lines.append(
+            f"Comparing against previous episode `{_md_escape(str(prev.get('episode_key') or ''))}`."
+        )
 
         # Voice drift
         lines.append("")
         lines.append("### Voice drift (per character)")
-        cur_chars = (snap.get("voice") or {}).get("characters") if isinstance(snap.get("voice"), dict) else {}
-        prev_chars = (prev.get("voice") or {}).get("characters") if isinstance(prev.get("voice"), dict) else {}
+        cur_chars = (
+            (snap.get("voice") or {}).get("characters")
+            if isinstance(snap.get("voice"), dict)
+            else {}
+        )
+        prev_chars = (
+            (prev.get("voice") or {}).get("characters")
+            if isinstance(prev.get("voice"), dict)
+            else {}
+        )
         if not isinstance(cur_chars, dict) or not isinstance(prev_chars, dict):
             lines.append("- (no voice data)")
         else:
@@ -296,8 +308,15 @@ def write_drift_reports(
                     continue
                 prow = prev_chars.get(cid)
                 emb = row.get("embedding") if isinstance(row.get("embedding"), list) else None
-                pemb = prow.get("embedding") if isinstance(prow, dict) and isinstance(prow.get("embedding"), list) else None
-                cos = _cosine([float(x) for x in emb] if emb else None, [float(x) for x in pemb] if pemb else None)
+                pemb = (
+                    prow.get("embedding")
+                    if isinstance(prow, dict) and isinstance(prow.get("embedding"), list)
+                    else None
+                )
+                cos = _cosine(
+                    [float(x) for x in emb] if emb else None,
+                    [float(x) for x in pemb] if pemb else None,
+                )
                 vm0 = str(row.get("voice_mode") or "")
                 vm1 = str(prow.get("voice_mode") or "") if isinstance(prow, dict) else ""
                 pv0 = str(row.get("preset_voice_id") or "")
@@ -310,8 +329,16 @@ def write_drift_reports(
         # Glossary drift
         lines.append("")
         lines.append("### Glossary usage drift")
-        cur_g = (snap.get("glossary") or {}).get("counts") if isinstance(snap.get("glossary"), dict) else {}
-        prev_g = (prev.get("glossary") or {}).get("counts") if isinstance(prev.get("glossary"), dict) else {}
+        cur_g = (
+            (snap.get("glossary") or {}).get("counts")
+            if isinstance(snap.get("glossary"), dict)
+            else {}
+        )
+        prev_g = (
+            (prev.get("glossary") or {}).get("counts")
+            if isinstance(prev.get("glossary"), dict)
+            else {}
+        )
         if not isinstance(cur_g, dict) or not isinstance(prev_g, dict):
             lines.append("- (no glossary data)")
         else:
@@ -373,7 +400,9 @@ def write_drift_reports(
         ca = str(d.get("created_at") or "")
         q = d.get("qa") if isinstance(d.get("qa"), dict) else {}
         sc = _safe_float(q.get("score")) if isinstance(q, dict) else None
-        counts = q.get("counts") if isinstance(q, dict) and isinstance(q.get("counts"), dict) else {}
+        counts = (
+            q.get("counts") if isinstance(q, dict) and isinstance(q.get("counts"), dict) else {}
+        )
         season_lines.append(
             f"| `{_md_escape(ek2)}` | `{_md_escape(ca)}` | {'' if sc is None else f'{sc:.1f}'} | "
             f"{int(counts.get('fail',0) if isinstance(counts, dict) else 0)} | "
@@ -382,6 +411,7 @@ def write_drift_reports(
     season_md = reports_root / "season_report.md"
     atomic_write_text(season_md, "\n".join(season_lines).rstrip() + "\n", encoding="utf-8")
 
-    logger.info("drift_reports_written", job=str(job_dir.name), project=str(project), episode_key=str(ek))
+    logger.info(
+        "drift_reports_written", job=str(job_dir.name), project=str(project), episode_key=str(ek)
+    )
     return drift_md, season_md
-

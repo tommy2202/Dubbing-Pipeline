@@ -45,7 +45,9 @@ def file_fingerprint(path: Path) -> dict[str, Any]:
 
 
 def params_hash(params: dict[str, Any]) -> str:
-    blob = json.dumps(params, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    blob = json.dumps(params, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return hashlib.sha256(blob).hexdigest()
 
 
@@ -74,7 +76,9 @@ class StageManifest:
 
 
 def _hash_inputs(inputs: dict[str, Any]) -> str:
-    blob = json.dumps(inputs, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    blob = json.dumps(inputs, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return hashlib.sha256(blob).hexdigest()
 
 
@@ -133,4 +137,3 @@ def can_resume_stage(
     if str(data.get("params_hash") or "") != params_hash(params):
         return False
     return all(Path(out).exists() for out in expected_outputs)
-

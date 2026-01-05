@@ -36,7 +36,9 @@ def _parse_matrix(md: str) -> dict[str, dict[str, str]]:
     return out
 
 
-def _expected_from_matrix(matrix: dict[str, dict[str, str]], *, mode: str, gpu: bool) -> dict[str, object]:
+def _expected_from_matrix(
+    matrix: dict[str, dict[str, str]], *, mode: str, gpu: bool
+) -> dict[str, object]:
     """
     Convert the table cells to concrete expectations for our resolver output.
     """
@@ -61,13 +63,17 @@ def _expected_from_matrix(matrix: dict[str, dict[str, str]], *, mode: str, gpu: 
             return False
         return "as_base"
 
-    exp["speaker_smoothing"] = bool(cell_bool(matrix["**Speaker smoothing**"][mode])) if mode == "high" else (
-        False if "off" in matrix["**Speaker smoothing**"][mode].lower() else "as_base"
+    exp["speaker_smoothing"] = (
+        bool(cell_bool(matrix["**Speaker smoothing**"][mode]))
+        if mode == "high"
+        else (False if "off" in matrix["**Speaker smoothing**"][mode].lower() else "as_base")
     )
     exp["voice_memory"] = "on" in matrix["**Voice memory**"][mode].lower()
 
     # diarizer: low expects off
-    exp["diarizer"] = "off" if "off" in matrix["**Diarization**"][mode].lower() and mode == "low" else "auto"
+    exp["diarizer"] = (
+        "off" if "off" in matrix["**Diarization**"][mode].lower() and mode == "low" else "auto"
+    )
 
     # separation
     sep_cell = matrix["**Separation (Demucs)**"][mode].lower()
@@ -179,4 +185,3 @@ def test_golden_snapshot_cpu_only(mode: str) -> None:
     )
     eff = resolve_effective_settings(mode=mode, base=base, overrides={}, caps=caps)
     assert eff.to_dict() == expected
-

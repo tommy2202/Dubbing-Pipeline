@@ -37,7 +37,12 @@ def _ice_servers() -> list[dict]:
     turn_user = s.turn_username
     turn_pass = s.turn_password
     # Avoid leaking TURN secrets by default; only include if explicitly enabled.
-    if bool(getattr(s, "webrtc_expose_turn_credentials", False)) and turn_url and turn_user and turn_pass:
+    if (
+        bool(getattr(s, "webrtc_expose_turn_credentials", False))
+        and turn_url
+        and turn_user
+        and turn_pass
+    ):
         servers.append({"urls": [turn_url], "username": turn_user, "credential": turn_pass})
     return servers
 

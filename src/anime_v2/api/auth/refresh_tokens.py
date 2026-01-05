@@ -120,4 +120,3 @@ def revoke_refresh_token_best_effort(*, store: AuthStore, refresh_token: str) ->
             store.revoke_refresh_token(jti)
     except Exception:
         return
-

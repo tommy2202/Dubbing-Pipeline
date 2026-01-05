@@ -310,7 +310,9 @@ def build_rewrite_provider(
     if n in {"heuristic", "default", ""}:
         return HeuristicRewriteProvider()
     if n in {"local_llm", "llm", "local"}:
-        return LocalLLMRewriteProvider(endpoint=endpoint, model_path=model_path, strict=bool(strict))
+        return LocalLLMRewriteProvider(
+            endpoint=endpoint, model_path=model_path, strict=bool(strict)
+        )
     return HeuristicRewriteProvider()
 
 
@@ -336,7 +338,9 @@ def fit_with_rewrite_provider(
     )
 
     req_name = str(provider_name or "heuristic").strip().lower()
-    prov = build_rewrite_provider(name=req_name, endpoint=endpoint, model_path=model_path, strict=bool(strict))
+    prov = build_rewrite_provider(
+        name=req_name, endpoint=endpoint, model_path=model_path, strict=bool(strict)
+    )
 
     # Default decision: heuristic
     chosen = heuristic_fit
@@ -377,7 +381,9 @@ def fit_with_rewrite_provider(
             l_ok = float(llm_stats.est_after_s) <= limit + 1e-6
             h_ratio = (len(original) - len(heuristic_fit)) / max(1.0, float(len(original)))
             l_ratio = (len(original) - len(llm_fit)) / max(1.0, float(len(original)))
-            if l_ok and (not h_ok or (l_ratio <= h_ratio + 0.02) or (llm_stats.passes <= hstats.passes)):
+            if l_ok and (
+                not h_ok or (l_ratio <= h_ratio + 0.02) or (llm_stats.passes <= hstats.passes)
+            ):
                 chosen = llm_fit
                 chosen_stats = llm_stats
                 used = "local_llm"
@@ -423,6 +429,7 @@ def append_rewrite_jsonl(path: Path, row: dict[str, Any]) -> None:
     except Exception:
         existing = ""
     line = json.dumps(row, sort_keys=True, ensure_ascii=False)
-    blob = (existing if existing.endswith("\n") or existing == "" else existing + "\n") + line + "\n"
+    blob = (
+        (existing if existing.endswith("\n") or existing == "" else existing + "\n") + line + "\n"
+    )
     atomic_write_text(path, blob, encoding="utf-8")
-

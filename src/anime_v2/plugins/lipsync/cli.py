@@ -14,7 +14,9 @@ def lipsync() -> None:
     pass
 
 
-@lipsync.command("preview", help="Preview face visibility and recommend lip-sync ranges (offline, best-effort).")
+@lipsync.command(
+    "preview", help="Preview face visibility and recommend lip-sync ranges (offline, best-effort)."
+)
 @click.argument("video", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--out-dir", type=click.Path(path_type=Path), default=None, show_default=False)
 @click.option(
@@ -82,4 +84,3 @@ def preview(
     analysis_dir.mkdir(parents=True, exist_ok=True)
     out_path = write_preview_report(rep, out_path=analysis_dir / "lipsync_preview.json")
     click.echo(str(out_path))
-

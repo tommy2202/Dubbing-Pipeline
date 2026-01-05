@@ -157,4 +157,3 @@ def write_director_plans_jsonl(plans: list[DirectorPlan], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [json.dumps(p.to_dict(), sort_keys=True) for p in plans]
     atomic_write_text(path, "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-

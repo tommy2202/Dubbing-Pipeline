@@ -82,4 +82,3 @@ class JobLogger:
             self.paths.summary_json,
             json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False),
         )
-

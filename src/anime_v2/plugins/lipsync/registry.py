@@ -18,4 +18,3 @@ def resolve_lipsync_plugin(
     if n == "wav2lip":
         return get_wav2lip_plugin(wav2lip_dir=wav2lip_dir, wav2lip_checkpoint=wav2lip_checkpoint)
     return None
-

@@ -30,12 +30,21 @@ def set_rate(character_id: str, rate_mul: float) -> None:
     st = _store()
     st.ensure_character(character_id=str(character_id))
     st.set_character_rate_mul(str(character_id), float(rate_mul))
-    click.echo(json.dumps({"ok": True, "character_id": str(character_id), "rate_mul": float(rate_mul)}, indent=2, sort_keys=True))
+    click.echo(
+        json.dumps(
+            {"ok": True, "character_id": str(character_id), "rate_mul": float(rate_mul)},
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 @character.command("set-style")
 @click.argument("character_id", type=str)
-@click.argument("pause_style", type=click.Choice(["default", "tight", "normal", "dramatic"], case_sensitive=False))
+@click.argument(
+    "pause_style",
+    type=click.Choice(["default", "tight", "normal", "dramatic"], case_sensitive=False),
+)
 def set_style(character_id: str, pause_style: str) -> None:
     """
     Set per-character pause style (affects pause tail scaling when expressive/director adds pauses).
@@ -45,7 +54,11 @@ def set_style(character_id: str, pause_style: str) -> None:
     st.set_character_pause_style(str(character_id), str(pause_style).lower())
     click.echo(
         json.dumps(
-            {"ok": True, "character_id": str(character_id), "pause_style": str(pause_style).lower()},
+            {
+                "ok": True,
+                "character_id": str(character_id),
+                "pause_style": str(pause_style).lower(),
+            },
             indent=2,
             sort_keys=True,
         )
@@ -73,7 +86,9 @@ def set_expressive(character_id: str, strength: float) -> None:
 
 @character.command("set-voice-mode")
 @click.argument("character_id", type=str)
-@click.argument("voice_mode", type=click.Choice(["clone", "preset", "single"], case_sensitive=False))
+@click.argument(
+    "voice_mode", type=click.Choice(["clone", "preset", "single"], case_sensitive=False)
+)
 def set_voice_mode(character_id: str, voice_mode: str) -> None:
     """
     Set per-character preferred voice mode (clone|preset|single).
@@ -83,9 +98,12 @@ def set_voice_mode(character_id: str, voice_mode: str) -> None:
     st.set_character_preferred_voice_mode(str(character_id), str(voice_mode).lower())
     click.echo(
         json.dumps(
-            {"ok": True, "character_id": str(character_id), "preferred_voice_mode": str(voice_mode).lower()},
+            {
+                "ok": True,
+                "character_id": str(character_id),
+                "preferred_voice_mode": str(voice_mode).lower(),
+            },
             indent=2,
             sort_keys=True,
         )
     )
-

@@ -68,7 +68,9 @@ def _rms(samples: list[float]) -> float:
     return math.sqrt(s2 / float(len(samples)))
 
 
-def _spectral_features_numpy(samples: list[float], sr: int) -> tuple[float | None, float | None, float | None]:
+def _spectral_features_numpy(
+    samples: list[float], sr: int
+) -> tuple[float | None, float | None, float | None]:
     """
     Returns (centroid_hz, flatness, rolloff_hz) using numpy if available.
     """
@@ -330,7 +332,9 @@ def detect_op_ed(
     return out
 
 
-def should_suppress_segment(start_s: float, end_s: float, regions: list[Region] | list[dict]) -> bool:
+def should_suppress_segment(
+    start_s: float, end_s: float, regions: list[Region] | list[dict]
+) -> bool:
     """
     Suppress dubbing when a segment overlaps any detected music region.
     """
@@ -423,7 +427,9 @@ def write_regions_json(regions: list[Region], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(
         path,
-        json.dumps({"version": 1, "regions": [r.to_dict() for r in regions]}, indent=2, sort_keys=True),
+        json.dumps(
+            {"version": 1, "regions": [r.to_dict() for r in regions]}, indent=2, sort_keys=True
+        ),
         encoding="utf-8",
     )
 
@@ -437,4 +443,3 @@ def write_oped_json(oped: dict[str, Region | None], path: Path) -> None:
     if oped.get("ed") is not None:
         payload["ed"] = oped["ed"].to_dict()  # type: ignore[union-attr]
     atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-

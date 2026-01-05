@@ -28,8 +28,18 @@ def voice_list() -> None:
 @voice.command("merge")
 @click.argument("from_id", type=str)
 @click.argument("to_id", type=str)
-@click.option("--move-refs", is_flag=True, default=False, help="Move ref WAVs from from_id into to_id (default: copy).")
-@click.option("--keep-alias", is_flag=True, default=False, help="Keep from_id as an alias tombstone pointing to to_id.")
+@click.option(
+    "--move-refs",
+    is_flag=True,
+    default=False,
+    help="Move ref WAVs from from_id into to_id (default: copy).",
+)
+@click.option(
+    "--keep-alias",
+    is_flag=True,
+    default=False,
+    help="Keep from_id as an alias tombstone pointing to to_id.",
+)
 def voice_merge(from_id: str, to_id: str, move_refs: bool, keep_alias: bool) -> None:
     s = get_settings()
     root = Path(s.voice_memory_dir).resolve()
@@ -67,12 +77,21 @@ def voice_undo_merge(merge_id: str) -> None:
 @voice.command("audition")
 @click.option("--text", required=True, type=str)
 @click.option("--top", "top_n", default=3, type=int, show_default=True)
-@click.option("--character", "character_id", default=None, type=str, help="Optional character_id from voice memory.")
+@click.option(
+    "--character",
+    "character_id",
+    default=None,
+    type=str,
+    help="Optional character_id from voice memory.",
+)
 @click.option("--lang", "language", default="en", show_default=True)
 def voice_audition(text: str, top_n: int, character_id: str | None, language: str) -> None:
     s = get_settings()
     out_root = Path(s.output_dir).resolve()
-    job_dir = out_root / f"audition_{__import__('time').strftime('%Y%m%d-%H%M%S', __import__('time').gmtime())}"
+    job_dir = (
+        out_root
+        / f"audition_{__import__('time').strftime('%Y%m%d-%H%M%S', __import__('time').gmtime())}"
+    )
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "analysis").mkdir(parents=True, exist_ok=True)
 
@@ -83,5 +102,16 @@ def voice_audition(text: str, top_n: int, character_id: str | None, language: st
         out_job_dir=job_dir,
         language=str(language),
     )
-    click.echo(json.dumps({"ok": True, "job_dir": str(job_dir), "audition_dir": str(job_dir / "audition"), "manifest": str(job_dir / "audition" / "manifest.json"), "results": manifest.get("results", [])}, indent=2, sort_keys=True))
-
+    click.echo(
+        json.dumps(
+            {
+                "ok": True,
+                "job_dir": str(job_dir),
+                "audition_dir": str(job_dir / "audition"),
+                "manifest": str(job_dir / "audition" / "manifest.json"),
+                "results": manifest.get("results", []),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )

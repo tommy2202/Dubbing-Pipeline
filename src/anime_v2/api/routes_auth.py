@@ -31,8 +31,10 @@ from anime_v2.api.deps import Identity, require_role  # noqa: E402
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
+
 def _ua(request: Request) -> str:
     return str(request.headers.get("user-agent") or "")[:160]
+
 
 def _device_name_guess(request: Request) -> str:
     # Simple, privacy-preserving device label.
@@ -120,7 +122,11 @@ async def login(request: Request) -> Response:
 
     # Optional TOTP (admin only) when enabled by config.
     s = get_settings()
-    enforce_totp = bool(getattr(s, "enable_totp", False)) and (user.role == Role.admin) and bool(user.totp_enabled)
+    enforce_totp = (
+        bool(getattr(s, "enable_totp", False))
+        and (user.role == Role.admin)
+        and bool(user.totp_enabled)
+    )
     if enforce_totp:
         if not totp:
             # recovery code fallback (optional)
@@ -136,7 +142,9 @@ async def login(request: Request) -> Response:
                 except HTTPException:
                     raise
                 except Exception as ex:
-                    raise HTTPException(status_code=500, detail="Recovery codes unavailable") from ex
+                    raise HTTPException(
+                        status_code=500, detail="Recovery codes unavailable"
+                    ) from ex
             else:
                 audit_event(
                     "auth.login_failed_totp",
@@ -172,7 +180,11 @@ async def login(request: Request) -> Response:
                 raise
             except Exception as ex:
                 raise HTTPException(status_code=500, detail="TOTP unavailable") from ex
-    elif bool(user.totp_enabled) and not bool(getattr(s, "enable_totp", False)) and user.role == Role.admin:
+    elif (
+        bool(user.totp_enabled)
+        and not bool(getattr(s, "enable_totp", False))
+        and user.role == Role.admin
+    ):
         # If a DB has totp_enabled set but feature is disabled, fail safe for admin.
         raise HTTPException(status_code=500, detail="TOTP is disabled by server policy")
 
@@ -409,7 +421,9 @@ async def totp_setup(request: Request) -> dict[str, Any]:
         import hashlib as _hashlib
         import secrets as _secrets
 
-        codes = [(_secrets.token_urlsafe(9).replace("-", "").replace("_", "")[:10]) for _ in range(8)]
+        codes = [
+            (_secrets.token_urlsafe(9).replace("-", "").replace("_", "")[:10]) for _ in range(8)
+        ]
         hashes = [_hashlib.sha256(c.encode("utf-8")).hexdigest() for c in codes]
         _get_store(request).put_recovery_codes(user_id=user.id, code_hashes=hashes)
     except Exception:
@@ -523,7 +537,9 @@ async def qr_redeem(request: Request) -> Response:
     store = _get_store(request)
     uid = store.consume_qr_code(nonce_hash=nonce_hash, used_ip=ip)
     if not uid:
-        audit_event("auth.qr_redeem_failed", request=request, user_id=None, meta={"reason": "invalid"})
+        audit_event(
+            "auth.qr_redeem_failed", request=request, user_id=None, meta={"reason": "invalid"}
+        )
         raise HTTPException(status_code=401, detail="Invalid or expired code")
 
     user = store.get_user(str(uid))
@@ -535,7 +551,9 @@ async def qr_redeem(request: Request) -> Response:
         scopes.append("submit:job")
     if user.role == Role.admin:
         scopes.append("admin:*")
-    access = create_access_token(sub=user.id, role=user.role.value, scopes=scopes, minutes=s.access_token_minutes)
+    access = create_access_token(
+        sub=user.id, role=user.role.value, scopes=scopes, minutes=s.access_token_minutes
+    )
     csrf = issue_csrf_token()
 
     resp = Response()
@@ -583,7 +601,9 @@ async def qr_redeem(request: Request) -> Response:
         pass
     resp.headers["content-type"] = "application/json"
     resp.body = __import__("json").dumps({"ok": True, "csrf_token": csrf}).encode("utf-8")
-    audit_event("auth.qr_redeem_ok", request=request, user_id=user.id, meta={"role": user.role.value})
+    audit_event(
+        "auth.qr_redeem_ok", request=request, user_id=user.id, meta={"role": user.role.value}
+    )
     return resp
 
 
@@ -602,7 +622,9 @@ async def list_sessions(request: Request) -> dict[str, Any]:
                 "device_id": str(it.get("device_id") or "") or str(it.get("jti") or ""),
                 "device_name": str(it.get("device_name") or "") or "",
                 "created_at": int(it.get("created_at") or 0),
-                "last_used_at": int(it.get("last_used_at") or 0) if it.get("last_used_at") else None,
+                "last_used_at": (
+                    int(it.get("last_used_at") or 0) if it.get("last_used_at") else None
+                ),
                 "created_ip": str(it.get("created_ip") or "") or "",
                 "last_ip": str(it.get("last_ip") or "") or "",
                 "user_agent": str(it.get("user_agent") or "") or "",
@@ -618,7 +640,9 @@ async def revoke_session(request: Request, device_id: str) -> dict[str, Any]:
 
     ident = current_identity(request, _get_store(request))
     verify_csrf(request)
-    n = _get_store(request).revoke_sessions_by_device(user_id=str(ident.user.id), device_id=str(device_id))
+    n = _get_store(request).revoke_sessions_by_device(
+        user_id=str(ident.user.id), device_id=str(device_id)
+    )
     audit_event("auth.session_revoke", request=request, user_id=ident.user.id, meta={"count": n})
     return {"ok": True, "revoked": int(n)}
 

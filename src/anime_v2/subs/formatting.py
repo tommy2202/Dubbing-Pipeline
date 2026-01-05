@@ -181,7 +181,9 @@ def _violations_for_block(text: str, dur_s: float, rules: SubtitleFormatRules) -
     return v
 
 
-def format_subtitle_blocks(blocks: list[dict[str, Any]], rules: SubtitleFormatRules) -> list[dict[str, Any]]:
+def format_subtitle_blocks(
+    blocks: list[dict[str, Any]], rules: SubtitleFormatRules
+) -> list[dict[str, Any]]:
     """
     Format subtitle blocks in-place style (returns new list).
 
@@ -265,7 +267,12 @@ def format_subtitle_blocks_with_stats(
         b2["start"] = s
         b2["end"] = e
         b2["text"] = txt
-        if (abs(s - s0) > 1e-6) or (abs(e - e0) > 1e-6) or (_norm_text(txt) != _norm_text(txt0)) or ("\n" in txt):
+        if (
+            (abs(s - s0) > 1e-6)
+            or (abs(e - e0) > 1e-6)
+            or (_norm_text(txt) != _norm_text(txt0))
+            or ("\n" in txt)
+        ):
             changed_blocks += 1
         out.append(b2)
 
@@ -287,14 +294,18 @@ def format_subtitle_blocks_with_stats(
     return out, stats
 
 
-def _load_rules_from_job_or_project(job_dir: Path, *, project: str | None = None) -> SubtitleFormatRules:
+def _load_rules_from_job_or_project(
+    job_dir: Path, *, project: str | None = None
+) -> SubtitleFormatRules:
     # job-local override (future-proof)
     job_dir = Path(job_dir)
     job_cfg = job_dir / "analysis" / "subs_rules.json"
     if job_cfg.exists():
         data = read_json(job_cfg, default={})
         if isinstance(data, dict):
-            return SubtitleFormatRules.from_dict(data.get("rules") if isinstance(data.get("rules"), dict) else data)
+            return SubtitleFormatRules.from_dict(
+                data.get("rules") if isinstance(data.get("rules"), dict) else data
+            )
     # project profile (optional)
     if project:
         try:
@@ -323,7 +334,9 @@ def _load_rules_from_job_or_project(job_dir: Path, *, project: str | None = None
                     except Exception:
                         data = json.loads(raw)
                     if isinstance(data, dict):
-                        return SubtitleFormatRules.from_dict(data.get("rules") if isinstance(data.get("rules"), dict) else data)
+                        return SubtitleFormatRules.from_dict(
+                            data.get("rules") if isinstance(data.get("rules"), dict) else data
+                        )
         except Exception:
             pass
     return SubtitleFormatRules()
@@ -347,7 +360,9 @@ def write_formatted_subs_variant(
 
     formatted, stats = format_subtitle_blocks_with_stats(blocks, rules)
     # For writers: translate {start,end,text}
-    lines = [{"start": b["start"], "end": b["end"], "text": str(b.get("text") or "")} for b in formatted]
+    lines = [
+        {"start": b["start"], "end": b["end"], "text": str(b.get("text") or "")} for b in formatted
+    ]
 
     srt_path = subs_dir / f"{variant}.srt"
     vtt_path = subs_dir / f"{variant}.vtt"
@@ -389,4 +404,3 @@ def write_formatted_subs_variant(
     )
 
     return row
-

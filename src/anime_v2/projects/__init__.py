@@ -8,4 +8,3 @@ Project profiles live under:
     - qa.yaml
     - mix.yaml
 """
-

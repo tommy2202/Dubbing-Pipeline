@@ -168,15 +168,15 @@ def regen_segment(job_dir: Path, segment_id: int) -> Path:
                 params.get("pacing_max_ratio", getattr(get_settings(), "pacing_max_ratio", 1.18))
             ),
             timing_tolerance=float(
-                params.get(
-                    "timing_tolerance", getattr(get_settings(), "timing_tolerance", 0.10)
-                )
+                params.get("timing_tolerance", getattr(get_settings(), "timing_tolerance", 0.10))
             ),
             director=bool(params.get("director", getattr(get_settings(), "director", False))),
             director_strength=float(
                 params.get("director_strength", getattr(get_settings(), "director_strength", 0.5))
             ),
-            voice_memory=bool(params.get("voice_memory", getattr(get_settings(), "voice_memory", False))),
+            voice_memory=bool(
+                params.get("voice_memory", getattr(get_settings(), "voice_memory", False))
+            ),
             voice_match_threshold=float(
                 params.get(
                     "voice_match_threshold", getattr(get_settings(), "voice_match_threshold", 0.75)
@@ -185,9 +185,11 @@ def regen_segment(job_dir: Path, segment_id: int) -> Path:
             voice_auto_enroll=bool(
                 params.get("voice_auto_enroll", getattr(get_settings(), "voice_auto_enroll", True))
             ),
-            voice_memory_dir=Path(get_settings().voice_memory_dir).resolve()
-            if getattr(get_settings(), "voice_memory_dir", None)
-            else None,
+            voice_memory_dir=(
+                Path(get_settings().voice_memory_dir).resolve()
+                if getattr(get_settings(), "voice_memory_dir", None)
+                else None
+            ),
         )
         # Grab the first clip as the segment audio
         clip = None
@@ -360,4 +362,3 @@ def lock_from_tts_manifest(
 
     save_state(job_dir, st)
     return locked
-

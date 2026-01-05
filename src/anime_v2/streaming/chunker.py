@@ -63,4 +63,3 @@ def split_audio_to_chunks(
             break
         start = max(0.0, end - ov)
     return chunks
-

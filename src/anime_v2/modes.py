@@ -242,4 +242,3 @@ def log_effective_settings_summary(eff: EffectiveSettings) -> None:
         stream_context_seconds=float(eff.stream_context_seconds),
         reasons=eff.reasons,
     )
-

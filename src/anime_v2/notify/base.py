@@ -12,4 +12,3 @@ class Notification:
     url: str | None = None
     tags: Sequence[str] | None = None
     priority: int | None = None  # 1..5 (ntfy convention)
-

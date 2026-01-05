@@ -199,7 +199,10 @@ def smooth_speakers_in_scenes(
     """
     if not utts:
         return [], []
-    utts2 = [dict(u) for u in sorted(utts, key=lambda x: (float(x.get("start", 0.0)), float(x.get("end", 0.0))))]
+    utts2 = [
+        dict(u)
+        for u in sorted(utts, key=lambda x: (float(x.get("start", 0.0)), float(x.get("end", 0.0))))
+    ]
     changes: list[SmoothingChange] = []
 
     def _scene_index(t: float) -> int:
@@ -219,7 +222,10 @@ def smooth_speakers_in_scenes(
             continue
         # must be within same scene
         si = _scene_index(s)
-        if _scene_index(float(prev.get("start", 0.0))) != si or _scene_index(float(nxt.get("start", 0.0))) != si:
+        if (
+            _scene_index(float(prev.get("start", 0.0))) != si
+            or _scene_index(float(nxt.get("start", 0.0))) != si
+        ):
             continue
         sp = str(u.get("speaker") or "")
         sp_prev = str(prev.get("speaker") or "")
@@ -243,7 +249,9 @@ def smooth_speakers_in_scenes(
             conf_f = None
 
         # decide to merge
-        if dur < float(min_turn_s) or (conf_f is not None and conf_f < 0.5 and dur < float(min_turn_s) * 1.5):
+        if dur < float(min_turn_s) or (
+            conf_f is not None and conf_f < 0.5 and dur < float(min_turn_s) * 1.5
+        ):
             u["speaker_original"] = sp
             u["speaker"] = sp_prev
             changes.append(
@@ -277,4 +285,3 @@ def write_speaker_smoothing_report(
         "changes": [c.to_dict() for c in changes],
     }
     atomic_write_text(out_path, json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-

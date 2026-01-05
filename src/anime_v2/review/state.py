@@ -278,4 +278,3 @@ def render_audio_only(job_dir: Path, state: dict[str, Any], out_wav: Path) -> Pa
 def bump_status(seg: dict[str, Any], status: str) -> None:
     seg["status"] = str(status)
     seg["last_updated"] = now_utc()
-

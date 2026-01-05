@@ -102,7 +102,16 @@ def export_mkv_multitrack(
     for i in range(len(tracks)):
         cmd += ["-map", f"{i+1}:a:0"]
     if srt is not None:
-        cmd += ["-map", f"{len(tracks)+1}:s:0", "-c:s", "srt", "-disposition:s:0", "default", "-metadata:s:s:0", "language=eng"]
+        cmd += [
+            "-map",
+            f"{len(tracks)+1}:s:0",
+            "-c:s",
+            "srt",
+            "-disposition:s:0",
+            "default",
+            "-metadata:s:s:0",
+            "language=eng",
+        ]
 
     cmd += ["-c:v", "copy"]
     # Encode all audio tracks
@@ -128,14 +137,26 @@ def export_mkv_multitrack(
     return out_path
 
 
-def export_m4a(audio_in: Path, out_path: Path, *, title: str | None = None, language: str | None = None) -> Path:
+def export_m4a(
+    audio_in: Path, out_path: Path, *, title: str | None = None, language: str | None = None
+) -> Path:
     """
     Sidecar audio export for MP4 fallback (players vary in multi-audio support).
     """
     audio_in = Path(audio_in)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd: list[str] = [str(get_settings().ffmpeg_bin), "-y", "-i", str(audio_in), "-vn", "-c:a", "aac", "-b:a", "192k"]
+    cmd: list[str] = [
+        str(get_settings().ffmpeg_bin),
+        "-y",
+        "-i",
+        str(audio_in),
+        "-vn",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+    ]
     if language:
         cmd += ["-metadata:s:a:0", f"language={language}"]
     if title:
@@ -143,6 +164,7 @@ def export_m4a(audio_in: Path, out_path: Path, *, title: str | None = None, lang
     cmd += [str(out_path)]
     run_ffmpeg(cmd, timeout_s=300, retries=0, capture=True)
     return out_path
+
 
 def export_mp4(
     video_in: Path, dub_wav: Path, srt: Path | None, out_path: Path, *, fragmented: bool = False

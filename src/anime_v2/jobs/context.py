@@ -45,4 +45,3 @@ def make_job_context(*, job_id: str, job_dir: Path) -> JobContext:
         except Exception:
             snap_s[k] = str(v)
     return JobContext(job_id=str(job_id), job_dir=Path(job_dir), settings_snapshot=snap_s)
-

@@ -177,7 +177,9 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 )
 @click.option(
     "--diarizer",
-    type=click.Choice(["auto", "pyannote", "speechbrain", "heuristic", "off"], case_sensitive=False),
+    type=click.Choice(
+        ["auto", "pyannote", "speechbrain", "heuristic", "off"], case_sensitive=False
+    ),
     default="auto",
     show_default=True,
 )
@@ -207,7 +209,9 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 )
 @click.option("--glossary", default=None, help="Glossary TSV path or directory")
 @click.option("--style", default=None, help="Style YAML path or directory")
-@click.option("--project", "project_name", default=None, help="Project profile name under projects/<name>/")
+@click.option(
+    "--project", "project_name", default=None, help="Project profile name under projects/<name>/"
+)
 @click.option(
     "--style-guide",
     "style_guide_path",
@@ -318,7 +322,11 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 @click.option(
     "--rewrite-endpoint",
     type=str,
-    default=(str(get_settings().rewrite_endpoint) if getattr(get_settings(), "rewrite_endpoint", None) else ""),
+    default=(
+        str(get_settings().rewrite_endpoint)
+        if getattr(get_settings(), "rewrite_endpoint", None)
+        else ""
+    ),
     show_default=False,
     help="Feature M: local LLM HTTP endpoint (localhost only), e.g. http://127.0.0.1:8080/completion",
 )
@@ -326,7 +334,11 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     "--rewrite-model",
     "rewrite_model_path",
     type=click.Path(path_type=Path),
-    default=(Path(get_settings().rewrite_model) if getattr(get_settings(), "rewrite_model", None) else None),
+    default=(
+        Path(get_settings().rewrite_model)
+        if getattr(get_settings(), "rewrite_model", None)
+        else None
+    ),
     show_default=False,
     help="Feature M: local model path for transformers provider (optional; requires extra deps).",
 )
@@ -378,10 +390,16 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 @click.option("--energy", type=float, default=float(get_settings().energy), show_default=True)
 @click.option("--realtime/--no-realtime", default=False, show_default=True)
 @click.option(
-    "--chunk-seconds", type=float, default=float(get_settings().stream_chunk_seconds), show_default=True
+    "--chunk-seconds",
+    type=float,
+    default=float(get_settings().stream_chunk_seconds),
+    show_default=True,
 )
 @click.option(
-    "--chunk-overlap", type=float, default=float(get_settings().stream_overlap_seconds), show_default=True
+    "--chunk-overlap",
+    type=float,
+    default=float(get_settings().stream_overlap_seconds),
+    show_default=True,
 )
 @click.option(
     "--stream-context-seconds",
@@ -415,7 +433,10 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     help="Streaming output mode: per-chunk MP4s or stitched final MP4",
 )
 @click.option(
-    "--stream-concurrency", type=int, default=int(get_settings().stream_concurrency), show_default=True
+    "--stream-concurrency",
+    type=int,
+    default=int(get_settings().stream_concurrency),
+    show_default=True,
 )
 @click.option("--stitch/--no-stitch", default=True, show_default=True)
 @click.option(
@@ -1260,13 +1281,13 @@ def run(
     if _is_explicit("diarizer"):
         overrides["diarizer"] = str(diarizer).lower()
     if _is_explicit("speaker_smoothing"):
-        overrides["speaker_smoothing"] = (str(speaker_smoothing).lower() == "on")
+        overrides["speaker_smoothing"] = str(speaker_smoothing).lower() == "on"
     if _is_explicit("voice_memory"):
-        overrides["voice_memory"] = (str(voice_memory).lower() == "on")
+        overrides["voice_memory"] = str(voice_memory).lower() == "on"
     if _is_explicit("voice_mode"):
         overrides["voice_mode"] = str(voice_mode).lower()
     if _is_explicit("music_detect"):
-        overrides["music_detect"] = (str(music_detect).lower() == "on")
+        overrides["music_detect"] = str(music_detect).lower() == "on"
     if _is_explicit("separation"):
         overrides["separation"] = str(separation).lower()
     if _is_explicit("mix_mode"):
@@ -1276,11 +1297,11 @@ def run(
     if _is_explicit("pacing"):
         overrides["pacing"] = bool(pacing)
     if _is_explicit("qa_mode"):
-        overrides["qa"] = (str(qa_mode).lower() == "on")
+        overrides["qa"] = str(qa_mode).lower() == "on"
     if _is_explicit("director_mode"):
-        overrides["director"] = (str(director_mode).lower() == "on")
+        overrides["director"] = str(director_mode).lower() == "on"
     if _is_explicit("multitrack"):
-        overrides["multitrack"] = (str(multitrack).lower() == "on")
+        overrides["multitrack"] = str(multitrack).lower() == "on"
     if _is_explicit("stream_context_seconds") and stream_context_seconds is not None:
         overrides["stream_context_seconds"] = float(stream_context_seconds)
 
@@ -1369,9 +1390,13 @@ def run(
                     if not _is_explicit("limiter") and "limiter" in mo:
                         limiter = bool(mo["limiter"])
                         applied.append("limiter")
-                log_profile_applied(project=prof.name, profile_hash=prof.profile_hash, applied_keys=applied)
+                log_profile_applied(
+                    project=prof.name, profile_hash=prof.profile_hash, applied_keys=applied
+                )
         except Exception as ex:
-            logger.warning("project_profile_load_failed_continue", project=str(project_name), error=str(ex))
+            logger.warning(
+                "project_profile_load_failed_continue", project=str(project_name), error=str(ex)
+            )
 
     if bool(debug_dump):
         try:
@@ -1429,10 +1454,22 @@ def run(
     wav_path = (work_priv / "audio.wav") if priv.no_store_source_audio else (out_dir / "audio.wav")
     srt_out = (work_priv / f"{stem}.srt") if priv.no_store_transcript else (out_dir / f"{stem}.srt")
     vtt_out = (work_priv / f"{stem}.vtt") if priv.no_store_transcript else (out_dir / f"{stem}.vtt")
-    translated_srt = (work_priv / f"{stem}.translated.srt") if priv.no_store_transcript else (out_dir / f"{stem}.translated.srt")
-    translated_vtt = (work_priv / f"{stem}.translated.vtt") if priv.no_store_transcript else (out_dir / f"{stem}.translated.vtt")
+    translated_srt = (
+        (work_priv / f"{stem}.translated.srt")
+        if priv.no_store_transcript
+        else (out_dir / f"{stem}.translated.srt")
+    )
+    translated_vtt = (
+        (work_priv / f"{stem}.translated.vtt")
+        if priv.no_store_transcript
+        else (out_dir / f"{stem}.translated.vtt")
+    )
     diar_json = out_dir / "diarization.json"
-    translated_json = (work_priv / "translated.json") if priv.no_store_transcript else (out_dir / "translated.json")
+    translated_json = (
+        (work_priv / "translated.json")
+        if priv.no_store_transcript
+        else (out_dir / "translated.json")
+    )
     tts_wav = out_dir / f"{stem}.tts.wav"
     dub_mkv = out_dir / "dub.mkv"
 
@@ -1459,7 +1496,9 @@ def run(
 
         job_logger = JobLogger(job_dir=out_dir, job_id=stem)
         set_ffmpeg_log_dir(job_logger.paths.ffmpeg_dir)
-        job_logger.event(stage="start", level="info", msg="job_start", video=str(video), out_dir=str(out_dir))
+        job_logger.event(
+            stage="start", level="info", msg="job_start", video=str(video), out_dir=str(out_dir)
+        )
     except Exception:
         job_logger = None
 
@@ -1487,7 +1526,11 @@ def run(
         ctx_s = (
             float(stream_context_seconds)
             if stream_context_seconds is not None
-            else (float(eff.stream_context_seconds) if eff is not None else float(stream_context_seconds_eff))
+            else (
+                float(eff.stream_context_seconds)
+                if eff is not None
+                else float(stream_context_seconds_eff)
+            )
         )
         run_streaming(
             video=video,
@@ -1546,7 +1589,12 @@ def run(
     try:
         if job_logger is not None:
             job_logger.event(stage="audio", level="info", msg="stage_start")
-        if resume and job_ctx is not None and can_resume_stage is not None and file_fingerprint is not None:
+        if (
+            resume
+            and job_ctx is not None
+            and can_resume_stage is not None
+            and file_fingerprint is not None
+        ):
             inputs = {"video": file_fingerprint(video)}
             params = {
                 "wav_out": str(wav_path.name),
@@ -1574,7 +1622,12 @@ def run(
                     )
         else:
             extracted = audio_extractor.extract(video=video, out_dir=out_dir, wav_out=wav_path)
-            if write_stage_manifest is not None and file_fingerprint is not None and extracted and Path(extracted).exists():
+            if (
+                write_stage_manifest is not None
+                and file_fingerprint is not None
+                and extracted
+                and Path(extracted).exists()
+            ):
                 with suppress(Exception):
                     write_stage_manifest(
                         job_dir=out_dir,
@@ -2009,13 +2062,19 @@ def run(
     except Exception as ex:
         logger.exception("[v2] transcription failed (continuing): %s", ex)
         if job_logger is not None:
-            job_logger.event(stage="transcribe", level="error", msg="stage_failed_continue", error=str(ex))
+            job_logger.event(
+                stage="transcribe", level="error", msg="stage_failed_continue", error=str(ex)
+            )
         cues = []
 
     # Optional subtitle format conversions for source transcript
     subs_choice = (subs or "both").lower()
     subs_fmt = (subs_format or "srt").lower()
-    if subs_choice in {"src", "both"} and subs_fmt in {"vtt", "both"} and not priv.no_store_transcript:
+    if (
+        subs_choice in {"src", "both"}
+        and subs_fmt in {"vtt", "both"}
+        and not priv.no_store_transcript
+    ):
         try:
             write_vtt(_parse_srt_to_cues(srt_out), vtt_out)
         except Exception as ex:
@@ -2030,10 +2089,17 @@ def run(
             for c in _parse_srt_to_cues(srt_out):
                 if isinstance(c, dict):
                     src_blocks.append(
-                        {"start": float(c.get("start", 0.0)), "end": float(c.get("end", 0.0)), "text": str(c.get("text") or "")}
+                        {
+                            "start": float(c.get("start", 0.0)),
+                            "end": float(c.get("end", 0.0)),
+                            "text": str(c.get("text") or ""),
+                        }
                     )
             write_formatted_subs_variant(
-                job_dir=out_dir, variant="src", blocks=src_blocks, project=str(project_name or "") or None
+                job_dir=out_dir,
+                variant="src",
+                blocks=src_blocks,
+                project=str(project_name or "") or None,
             )
         except Exception as ex:
             logger.warning("[v2] subs formatting failed (src): %s", ex)
@@ -2306,7 +2372,9 @@ def run(
                     logger.exception("style_guide_failed_continue")
 
             # Snapshot for subtitle variants (literal translation, before PG + timing-fit).
-            translated_segments_literal = [dict(s) for s in translated_segments if isinstance(s, dict)]
+            translated_segments_literal = [
+                dict(s) for s in translated_segments if isinstance(s, dict)
+            ]
             translated_segments_pg = None
 
             # Tier-Next C: per-run PG mode (opt-in; OFF by default).
@@ -2323,7 +2391,9 @@ def run(
                         report_path=(analysis_dir / "pg_filter_report.json"),
                         job_id=str(out_dir.name),
                     )
-                    translated_segments_pg = [dict(s) for s in translated_segments if isinstance(s, dict)]
+                    translated_segments_pg = [
+                        dict(s) for s in translated_segments if isinstance(s, dict)
+                    ]
                 except Exception:
                     logger.exception("pg_filter_failed_continue")
 
@@ -2355,7 +2425,11 @@ def run(
                             fitted, stats, attempt = fit_with_rewrite_provider(
                                 provider_name=str(rewrite_provider).lower(),
                                 endpoint=(str(rewrite_endpoint).strip() or None),
-                                model_path=(Path(rewrite_model_path).resolve() if rewrite_model_path else None),
+                                model_path=(
+                                    Path(rewrite_model_path).resolve()
+                                    if rewrite_model_path
+                                    else None
+                                ),
                                 strict=bool(rewrite_strict),
                                 text=pre,
                                 target_seconds=tgt_s,
@@ -2462,7 +2536,11 @@ def run(
             except Exception as ex:
                 logger.warning("[v2] subs formatting failed (tgt variants): %s", ex)
 
-            if subs_choice in {"tgt", "both"} and subs_fmt in {"vtt", "both"} and not priv.no_store_transcript:
+            if (
+                subs_choice in {"tgt", "both"}
+                and subs_fmt in {"vtt", "both"}
+                and not priv.no_store_transcript
+            ):
                 try:
                     _write_vtt_from_lines(
                         [
@@ -2655,13 +2733,35 @@ def run(
                 elif str(container).lower() == "mp4":
                     # MP4 fallback: keep normal MP4 output and write sidecar audio tracks.
                     sidecar_dir = out_dir / "audio" / "tracks"
-                    export_m4a(tracks.original_full_wav, sidecar_dir / "original_full.m4a", title="Original (JP)", language="jpn")
-                    export_m4a(tracks.background_only_wav, sidecar_dir / "background_only.m4a", title="Background Only", language="und")
-                    export_m4a(tracks.dialogue_only_wav, sidecar_dir / "dialogue_only.m4a", title="Dialogue Only", language="eng")
-                    export_m4a(tracks.dubbed_full_wav, sidecar_dir / "dubbed_full.m4a", title="Dubbed (EN)", language="eng")
+                    export_m4a(
+                        tracks.original_full_wav,
+                        sidecar_dir / "original_full.m4a",
+                        title="Original (JP)",
+                        language="jpn",
+                    )
+                    export_m4a(
+                        tracks.background_only_wav,
+                        sidecar_dir / "background_only.m4a",
+                        title="Background Only",
+                        language="und",
+                    )
+                    export_m4a(
+                        tracks.dialogue_only_wav,
+                        sidecar_dir / "dialogue_only.m4a",
+                        title="Dialogue Only",
+                        language="eng",
+                    )
+                    export_m4a(
+                        tracks.dubbed_full_wav,
+                        sidecar_dir / "dubbed_full.m4a",
+                        title="Dubbed (EN)",
+                        language="eng",
+                    )
 
             if "mkv" in emit_set and "mkv" not in outs:
-                outs["mkv"] = export_mkv(video, final_mix, None if no_subs else subs_srt_path, out_dir / "dub.mkv")
+                outs["mkv"] = export_mkv(
+                    video, final_mix, None if no_subs else subs_srt_path, out_dir / "dub.mkv"
+                )
             if "mp4" in emit_set:
                 outs["mp4"] = export_mp4(
                     video, final_mix, None if no_subs else subs_srt_path, out_dir / "dub.mp4"
@@ -2695,7 +2795,11 @@ def run(
 
                 mixed_wav = outs.get("mixed_wav", None)
                 if mixed_wav is not None and Path(mixed_wav).exists():
-                    stems_bg = (out_dir / "stems" / "background.wav") if (out_dir / "stems" / "background.wav").exists() else None
+                    stems_bg = (
+                        (out_dir / "stems" / "background.wav")
+                        if (out_dir / "stems" / "background.wav").exists()
+                        else None
+                    )
                     tracks = build_multitrack_artifacts(
                         job_dir=out_dir,
                         original_wav=Path(str(extracted)),
@@ -2707,20 +2811,60 @@ def run(
                         outs["mkv"] = export_mkv_multitrack(
                             video_in=video,
                             tracks=[
-                                {"path": str(tracks.original_full_wav), "title": "Original (JP)", "language": "jpn", "default": "0"},
-                                {"path": str(tracks.dubbed_full_wav), "title": "Dubbed (EN)", "language": "eng", "default": "1"},
-                                {"path": str(tracks.background_only_wav), "title": "Background Only", "language": "und", "default": "0"},
-                                {"path": str(tracks.dialogue_only_wav), "title": "Dialogue Only", "language": "eng", "default": "0"},
+                                {
+                                    "path": str(tracks.original_full_wav),
+                                    "title": "Original (JP)",
+                                    "language": "jpn",
+                                    "default": "0",
+                                },
+                                {
+                                    "path": str(tracks.dubbed_full_wav),
+                                    "title": "Dubbed (EN)",
+                                    "language": "eng",
+                                    "default": "1",
+                                },
+                                {
+                                    "path": str(tracks.background_only_wav),
+                                    "title": "Background Only",
+                                    "language": "und",
+                                    "default": "0",
+                                },
+                                {
+                                    "path": str(tracks.dialogue_only_wav),
+                                    "title": "Dialogue Only",
+                                    "language": "eng",
+                                    "default": "0",
+                                },
                             ],
                             srt=None if no_subs else subs_srt_path,
                             out_path=out_dir / "dub.mkv",
                         )
                     elif str(container).lower() == "mp4":
                         sidecar_dir = out_dir / "audio" / "tracks"
-                        export_m4a(tracks.original_full_wav, sidecar_dir / "original_full.m4a", title="Original (JP)", language="jpn")
-                        export_m4a(tracks.background_only_wav, sidecar_dir / "background_only.m4a", title="Background Only", language="und")
-                        export_m4a(tracks.dialogue_only_wav, sidecar_dir / "dialogue_only.m4a", title="Dialogue Only", language="eng")
-                        export_m4a(tracks.dubbed_full_wav, sidecar_dir / "dubbed_full.m4a", title="Dubbed (EN)", language="eng")
+                        export_m4a(
+                            tracks.original_full_wav,
+                            sidecar_dir / "original_full.m4a",
+                            title="Original (JP)",
+                            language="jpn",
+                        )
+                        export_m4a(
+                            tracks.background_only_wav,
+                            sidecar_dir / "background_only.m4a",
+                            title="Background Only",
+                            language="und",
+                        )
+                        export_m4a(
+                            tracks.dialogue_only_wav,
+                            sidecar_dir / "dialogue_only.m4a",
+                            title="Dialogue Only",
+                            language="eng",
+                        )
+                        export_m4a(
+                            tracks.dubbed_full_wav,
+                            sidecar_dir / "dubbed_full.m4a",
+                            title="Dubbed (EN)",
+                            language="eng",
+                        )
         if "mkv" in outs:
             dub_mkv = outs["mkv"]
         if "mp4" in outs:
@@ -2761,7 +2905,12 @@ def run(
                 }
             )
         with suppress(Exception):
-            job_logger.event(stage="end", level="info", msg="job_done", wall_time_s=float(time.perf_counter() - t0))
+            job_logger.event(
+                stage="end",
+                level="info",
+                msg="job_done",
+                wall_time_s=float(time.perf_counter() - t0),
+            )
 
     # Tier-3A: optional lip-sync plugin (default off)
     try:
@@ -2833,7 +2982,12 @@ def run(
                 retention_days=int(retention_days),
                 dry_run=bool(retention_dry_run),
             )
-            logger.info("retention_applied", policy=pol, dry_run=bool(retention_dry_run), deleted=len(rep.get("deleted", [])))
+            logger.info(
+                "retention_applied",
+                policy=pol,
+                dry_run=bool(retention_dry_run),
+                deleted=len(rep.get("deleted", [])),
+            )
     except Exception as ex:
         logger.warning("retention_failed_continue", error=str(ex))
 
@@ -2863,10 +3017,13 @@ def run(
 
     # Privacy cleanup: remove transient artifacts directory (best-effort).
     try:
-        if (priv.no_store_transcript or priv.no_store_source_audio) and (out_dir / "work_privacy").exists():
+        if (priv.no_store_transcript or priv.no_store_source_audio) and (
+            out_dir / "work_privacy"
+        ).exists():
             shutil.rmtree(out_dir / "work_privacy", ignore_errors=True)
     except Exception:
         pass
+
 
 # Public entrypoint (project.scripts -> anime_v2.cli:cli)
 from anime_v2.character.cli import character as character  # noqa: E402

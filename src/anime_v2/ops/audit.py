@@ -83,7 +83,9 @@ def emit(
                     out[kks] = {"redacted": True, "len": len(vv)}
                     continue
                 # If a list/dict is suspiciously large, keep only a count.
-                if kks.lower() in {"segments", "lines", "items", "updates"} and isinstance(vv, list):
+                if kks.lower() in {"segments", "lines", "items", "updates"} and isinstance(
+                    vv, list
+                ):
                     out[kks] = {"count": len(vv)}
                     continue
                 out[kks] = _scrub(vv)

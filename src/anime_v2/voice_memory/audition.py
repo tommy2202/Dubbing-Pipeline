@@ -68,7 +68,10 @@ def _top_presets_for_character(character_id: str, *, top_n: int) -> list[Candida
         db = load_voice_db(preset_dir=preset_dir, db_path=db_path, embeddings_dir=embeddings_dir)
         presets = db.get("presets", {}) if isinstance(db, dict) else {}
         names = sorted([str(k) for k in presets]) if isinstance(presets, dict) else []
-        return [Candidate(kind="preset", label=f"preset:{nm}", speaker_id=nm, score=None) for nm in names[: max(0, int(top_n))]]
+        return [
+            Candidate(kind="preset", label=f"preset:{nm}", speaker_id=nm, score=None)
+            for nm in names[: max(0, int(top_n))]
+        ]
 
     # Attempt similarity using stored embedding.npy from voice memory (may not match preset space; best-effort).
     vm_root = Path(s.voice_memory_dir).resolve()
@@ -104,7 +107,11 @@ def build_candidates(*, character_id: str | None, top_n: int) -> list[Candidate]
             if str(rec.get("character_id") or "") == str(character_id):
                 pref = str(rec.get("preset_voice_id") or "").strip()
                 if pref:
-                    out.append(Candidate(kind="preset", label=f"preset:{pref}", speaker_id=pref, score=None))
+                    out.append(
+                        Candidate(
+                            kind="preset", label=f"preset:{pref}", speaker_id=pref, score=None
+                        )
+                    )
                 break
         # Similar presets (best-effort)
         out.extend(_top_presets_for_character(str(character_id), top_n=int(top_n)))
@@ -203,4 +210,3 @@ def audition(
         encoding="utf-8",
     )
     return manifest
-

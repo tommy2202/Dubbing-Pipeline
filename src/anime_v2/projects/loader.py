@@ -45,7 +45,9 @@ def _load_yaml_or_json(path: Path) -> dict[str, Any]:
 
 
 def _sha256_json(obj: Any) -> str:
-    blob = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    blob = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return hashlib.sha256(blob).hexdigest()
 
 
@@ -105,7 +107,9 @@ def load_project_profile(name: str) -> LoadedProjectProfile | None:
     if pdir is None or not pdir.exists():
         return None
 
-    profile_path = (pdir / "profile.yaml") if (pdir / "profile.yaml").exists() else (pdir / "profile.json")
+    profile_path = (
+        (pdir / "profile.yaml") if (pdir / "profile.yaml").exists() else (pdir / "profile.json")
+    )
     if not profile_path.exists():
         return None
 
@@ -268,7 +272,16 @@ def write_profile_artifacts(job_dir: Path, profile: LoadedProjectProfile) -> Non
     if th:
         atomic_write_text(
             job_dir / "analysis" / "qa_profile.json",
-            json.dumps({"version": 1, "project": profile.name, "profile_hash": profile.profile_hash, "thresholds": th}, indent=2, sort_keys=True),
+            json.dumps(
+                {
+                    "version": 1,
+                    "project": profile.name,
+                    "profile_hash": profile.profile_hash,
+                    "thresholds": th,
+                },
+                indent=2,
+                sort_keys=True,
+            ),
             "utf-8",
         )
 
@@ -276,7 +289,16 @@ def write_profile_artifacts(job_dir: Path, profile: LoadedProjectProfile) -> Non
     if dp:
         atomic_write_text(
             job_dir / "analysis" / "delivery_profiles.json",
-            json.dumps({"version": 1, "project": profile.name, "profile_hash": profile.profile_hash, "characters": dp}, indent=2, sort_keys=True),
+            json.dumps(
+                {
+                    "version": 1,
+                    "project": profile.name,
+                    "profile_hash": profile.profile_hash,
+                    "characters": dp,
+                },
+                indent=2,
+                sort_keys=True,
+            ),
             "utf-8",
         )
 
@@ -297,4 +319,3 @@ def log_profile_applied(*, project: str, profile_hash: str, applied_keys: list[s
         profile_hash=str(profile_hash),
         applied_keys=sorted({str(k) for k in applied_keys}),
     )
-

@@ -128,7 +128,9 @@ class AuthStore:
         Add new columns to refresh_tokens if missing (best-effort, idempotent).
         """
         try:
-            cols = [str(r["name"]) for r in con.execute("PRAGMA table_info(refresh_tokens);").fetchall()]
+            cols = [
+                str(r["name"]) for r in con.execute("PRAGMA table_info(refresh_tokens);").fetchall()
+            ]
         except Exception:
             return
         want = {
@@ -161,7 +163,9 @@ class AuthStore:
                 );
                 """
             )
-            con.execute("CREATE INDEX IF NOT EXISTS qr_login_codes_user_id ON qr_login_codes(user_id);")
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS qr_login_codes_user_id ON qr_login_codes(user_id);"
+            )
         except Exception:
             return
 
@@ -485,7 +489,9 @@ class AuthStore:
         finally:
             con.close()
 
-    def put_qr_code(self, *, nonce_hash: str, user_id: str, created_at: int, expires_at: int, created_ip: str) -> None:
+    def put_qr_code(
+        self, *, nonce_hash: str, user_id: str, created_at: int, expires_at: int, created_ip: str
+    ) -> None:
         con = self._conn()
         try:
             con.execute(

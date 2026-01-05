@@ -124,7 +124,8 @@ class StreamContextBuffer:
         cand = [
             it
             for it in self._items
-            if float(it.abs_end_s) >= (boundary_s - ov - 0.25) and float(it.abs_start_s) <= (boundary_s + ov + 0.25)
+            if float(it.abs_end_s) >= (boundary_s - ov - 0.25)
+            and float(it.abs_start_s) <= (boundary_s + ov + 0.25)
         ]
         if not cand:
             return src_segments, DedupReport(dropped=0, kept=len(src_segments))
@@ -153,7 +154,9 @@ class StreamContextBuffer:
             is_dup = False
             for it in cand:
                 # time overlap test (absolute)
-                ov_s = max(0.0, min(float(a1), float(it.abs_end_s)) - max(float(a0), float(it.abs_start_s)))
+                ov_s = max(
+                    0.0, min(float(a1), float(it.abs_end_s)) - max(float(a0), float(it.abs_start_s))
+                )
                 if ov_s <= 0.0:
                     continue
                 pt = _norm_text(it.src_text)
@@ -169,4 +172,3 @@ class StreamContextBuffer:
             kept.append(s)
 
         return kept, DedupReport(dropped=dropped, kept=len(kept))
-

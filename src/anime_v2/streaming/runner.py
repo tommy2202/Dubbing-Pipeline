@@ -36,7 +36,15 @@ class StreamChunkResult:
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
-        for k in ("wav_chunk", "src_srt", "tgt_srt", "translated_json", "tts_wav", "dubbed_wav", "chunk_mp4"):
+        for k in (
+            "wav_chunk",
+            "src_srt",
+            "tgt_srt",
+            "translated_json",
+            "tts_wav",
+            "dubbed_wav",
+            "chunk_mp4",
+        ):
             if d.get(k) is not None:
                 d[k] = str(d[k])
         return d
@@ -379,7 +387,9 @@ def run_streaming(
                             for j, seg in enumerate(translated, 1):
                                 sid = int(seg.get("segment_id") or j)
                                 before = str(seg.get("text") or "")
-                                after, applied, meta = apply_style_guide(before, guide, stage="post_translate")
+                                after, applied, meta = apply_style_guide(
+                                    before, guide, stage="post_translate"
+                                )
                                 if after != before:
                                     seg["text_pre_style_guide"] = before
                                     seg["text"] = after
@@ -407,7 +417,9 @@ def run_streaming(
                         translated, rep = apply_pg_filter_to_segments(
                             translated,
                             pg=str(pg).lower(),
-                            pg_policy_path=Path(pg_policy_path).resolve() if pg_policy_path else None,
+                            pg_policy_path=(
+                                Path(pg_policy_path).resolve() if pg_policy_path else None
+                            ),
                             report_path=None,
                             job_id=str(out_dir.name),
                         )
@@ -442,8 +454,13 @@ def run_streaming(
                                     ctx_hint = ctx.build_translation_hint()
 
                                 fitted, stats, attempt = fit_with_rewrite_provider(
-                                    provider_name=str(getattr(s, "rewrite_provider", "heuristic")).lower(),
-                                    endpoint=(str(getattr(s, "rewrite_endpoint", "") or "").strip() or None),
+                                    provider_name=str(
+                                        getattr(s, "rewrite_provider", "heuristic")
+                                    ).lower(),
+                                    endpoint=(
+                                        str(getattr(s, "rewrite_endpoint", "") or "").strip()
+                                        or None
+                                    ),
                                     model_path=getattr(s, "rewrite_model", None),
                                     strict=bool(getattr(s, "rewrite_strict", True)),
                                     text=pre,
@@ -451,7 +468,10 @@ def run_streaming(
                                     tolerance=float(timing_tolerance),
                                     wps=float(getattr(s, "timing_wps", 2.7)),
                                     constraints={"required_terms": req_terms},
-                                    context={"context_hint": ctx_hint, "speaker": str(seg.get("speaker") or "")},
+                                    context={
+                                        "context_hint": ctx_hint,
+                                        "speaker": str(seg.get("speaker") or ""),
+                                    },
                                 )
                                 seg["text_pre_fit"] = pre
                                 seg["text"] = fitted
@@ -472,7 +492,10 @@ def run_streaming(
                             except Exception:
                                 continue
 
-                write_json(translated_json, {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": translated})
+                write_json(
+                    translated_json,
+                    {"src_lang": src_lang, "tgt_lang": tgt_lang, "segments": translated},
+                )
 
                 # Update streaming context buffer using aligned src/translated segments.
                 with suppress(Exception):
@@ -487,7 +510,10 @@ def run_streaming(
                     from anime_v2.utils.subtitles import write_srt
 
                     write_srt(
-                        [{"start": s["start"], "end": s["end"], "text": s.get("text", "")} for s in translated],
+                        [
+                            {"start": s["start"], "end": s["end"], "text": s.get("text", "")}
+                            for s in translated
+                        ],
                         tgt_srt,
                     )
 
@@ -670,7 +696,9 @@ def run_streaming(
         "stream_output": str(stream_output),
         "wall_time_s": time.perf_counter() - t0,
     }
-    atomic_write_text(manifest_path, json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    atomic_write_text(
+        manifest_path, json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
 
     # Per-job PG filter report (best-effort) for streaming runs.
     if str(pg).lower() != "off":
@@ -704,4 +732,3 @@ def run_streaming(
         _concat_mp4s_ffmpeg(mp4s, final_out)
 
     return {"manifest": manifest_path, "final": final_out, "chunks": mp4s}
-

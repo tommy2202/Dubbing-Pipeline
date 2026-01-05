@@ -306,7 +306,9 @@ def apply_pg_filter_to_segments(
     if pol is None:
         if report_path is not None:
             report_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(report_path, json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+            atomic_write_text(
+                report_path, json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
+            )
         return segments, report
 
     out: list[dict[str, Any]] = []
@@ -348,6 +350,7 @@ def apply_pg_filter_to_segments(
 
     if report_path is not None:
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(report_path, json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        atomic_write_text(
+            report_path, json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
+        )
     return out, report
-

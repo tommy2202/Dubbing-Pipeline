@@ -263,7 +263,9 @@ def run(
     eff_expressive_debug = bool(
         expressive_debug if expressive_debug is not None else bool(settings.expressive_debug)
     )
-    eff_director = bool(director) if director is not None else bool(getattr(settings, "director", False))
+    eff_director = (
+        bool(director) if director is not None else bool(getattr(settings, "director", False))
+    )
     eff_director_strength = float(
         director_strength
         if director_strength is not None
@@ -636,7 +638,9 @@ def run(
                     text=text,
                     start_s=float(line.get("start", 0.0)),
                     end_s=float(line.get("end", 0.0)),
-                    source_audio_wav=Path(source_audio_wav) if source_audio_wav is not None else None,
+                    source_audio_wav=(
+                        Path(source_audio_wav) if source_audio_wav is not None else None
+                    ),
                     strength=float(d_strength),
                 )
                 rate_mul *= float(plan.rate_mul)
@@ -715,7 +719,9 @@ def run(
             or speaker_rep_wav.get(speaker_id)
         )
         # Per-segment voice mode (Feature K + Tier-2A): do not mutate job-level defaults.
-        seg_voice_mode = str(line.get("preferred_voice_mode") or eff_voice_mode or "clone").strip().lower()
+        seg_voice_mode = (
+            str(line.get("preferred_voice_mode") or eff_voice_mode or "clone").strip().lower()
+        )
         if seg_voice_mode not in {"clone", "preset", "single"}:
             seg_voice_mode = "clone"
 
@@ -1065,12 +1071,18 @@ def run(
                         "enabled": True,
                         "target_s": float(target_dur),
                         "actual_s": float(actual_dur),
-                        "ratio": (float(actual_dur) / float(target_dur)) if target_dur > 0 else None,
+                        "ratio": (
+                            (float(actual_dur) / float(target_dur)) if target_dur > 0 else None
+                        ),
                         "min_ratio": float(eff_pacing_min),
                         "max_ratio": float(eff_pacing_max),
                         "tolerance": float(eff_tol),
-                        "actions": [str(a.get("kind") or "") for a in actions if isinstance(a, dict)],
-                        "atempo_ratio": float(atempo_ratio_used) if atempo_ratio_used is not None else None,
+                        "actions": [
+                            str(a.get("kind") or "") for a in actions if isinstance(a, dict)
+                        ],
+                        "atempo_ratio": (
+                            float(atempo_ratio_used) if atempo_ratio_used is not None else None
+                        ),
                         "tts_speed": float(tts_speed_used) if tts_speed_used is not None else None,
                         "hard_trim": bool(did_hard_trim),
                         "padded": bool(did_pad),

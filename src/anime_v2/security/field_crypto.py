@@ -32,7 +32,12 @@ def encrypt_field(plaintext: str, *, aad: str) -> str:
     AESGCM = _aesgcm()
     nonce = os.urandom(12)
     ct = AESGCM(key).encrypt(nonce, plaintext.encode("utf-8"), str(aad).encode("utf-8"))
-    return _PREFIX + base64.b64encode(nonce).decode("ascii") + ":" + base64.b64encode(ct).decode("ascii")
+    return (
+        _PREFIX
+        + base64.b64encode(nonce).decode("ascii")
+        + ":"
+        + base64.b64encode(ct).decode("ascii")
+    )
 
 
 def decrypt_field(value: str, *, aad: str) -> str:
@@ -58,4 +63,3 @@ def decrypt_field(value: str, *, aad: str) -> str:
 
 def totp_enabled() -> bool:
     return bool(getattr(get_settings(), "enable_totp", False))
-

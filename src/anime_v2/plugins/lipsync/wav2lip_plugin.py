@@ -152,7 +152,9 @@ class Wav2LipPlugin(LipSyncPlugin):
             if alt.exists():
                 infer_py = alt
         if not infer_py.exists():
-            raise FileNotFoundError(f"Wav2Lip inference script not found under {repo_dir} (infer.py)")
+            raise FileNotFoundError(
+                f"Wav2Lip inference script not found under {repo_dir} (infer.py)"
+            )
 
         ckpt = None
         if self._checkpoint_path:
@@ -294,7 +296,9 @@ class Wav2LipPlugin(LipSyncPlugin):
         run_ffmpeg(cmd, timeout_s=600, retries=0, capture=True)
         return out_mp4
 
-    def _mux_video_audio(self, *, video_mp4: Path, audio_wav: Path, out_mp4: Path, timeout_s: int) -> Path:
+    def _mux_video_audio(
+        self, *, video_mp4: Path, audio_wav: Path, out_mp4: Path, timeout_s: int
+    ) -> Path:
         s = get_settings()
         out_mp4.parent.mkdir(parents=True, exist_ok=True)
         cmd = [
@@ -322,7 +326,9 @@ class Wav2LipPlugin(LipSyncPlugin):
         run_ffmpeg(cmd, timeout_s=int(timeout_s), retries=0, capture=True)
         return out_mp4
 
-    def _mux_passthrough_full(self, *, src_video: Path, audio_wav: Path, out_mp4: Path, timeout_s: int) -> Path:
+    def _mux_passthrough_full(
+        self, *, src_video: Path, audio_wav: Path, out_mp4: Path, timeout_s: int
+    ) -> Path:
         """
         Best-effort "no lipsync" output: original video + dubbed audio.
         Tries stream-copy video first; falls back to re-encode if needed.
@@ -421,7 +427,9 @@ class Wav2LipPlugin(LipSyncPlugin):
         )
         return out_mp4
 
-    def _normalize_ranges(self, ranges: list[tuple[float, float]], *, duration_s: float) -> list[tuple[float, float]]:
+    def _normalize_ranges(
+        self, ranges: list[tuple[float, float]], *, duration_s: float
+    ) -> list[tuple[float, float]]:
         out: list[tuple[float, float]] = []
         for a, b in ranges:
             try:
@@ -468,7 +476,9 @@ class Wav2LipPlugin(LipSyncPlugin):
         if face_mode == "center" and bbox is None:
             bbox = _center_box(req.input_video)
 
-        logger.info("[v2] lipsync: running Wav2Lip", repo=str(paths.repo_dir), infer=str(paths.infer_py))
+        logger.info(
+            "[v2] lipsync: running Wav2Lip", repo=str(paths.repo_dir), infer=str(paths.infer_py)
+        )
 
         # Feature J: scene-limited lip-sync
         duration_s = 0.0
@@ -496,12 +506,16 @@ class Wav2LipPlugin(LipSyncPlugin):
                     write_preview_report(rep, out_path=analysis_dir / "lipsync_preview.json")
                     ranges = [(float(r.start_s), float(r.end_s)) for r in rep.recommended_ranges]
                 except Exception as ex:
-                    logger.warning("[v2] lipsync: preview failed; falling back to pass-through (%s)", ex)
+                    logger.warning(
+                        "[v2] lipsync: preview failed; falling back to pass-through (%s)", ex
+                    )
                     ranges = []
 
         if bool(req.scene_limited) and not ranges:
             # No "good face" ranges OR detector unavailable: pass-through full video (no Wav2Lip inference).
-            logger.warning("[v2] lipsync: scene-limited enabled but no valid ranges; output will be pass-through.")
+            logger.warning(
+                "[v2] lipsync: scene-limited enabled but no valid ranges; output will be pass-through."
+            )
             if req.dry_run:
                 return req.output_video
             with suppress(Exception):
@@ -512,7 +526,11 @@ class Wav2LipPlugin(LipSyncPlugin):
                 atomic_write_text(
                     analysis_dir / "lipsync_ranges.jsonl",
                     json.dumps(
-                        {"range": [0.0, float(duration_s or 0.0)], "mode": "scene_limited", "status": "skipped_no_ranges"},
+                        {
+                            "range": [0.0, float(duration_s or 0.0)],
+                            "mode": "scene_limited",
+                            "status": "skipped_no_ranges",
+                        },
                         sort_keys=True,
                     )
                     + "\n",
@@ -542,21 +560,44 @@ class Wav2LipPlugin(LipSyncPlugin):
             )
             if req.dry_run:
                 return req.output_video
-            self._mux_video_audio(video_mp4=raw_out, audio_wav=req.dubbed_audio_wav, out_mp4=req.output_video, timeout_s=int(req.timeout_s))
+            self._mux_video_audio(
+                video_mp4=raw_out,
+                audio_wav=req.dubbed_audio_wav,
+                out_mp4=req.output_video,
+                timeout_s=int(req.timeout_s),
+            )
             with suppress(Exception):
                 raw_out.unlink(missing_ok=True)
             return req.output_video
 
         # Range mode: build pass-through + lipsynced segments and concat.
         if duration_s <= 0.0:
-            raise RuntimeError("scene-limited lipsync requires a valid video duration (ffprobe failed).")
+            raise RuntimeError(
+                "scene-limited lipsync requires a valid video duration (ffprobe failed)."
+            )
         ranges = self._normalize_ranges(ranges, duration_s=float(duration_s))
         if not ranges:
             # Nothing to do; produce pass-through full segment.
-            seg_v = self._slice_video_segment(src_video=req.input_video, start_s=0.0, end_s=float(duration_s), out_mp4=req.work_dir / "seg_passthrough.mp4")
+            seg_v = self._slice_video_segment(
+                src_video=req.input_video,
+                start_s=0.0,
+                end_s=float(duration_s),
+                out_mp4=req.work_dir / "seg_passthrough.mp4",
+            )
             seg_a = req.work_dir / "seg_passthrough.wav"
-            extract_audio_mono_16k(src=req.dubbed_audio_wav, dst=seg_a, start_s=0.0, end_s=float(duration_s), timeout_s=120)
-            self._mux_video_audio(video_mp4=seg_v, audio_wav=seg_a, out_mp4=req.output_video, timeout_s=int(req.timeout_s))
+            extract_audio_mono_16k(
+                src=req.dubbed_audio_wav,
+                dst=seg_a,
+                start_s=0.0,
+                end_s=float(duration_s),
+                timeout_s=120,
+            )
+            self._mux_video_audio(
+                video_mp4=seg_v,
+                audio_wav=seg_a,
+                out_mp4=req.output_video,
+                timeout_s=int(req.timeout_s),
+            )
             return req.output_video
 
         analysis_dir = req.output_video.parent / "analysis"
@@ -585,8 +626,16 @@ class Wav2LipPlugin(LipSyncPlugin):
             seg_audio = seg_dir / "audio.wav"
             out_seg = seg_dir / "out.mp4"
             try:
-                self._slice_video_segment(src_video=req.input_video, start_s=float(a), end_s=float(b), out_mp4=seg_video)
-                extract_audio_mono_16k(src=req.dubbed_audio_wav, dst=seg_audio, start_s=float(a), end_s=float(b), timeout_s=120)
+                self._slice_video_segment(
+                    src_video=req.input_video, start_s=float(a), end_s=float(b), out_mp4=seg_video
+                )
+                extract_audio_mono_16k(
+                    src=req.dubbed_audio_wav,
+                    dst=seg_audio,
+                    start_s=float(a),
+                    end_s=float(b),
+                    timeout_s=120,
+                )
                 if do_ls:
                     raw = seg_dir / "lipsynced.raw.mp4"
                     self._run_wav2lip_once(
@@ -604,16 +653,27 @@ class Wav2LipPlugin(LipSyncPlugin):
                         mp4s.append(out_seg)
                         lines.append(
                             json.dumps(
-                                {"range": [float(a), float(b)], "mode": "lipsync", "status": "dry_run"}, sort_keys=True
+                                {
+                                    "range": [float(a), float(b)],
+                                    "mode": "lipsync",
+                                    "status": "dry_run",
+                                },
+                                sort_keys=True,
                             )
                         )
                         continue
-                    self._mux_video_audio(video_mp4=raw, audio_wav=seg_audio, out_mp4=out_seg, timeout_s=int(req.timeout_s))
+                    self._mux_video_audio(
+                        video_mp4=raw,
+                        audio_wav=seg_audio,
+                        out_mp4=out_seg,
+                        timeout_s=int(req.timeout_s),
+                    )
                     with suppress(Exception):
                         raw.unlink(missing_ok=True)
                     lines.append(
                         json.dumps(
-                            {"range": [float(a), float(b)], "mode": "lipsync", "status": "ok"}, sort_keys=True
+                            {"range": [float(a), float(b)], "mode": "lipsync", "status": "ok"},
+                            sort_keys=True,
                         )
                     )
                 else:
@@ -622,24 +682,44 @@ class Wav2LipPlugin(LipSyncPlugin):
                         mp4s.append(out_seg)
                         lines.append(
                             json.dumps(
-                                {"range": [float(a), float(b)], "mode": "passthrough", "status": "dry_run"},
+                                {
+                                    "range": [float(a), float(b)],
+                                    "mode": "passthrough",
+                                    "status": "dry_run",
+                                },
                                 sort_keys=True,
                             )
                         )
                         continue
-                    self._mux_video_audio(video_mp4=seg_video, audio_wav=seg_audio, out_mp4=out_seg, timeout_s=int(req.timeout_s))
+                    self._mux_video_audio(
+                        video_mp4=seg_video,
+                        audio_wav=seg_audio,
+                        out_mp4=out_seg,
+                        timeout_s=int(req.timeout_s),
+                    )
                     lines.append(
                         json.dumps(
-                            {"range": [float(a), float(b)], "mode": "passthrough", "status": "ok"}, sort_keys=True
+                            {"range": [float(a), float(b)], "mode": "passthrough", "status": "ok"},
+                            sort_keys=True,
                         )
                     )
                 mp4s.append(out_seg)
             except Exception as ex:
                 # Skip failed lipsync segments; fall back to passthrough for that range if possible.
-                logger.warning("[v2] lipsync range failed; skipping", start=float(a), end=float(b), error=str(ex))
+                logger.warning(
+                    "[v2] lipsync range failed; skipping",
+                    start=float(a),
+                    end=float(b),
+                    error=str(ex),
+                )
                 lines.append(
                     json.dumps(
-                        {"range": [float(a), float(b)], "mode": "lipsync" if do_ls else "passthrough", "status": "fail", "error": str(ex)},
+                        {
+                            "range": [float(a), float(b)],
+                            "mode": "lipsync" if do_ls else "passthrough",
+                            "status": "fail",
+                            "error": str(ex),
+                        },
                         sort_keys=True,
                     )
                 )
@@ -647,7 +727,12 @@ class Wav2LipPlugin(LipSyncPlugin):
                     continue
                 try:
                     # best-effort passthrough
-                    self._mux_video_audio(video_mp4=seg_video, audio_wav=seg_audio, out_mp4=out_seg, timeout_s=int(req.timeout_s))
+                    self._mux_video_audio(
+                        video_mp4=seg_video,
+                        audio_wav=seg_audio,
+                        out_mp4=out_seg,
+                        timeout_s=int(req.timeout_s),
+                    )
                     mp4s.append(out_seg)
                 except Exception:
                     continue
@@ -665,4 +750,3 @@ def get_wav2lip_plugin(
     *, wav2lip_dir: Path | None = None, wav2lip_checkpoint: Path | None = None
 ) -> Wav2LipPlugin:
     return Wav2LipPlugin(wav2lip_dir=wav2lip_dir, checkpoint_path=wav2lip_checkpoint)
-

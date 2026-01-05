@@ -34,7 +34,9 @@ def _sha256_bytes(b: bytes) -> str:
 
 
 def _sha256_json(obj: Any) -> str:
-    blob = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    blob = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return _sha256_bytes(blob)
 
 
@@ -102,7 +104,9 @@ def _overlaps(a0: float, a1: float, b0: float, b1: float) -> bool:
     return max(0.0, min(a1, b1) - max(a0, b0)) > 0.0
 
 
-def _match_region(regs: list[dict[str, Any]], start: float, end: float, *, eps: float = 0.05) -> int | None:
+def _match_region(
+    regs: list[dict[str, Any]], start: float, end: float, *, eps: float = 0.05
+) -> int | None:
     best = None
     best_d = 1e9
     for i, r in enumerate(regs):
@@ -129,7 +133,11 @@ def apply_music_region_overrides(
       - adds (append)
       - final sort + merge (best-effort via music_detect._merge_regions style semantics not required here)
     """
-    regs = [dict(r) for r in (base_regions if isinstance(base_regions, list) else []) if isinstance(r, dict)]
+    regs = [
+        dict(r)
+        for r in (base_regions if isinstance(base_regions, list) else [])
+        if isinstance(r, dict)
+    ]
     mro = overrides.get("music_regions_overrides") if isinstance(overrides, dict) else None
     if not isinstance(mro, dict):
         return regs
@@ -405,4 +413,3 @@ def apply_overrides(job_dir: Path, *, write_manifest: bool = True) -> OverridesA
         logger.info("overrides_manifest_written", job_dir=str(job_dir), overrides_hash=ov_hash)
 
     return rep
-

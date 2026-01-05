@@ -60,4 +60,3 @@ def assign_speakers(cues: list[dict], diar_segments: list[dict] | None) -> list[
             }
         )
     return out
-

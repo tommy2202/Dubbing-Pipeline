@@ -70,4 +70,3 @@ def build_multitrack_artifacts(
         background_only_wav=out_bg,
         dialogue_only_wav=out_dlg,
     )
-

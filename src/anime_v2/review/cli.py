@@ -122,4 +122,3 @@ def review_render(job: str) -> None:
     outs = render(job_dir)
     for k, v in outs.items():
         click.echo(f"{k}={v}")
-

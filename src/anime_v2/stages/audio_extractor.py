@@ -56,7 +56,12 @@ def run(
 
 # Alias for orchestrator naming
 def extract(
-    video: Path, out_dir: Path, *, wav_out: Path | None = None, job_id: str | None = None, **_: object
+    video: Path,
+    out_dir: Path,
+    *,
+    wav_out: Path | None = None,
+    job_id: str | None = None,
+    **_: object,
 ) -> Path:
     # Accept job_id/**_ for forward-compat with orchestrators passing extra kwargs.
     return run(video=video, ckpt_dir=out_dir, wav_out=wav_out, job_id=job_id)

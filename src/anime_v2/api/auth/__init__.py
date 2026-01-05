@@ -23,4 +23,3 @@ __all__ = [
     "rotate_refresh_token",
     "revoke_refresh_token_best_effort",
 ]
-

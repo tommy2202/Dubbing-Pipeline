@@ -80,7 +80,9 @@ def _text_proxies(text: str, duration_s: float) -> tuple[float | None, float | N
     return cps, wps
 
 
-def categorize(*, rms: float | None, pitch_hz: float | None, text: str) -> tuple[str, dict[str, Any]]:
+def categorize(
+    *, rms: float | None, pitch_hz: float | None, text: str
+) -> tuple[str, dict[str, Any]]:
     """
     Coarse offline category heuristic.
     """
@@ -166,4 +168,3 @@ def analyze_segment(
         category=str(category),
         signals=signals,
     )
-

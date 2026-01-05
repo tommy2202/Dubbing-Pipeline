@@ -31,10 +31,16 @@ def music_list(job: str) -> None:
 @click.argument("job", type=str)
 @click.option("--start", type=float, required=True)
 @click.option("--end", type=float, required=True)
-@click.option("--kind", type=click.Choice(["music", "singing", "unknown"], case_sensitive=False), default="music")
+@click.option(
+    "--kind",
+    type=click.Choice(["music", "singing", "unknown"], case_sensitive=False),
+    default="music",
+)
 @click.option("--confidence", type=float, default=1.0)
 @click.option("--reason", type=str, default="user_add")
-def music_add(job: str, start: float, end: float, kind: str, confidence: float, reason: str) -> None:
+def music_add(
+    job: str, start: float, end: float, kind: str, confidence: float, reason: str
+) -> None:
     job_dir = resolve_job_dir(job)
     ov = load_overrides(job_dir)
     mro = ov.get("music_regions_overrides", {})
@@ -165,4 +171,3 @@ def overrides_apply(job: str) -> None:
     job_dir = resolve_job_dir(job)
     rep = apply_overrides(job_dir)
     click.echo(json.dumps(rep.to_dict(), indent=2, sort_keys=True))
-

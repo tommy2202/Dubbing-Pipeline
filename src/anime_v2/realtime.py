@@ -90,4 +90,6 @@ def realtime_dub(
     if stitched is not None and stitched.exists():
         with suppress(Exception):
             (rt_dir / "realtime.stitched.mp4").write_bytes(stitched.read_bytes())
-    return RealtimeResult(out_dir=rt_dir, manifest_path=man, stitched_wav=None, stitched_srt=None, stitched_vtt=None)
+    return RealtimeResult(
+        out_dir=rt_dir, manifest_path=man, stitched_wav=None, stitched_srt=None, stitched_vtt=None
+    )

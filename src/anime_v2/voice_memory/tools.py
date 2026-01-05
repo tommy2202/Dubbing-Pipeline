@@ -82,7 +82,9 @@ def create_merge_backup(*, store_root: Path, from_id: str, to_id: str) -> MergeB
     }
     write_json(bdir / "manifest.json", manifest, indent=2)
     logger.info("voice_merge_backup_created", merge_id=merge_id, backup_dir=str(bdir))
-    return MergeBackup(merge_id=merge_id, backup_dir=bdir, store_root=root, from_id=from_id, to_id=to_id)
+    return MergeBackup(
+        merge_id=merge_id, backup_dir=bdir, store_root=root, from_id=from_id, to_id=to_id
+    )
 
 
 def _next_ref_name(dest_dir: Path) -> Path:
@@ -246,7 +248,9 @@ def merge_characters(
         json.dumps(op, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    logger.info("voice_merge_done", merge_id=backup.merge_id, refs=moved, episode_updates=ep_changed)
+    logger.info(
+        "voice_merge_done", merge_id=backup.merge_id, refs=moved, episode_updates=ep_changed
+    )
     return backup
 
 
@@ -286,4 +290,3 @@ def undo_merge(*, store_root: Path, merge_id: str) -> None:
             shutil.copytree(sub, dst)
 
     logger.info("voice_merge_undone", merge_id=mid, backup_dir=str(bdir))
-

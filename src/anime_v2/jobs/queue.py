@@ -62,7 +62,6 @@ def _select_device(device: str) -> str:
         return "cpu"
 
 
-
 def _parse_srt_to_cues(srt_path: Path) -> list[dict]:
     from anime_v2.utils.cues import parse_srt_to_cues
 
@@ -241,7 +240,9 @@ class JobQueue:
             priv = None
 
         # Stable naming: allow job.runtime.source_stem to control Output/<stem>/ naming (e.g. encrypted uploads).
-        stem = str(runtime.get("source_stem") or video_path.stem or str(job.id)).strip() or str(job.id)
+        stem = str(runtime.get("source_stem") or video_path.stem or str(job.id)).strip() or str(
+            job.id
+        )
         proj_sub = ""
         try:
             proj = runtime.get("project")
@@ -439,7 +440,11 @@ class JobQueue:
                             with suppress(Exception):
                                 self.store.update(
                                     job_id,
-                                    runtime={**rt2, "project_profile_hash": proj_hash, "project_name": prof.name},
+                                    runtime={
+                                        **rt2,
+                                        "project_profile_hash": proj_hash,
+                                        "project_name": prof.name,
+                                    },
                                 )
                             # Persist under Output/<job>/analysis/
                             with suppress(Exception):
@@ -451,7 +456,11 @@ class JobQueue:
                     job_dir=base_dir,
                     stage="audio",
                     inputs={"video": file_fingerprint(video_in)},
-                    params={"wav_out": "audio.wav", "project": proj_name, "project_profile_hash": proj_hash},
+                    params={
+                        "wav_out": "audio.wav",
+                        "project": proj_name,
+                        "project_profile_hash": proj_hash,
+                    },
                     outputs={"audio_wav": str(Path(str(wav)).resolve())},
                 )
             except Exception:
@@ -481,7 +490,9 @@ class JobQueue:
                     music_regions_path_work = analysis_dir / "music_regions.json"
                     write_regions_json(regs, music_regions_path_work)
                     with suppress(Exception):
-                        atomic_copy(music_regions_path_work, base_analysis_dir / "music_regions.json")
+                        atomic_copy(
+                            music_regions_path_work, base_analysis_dir / "music_regions.json"
+                        )
                     self.store.append_log(
                         job_id,
                         f"[{now_utc()}] music_detect regions={len(regs)} threshold={float(getattr(settings, 'music_threshold', 0.70)):.2f}",
@@ -563,7 +574,9 @@ class JobQueue:
             sep_mode = str(getattr(settings, "separation", "off") or "off").lower()
             curj = self.store.get(job_id)
             rt2 = dict((curj.runtime or {}) if curj else runtime)
-            mix_mode = str(rt2.get("mix_mode") or getattr(settings, "mix_mode", "legacy") or "legacy").lower()
+            mix_mode = str(
+                rt2.get("mix_mode") or getattr(settings, "mix_mode", "legacy") or "legacy"
+            ).lower()
             background_wav: Path | None = None
             if mix_mode == "enhanced":
                 if sep_mode == "demucs":
@@ -619,7 +632,9 @@ class JobQueue:
                     eff_sm = bool(rt2.get("speaker_smoothing")) or bool(
                         getattr(settings, "speaker_smoothing", False)
                     )
-                    eff_scene = str(rt2.get("scene_detect") or getattr(settings, "scene_detect", "audio")).lower()
+                    eff_scene = str(
+                        rt2.get("scene_detect") or getattr(settings, "scene_detect", "audio")
+                    ).lower()
                     if eff_sm and eff_scene != "off":
                         from anime_v2.diarization.smoothing import (
                             detect_scenes_audio,
@@ -637,7 +652,9 @@ class JobQueue:
                             utts,
                             scenes,
                             min_turn_s=float(getattr(settings, "smoothing_min_turn_s", 0.6)),
-                            surround_gap_s=float(getattr(settings, "smoothing_surround_gap_s", 0.4)),
+                            surround_gap_s=float(
+                                getattr(settings, "smoothing_surround_gap_s", 0.4)
+                            ),
                         )
                         # Feature D: optional per-job smoothing overrides (disable smoothing in selected ranges/segments)
                         try:
@@ -647,13 +664,16 @@ class JobQueue:
                             )
 
                             ov = load_overrides(base_dir)
-                            sm_ov = ov.get("smoothing_overrides", {}) if isinstance(ov, dict) else {}
+                            sm_ov = (
+                                ov.get("smoothing_overrides", {}) if isinstance(ov, dict) else {}
+                            )
                             utts2b, reverted = apply_smoothing_overrides_to_utts(
                                 utts2, sm_ov, segment_ranges=None
                             )
                             if reverted:
                                 self.store.append_log(
-                                    job_id, f"[{now_utc()}] smoothing_overrides reverted_utts={reverted}"
+                                    job_id,
+                                    f"[{now_utc()}] smoothing_overrides reverted_utts={reverted}",
                                 )
                             utts = utts2b
                         except Exception:
@@ -667,7 +687,9 @@ class JobQueue:
                             config={
                                 "scene_detect": eff_scene,
                                 "min_turn_s": float(getattr(settings, "smoothing_min_turn_s", 0.6)),
-                                "surround_gap_s": float(getattr(settings, "smoothing_surround_gap_s", 0.4)),
+                                "surround_gap_s": float(
+                                    getattr(settings, "smoothing_surround_gap_s", 0.4)
+                                ),
                             },
                         )
                         with suppress(Exception):
@@ -679,7 +701,9 @@ class JobQueue:
                             f"[{now_utc()}] speaker_smoothing scenes={len(scenes)} changes={len(changes)}",
                         )
                 except Exception:
-                    self.store.append_log(job_id, f"[{now_utc()}] speaker_smoothing failed; continuing")
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] speaker_smoothing failed; continuing"
+                    )
 
                 seg_dir = work_dir / "segments"
                 seg_dir.mkdir(parents=True, exist_ok=True)
@@ -706,7 +730,8 @@ class JobQueue:
                 vm_map: dict[str, str] = {}
                 vm_meta: dict[str, dict[str, object]] = {}
                 vm_enabled = bool(getattr(settings, "voice_memory", False)) and not bool(
-                    runtime.get("minimal_artifacts") or runtime.get("privacy_mode") in {"on", "1", True}
+                    runtime.get("minimal_artifacts")
+                    or runtime.get("privacy_mode") in {"on", "1", True}
                 )
                 if vm_enabled:
                     try:
@@ -871,7 +896,9 @@ class JobQueue:
                     "qa": bool(rt2.get("qa") or False) if isinstance(rt2, dict) else False,
                     "director": bool(getattr(settings, "director", False)),
                     "multitrack": bool(getattr(settings, "multitrack", False)),
-                    "stream_context_seconds": float(getattr(settings, "stream_context_seconds", 15.0) or 15.0),
+                    "stream_context_seconds": float(
+                        getattr(settings, "stream_context_seconds", 15.0) or 15.0
+                    ),
                 }
                 overrides: dict[str, Any] = {}
                 # job-level override for ASR model isn't currently a first-class field; keep mode-based selection.
@@ -904,7 +931,11 @@ class JobQueue:
                         try:
                             curj = self.store.get(job_id)
                             rt_imp = dict((curj.runtime or {}) if curj else runtime)
-                            imp = rt_imp.get("imports") if isinstance(rt_imp.get("imports"), dict) else {}
+                            imp = (
+                                rt_imp.get("imports")
+                                if isinstance(rt_imp.get("imports"), dict)
+                                else {}
+                            )
                             src_p = str((imp or {}).get("src_srt_path") or "").strip()
                             js_p = str((imp or {}).get("transcript_json_path") or "").strip()
                         except Exception:
@@ -927,7 +958,12 @@ class JobQueue:
                                                 continue
                                             st = float(seg.get("start") or 0.0)
                                             en = float(seg.get("end") or 0.0)
-                                            txt = str(seg.get("source_text") or seg.get("src_text") or seg.get("text") or "")
+                                            txt = str(
+                                                seg.get("source_text")
+                                                or seg.get("src_text")
+                                                or seg.get("text")
+                                                or ""
+                                            )
                                             if en <= st or not txt.strip():
                                                 continue
                                             cues.append({"start": st, "end": en, "text": txt})
@@ -959,11 +995,15 @@ class JobQueue:
                                 rt2 = dict((curj2.runtime or {}) if curj2 else runtime)
                                 rt2.setdefault("skipped_stages", [])
                                 if isinstance(rt2["skipped_stages"], list):
-                                    rt2["skipped_stages"].append({"stage": "transcribe", "reason": "imported_transcript"})
+                                    rt2["skipped_stages"].append(
+                                        {"stage": "transcribe", "reason": "imported_transcript"}
+                                    )
                                 self.store.update(job_id, runtime=rt2)
                             except Exception:
                                 pass
-                            self.store.append_log(job_id, f"[{now_utc()}] transcribe skipped (import)")
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] transcribe skipped (import)"
+                            )
                         else:
                             if sched is None:
                                 run_with_timeout(
@@ -980,7 +1020,9 @@ class JobQueue:
                                         "tgt_lang": job.tgt_lang,
                                         "job_id": job_id,
                                         "audio_hash": audio_hash,
-                                        "word_timestamps": bool(get_settings().whisper_word_timestamps),
+                                        "word_timestamps": bool(
+                                            get_settings().whisper_word_timestamps
+                                        ),
                                     },
                                     cancel_check=_cancel_check_sync,
                                     cancel_exc=JobCanceled(),
@@ -1001,7 +1043,9 @@ class JobQueue:
                                             "tgt_lang": job.tgt_lang,
                                             "job_id": job_id,
                                             "audio_hash": audio_hash,
-                                            "word_timestamps": bool(get_settings().whisper_word_timestamps),
+                                            "word_timestamps": bool(
+                                                get_settings().whisper_word_timestamps
+                                            ),
                                         },
                                         cancel_check=_cancel_check_sync,
                                         cancel_exc=JobCanceled(),
@@ -1062,7 +1106,11 @@ class JobQueue:
                 for c in _parse_srt_to_cues(srt_public if srt_public.exists() else srt_out):
                     if isinstance(c, dict):
                         src_blocks.append(
-                            {"start": float(c.get("start", 0.0)), "end": float(c.get("end", 0.0)), "text": str(c.get("text") or "")}
+                            {
+                                "start": float(c.get("start", 0.0)),
+                                "end": float(c.get("end", 0.0)),
+                                "text": str(c.get("text") or ""),
+                            }
                         )
                 write_formatted_subs_variant(
                     job_dir=base_dir, variant="src", blocks=src_blocks, project=(proj_name or None)
@@ -1110,7 +1158,9 @@ class JobQueue:
                         "project_profile_hash": proj_hash,
                     },
                     outputs={
-                        "srt": str(srt_public.resolve() if srt_public.exists() else srt_out.resolve()),
+                        "srt": str(
+                            srt_public.resolve() if srt_public.exists() else srt_out.resolve()
+                        ),
                         "meta": str(
                             srt_public.with_suffix(".json").resolve()
                             if srt_public.with_suffix(".json").exists()
@@ -1207,12 +1257,20 @@ class JobQueue:
                     sp = ov.get("speaker_overrides", {}) if isinstance(ov, dict) else {}
                 segments_for_mt, changed = apply_speaker_overrides_to_segments(segments_for_mt, sp)
                 if changed:
-                    self.store.append_log(job_id, f"[{now_utc()}] speaker_overrides applied segments={changed}")
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] speaker_overrides applied segments={changed}"
+                    )
             except Exception:
                 pass
             no_store_tx = bool(runtime.get("no_store_transcript") or False)
-            translated_json = (work_dir / "translated.json") if no_store_tx else (base_dir / "translated.json")
-            translated_srt = (work_dir / f"{stem}.translated.srt") if no_store_tx else (base_dir / f"{stem}.translated.srt")
+            translated_json = (
+                (work_dir / "translated.json") if no_store_tx else (base_dir / "translated.json")
+            )
+            translated_srt = (
+                (work_dir / f"{stem}.translated.srt")
+                if no_store_tx
+                else (base_dir / f"{stem}.translated.srt")
+            )
 
             do_translate = job.src_lang.lower() != job.tgt_lang.lower()
             subs_srt_path: Path | None = srt_out if no_store_tx else srt_public
@@ -1296,8 +1354,12 @@ class JobQueue:
                         rt2 = dict((curj.runtime or {}) if curj else runtime)
                         # Tier-Next E: optional style guide on transcript-edited text (best-effort).
                         try:
-                            proj = rt2.get("project") if isinstance(rt2.get("project"), dict) else {}
-                            proj_name = str(proj.get("name") or rt2.get("project_name") or "").strip()
+                            proj = (
+                                rt2.get("project") if isinstance(rt2.get("project"), dict) else {}
+                            )
+                            proj_name = str(
+                                proj.get("name") or rt2.get("project_name") or ""
+                            ).strip()
                             sg_path = str(rt2.get("style_guide_path") or "").strip()
                             if proj_name or sg_path:
                                 from anime_v2.text.style_guide import (
@@ -1309,7 +1371,9 @@ class JobQueue:
                                 eff_path = (
                                     Path(sg_path).resolve()
                                     if sg_path
-                                    else resolve_style_guide_path(project=proj_name, style_guide_path=None)
+                                    else resolve_style_guide_path(
+                                        project=proj_name, style_guide_path=None
+                                    )
                                 )
                                 if eff_path and Path(eff_path).exists():
                                     guide = load_style_guide(Path(eff_path), project=proj_name)
@@ -1336,7 +1400,9 @@ class JobQueue:
                             out_segments, _ = apply_pg_filter_to_segments(
                                 out_segments,
                                 pg=eff_pg,
-                                pg_policy_path=(Path(eff_pg_policy).resolve() if eff_pg_policy else None),
+                                pg_policy_path=(
+                                    Path(eff_pg_policy).resolve() if eff_pg_policy else None
+                                ),
                                 report_path=report_p,
                                 job_id=str(job_id),
                             )
@@ -1395,23 +1461,37 @@ class JobQueue:
                     # Minimal translated.json from SRT cues
                     cues_tgt = _parse_srt_to_cues(translated_srt)
                     segs = [
-                        {"start": float(c["start"]), "end": float(c["end"]), "speaker": "SPEAKER_01", "text": str(c.get("text") or "")}
+                        {
+                            "start": float(c["start"]),
+                            "end": float(c["end"]),
+                            "speaker": "SPEAKER_01",
+                            "text": str(c.get("text") or ""),
+                        }
                         for c in cues_tgt
                         if isinstance(c, dict)
                     ]
-                    write_json(translated_json, {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "segments": segs})
+                    write_json(
+                        translated_json,
+                        {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "segments": segs},
+                    )
                     do_translate = False
                     try:
                         rt2 = dict(rt_imp)
                         rt2.setdefault("skipped_stages", [])
                         if isinstance(rt2["skipped_stages"], list):
-                            rt2["skipped_stages"].append({"stage": "translate", "reason": "imported_target_srt"})
+                            rt2["skipped_stages"].append(
+                                {"stage": "translate", "reason": "imported_target_srt"}
+                            )
                         self.store.update(job_id, runtime=rt2)
                     except Exception:
                         pass
-                    self.store.append_log(job_id, f"[{now_utc()}] translate skipped (import target srt)")
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] translate skipped (import target srt)"
+                    )
                 except Exception as ex:
-                    self.store.append_log(job_id, f"[{now_utc()}] import target srt failed: {ex} (continuing)")
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] import target srt failed: {ex} (continuing)"
+                    )
             elif js_p and Path(js_p).exists():
                 # Best-effort: if transcript JSON contains target text, use it.
                 try:
@@ -1427,25 +1507,43 @@ class JobQueue:
                                 continue
                             st = float(seg.get("start") or 0.0)
                             en = float(seg.get("end") or 0.0)
-                            txt = str(seg.get("tgt_text") or seg.get("target_text") or seg.get("text") or "")
+                            txt = str(
+                                seg.get("tgt_text")
+                                or seg.get("target_text")
+                                or seg.get("text")
+                                or ""
+                            )
                             if en <= st:
                                 continue
                             cues.append({"start": st, "end": en, "text": txt})
-                            segs.append({"start": st, "end": en, "speaker": "SPEAKER_01", "text": txt})
+                            segs.append(
+                                {"start": st, "end": en, "speaker": "SPEAKER_01", "text": txt}
+                            )
                         if cues:
                             _write_srt(cues, translated_srt)
-                            write_json(translated_json, {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "segments": segs})
+                            write_json(
+                                translated_json,
+                                {
+                                    "src_lang": job.src_lang,
+                                    "tgt_lang": job.tgt_lang,
+                                    "segments": segs,
+                                },
+                            )
                             subs_srt_path = translated_srt
                             do_translate = False
                             try:
                                 rt2 = dict(rt_imp)
                                 rt2.setdefault("skipped_stages", [])
                                 if isinstance(rt2["skipped_stages"], list):
-                                    rt2["skipped_stages"].append({"stage": "translate", "reason": "imported_transcript_json"})
+                                    rt2["skipped_stages"].append(
+                                        {"stage": "translate", "reason": "imported_transcript_json"}
+                                    )
                                 self.store.update(job_id, runtime=rt2)
                             except Exception:
                                 pass
-                            self.store.append_log(job_id, f"[{now_utc()}] translate skipped (import transcript json)")
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] translate skipped (import transcript json)"
+                            )
                 except Exception:
                     pass
 
@@ -1493,7 +1591,9 @@ class JobQueue:
                             eff_path = (
                                 Path(sg_path).resolve()
                                 if sg_path
-                                else resolve_style_guide_path(project=proj_name, style_guide_path=None)
+                                else resolve_style_guide_path(
+                                    project=proj_name, style_guide_path=None
+                                )
                             )
                             if eff_path and Path(eff_path).exists():
                                 guide = load_style_guide(Path(eff_path), project=proj_name)
@@ -1512,12 +1612,18 @@ class JobQueue:
                                 with suppress(Exception):
                                     from anime_v2.utils.io import atomic_copy
 
-                                    atomic_copy(out_jsonl, base_analysis_dir / "style_guide_applied.jsonl")
+                                    atomic_copy(
+                                        out_jsonl, base_analysis_dir / "style_guide_applied.jsonl"
+                                    )
                     except Exception:
-                        self.store.append_log(job_id, f"[{now_utc()}] style_guide failed; continuing")
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] style_guide failed; continuing"
+                        )
 
                     # Snapshot for subtitle variants (literal translation, before PG + timing-fit).
-                    translated_segments_literal = [dict(s) for s in translated_segments if isinstance(s, dict)]
+                    translated_segments_literal = [
+                        dict(s) for s in translated_segments if isinstance(s, dict)
+                    ]
                     translated_segments_pg = None
 
                     # Tier-Next C: per-job PG mode (opt-in; OFF by default), before timing-fit/TTS/subs.
@@ -1537,7 +1643,9 @@ class JobQueue:
                             translated_segments, _ = apply_pg_filter_to_segments(
                                 translated_segments,
                                 pg=eff_pg,
-                                pg_policy_path=(Path(eff_pg_policy).resolve() if eff_pg_policy else None),
+                                pg_policy_path=(
+                                    Path(eff_pg_policy).resolve() if eff_pg_policy else None
+                                ),
                                 report_path=report_p,
                                 job_id=str(job_id),
                             )
@@ -1545,7 +1653,9 @@ class JobQueue:
                                 from anime_v2.utils.io import atomic_copy
 
                                 atomic_copy(report_p, base_analysis_dir / "pg_filter_report.json")
-                            translated_segments_pg = [dict(s) for s in translated_segments if isinstance(s, dict)]
+                            translated_segments_pg = [
+                                dict(s) for s in translated_segments if isinstance(s, dict)
+                            ]
                     except Exception:
                         self.store.append_log(job_id, f"[{now_utc()}] pg_filter failed; continuing")
                     # Optional timing-aware translation fit (Tier-1 B).
@@ -1575,9 +1685,14 @@ class JobQueue:
                                                     req_terms.append(t)
 
                                     fitted, stats, attempt = fit_with_rewrite_provider(
-                                        provider_name=str(getattr(settings, "rewrite_provider", "heuristic")).lower(),
+                                        provider_name=str(
+                                            getattr(settings, "rewrite_provider", "heuristic")
+                                        ).lower(),
                                         endpoint=(
-                                            str(getattr(settings, "rewrite_endpoint", "") or "").strip() or None
+                                            str(
+                                                getattr(settings, "rewrite_endpoint", "") or ""
+                                            ).strip()
+                                            or None
                                         ),
                                         model_path=getattr(settings, "rewrite_model", None),
                                         strict=bool(getattr(settings, "rewrite_strict", True)),
@@ -1634,6 +1749,7 @@ class JobQueue:
                     # Feature E: formatted subtitle variants under Output/<job>/subs/
                     try:
                         from anime_v2.subs.formatting import write_formatted_subs_variant
+
                         if bool(runtime.get("no_store_transcript") or False):
                             raise RuntimeError("privacy_no_store_transcript")
                         proj_name = ""
@@ -1648,7 +1764,11 @@ class JobQueue:
                             job_dir=base_dir,
                             variant="tgt_literal",
                             blocks=[
-                                {"start": float(s.get("start", 0.0)), "end": float(s.get("end", 0.0)), "text": str(s.get("text") or "")}
+                                {
+                                    "start": float(s.get("start", 0.0)),
+                                    "end": float(s.get("end", 0.0)),
+                                    "text": str(s.get("text") or ""),
+                                }
                                 for s in translated_segments_literal
                                 if isinstance(s, dict)
                             ],
@@ -1659,7 +1779,11 @@ class JobQueue:
                                 job_dir=base_dir,
                                 variant="tgt_pg",
                                 blocks=[
-                                    {"start": float(s.get("start", 0.0)), "end": float(s.get("end", 0.0)), "text": str(s.get("text") or "")}
+                                    {
+                                        "start": float(s.get("start", 0.0)),
+                                        "end": float(s.get("end", 0.0)),
+                                        "text": str(s.get("text") or ""),
+                                    }
                                     for s in translated_segments_pg
                                     if isinstance(s, dict)
                                 ],
@@ -1670,7 +1794,11 @@ class JobQueue:
                                 job_dir=base_dir,
                                 variant="tgt_fit",
                                 blocks=[
-                                    {"start": float(s.get("start", 0.0)), "end": float(s.get("end", 0.0)), "text": str(s.get("text") or "")}
+                                    {
+                                        "start": float(s.get("start", 0.0)),
+                                        "end": float(s.get("end", 0.0)),
+                                        "text": str(s.get("text") or ""),
+                                    }
                                     for s in translated_segments
                                     if isinstance(s, dict)
                                 ],
@@ -1755,7 +1883,8 @@ class JobQueue:
                                 getattr(settings, "director", False)
                             )
                             director_strength = float(
-                                rt.get("director_strength") or getattr(settings, "director_strength", 0.5)
+                                rt.get("director_strength")
+                                or getattr(settings, "director_strength", 0.5)
                             )
                         except Exception:
                             pass
@@ -1777,7 +1906,9 @@ class JobQueue:
                             # expressiveness (best-effort)
                             emotion_mode=str(settings.emotion_mode),
                             expressive=str(getattr(settings, "expressive", "off")),
-                            expressive_strength=float(getattr(settings, "expressive_strength", 0.5)),
+                            expressive_strength=float(
+                                getattr(settings, "expressive_strength", 0.5)
+                            ),
                             expressive_debug=bool(getattr(settings, "expressive_debug", False)),
                             source_audio_wav=Path(str(wav)),
                             music_regions_path=music_regions_path_work,
@@ -1919,7 +2050,9 @@ class JobQueue:
                         job_id, f"[{now_utc()}] review: locked {n_locked} segments from resynth"
                     )
                 except Exception as ex:
-                    self.store.append_log(job_id, f"[{now_utc()}] review lock-from-resynth failed: {ex}")
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] review lock-from-resynth failed: {ex}"
+                    )
             await self._check_canceled(job_id)
 
             # f) mixing (~1.00)
@@ -1944,7 +2077,9 @@ class JobQueue:
                         emit_env = str(settings.emit_formats or "mkv,mp4")
                         cfg_mix = MixConfig(
                             profile=str(
-                                (self.store.get(job_id).runtime or {}).get("mix_profile", str(settings.mix_profile))
+                                (self.store.get(job_id).runtime or {}).get(
+                                    "mix_profile", str(settings.mix_profile)
+                                )
                                 if self.store.get(job_id)
                                 else str(settings.mix_profile)
                             ),
@@ -2012,18 +2147,28 @@ class JobQueue:
                                     out_wav=final_mix_wav,
                                     params=MixParams(
                                         lufs_target=float(
-                                            ((self.store.get(job_id).runtime or {}).get("lufs_target"))
+                                            (
+                                                (self.store.get(job_id).runtime or {}).get(
+                                                    "lufs_target"
+                                                )
+                                            )
                                             if self.store.get(job_id)
                                             and isinstance(self.store.get(job_id).runtime, dict)
-                                            and "lufs_target" in (self.store.get(job_id).runtime or {})
+                                            and "lufs_target"
+                                            in (self.store.get(job_id).runtime or {})
                                             else getattr(settings, "lufs_target", -16.0)
                                         ),
                                         ducking=bool(getattr(settings, "ducking", True)),
                                         ducking_strength=float(
-                                            ((self.store.get(job_id).runtime or {}).get("ducking_strength"))
+                                            (
+                                                (self.store.get(job_id).runtime or {}).get(
+                                                    "ducking_strength"
+                                                )
+                                            )
                                             if self.store.get(job_id)
                                             and isinstance(self.store.get(job_id).runtime, dict)
-                                            and "ducking_strength" in (self.store.get(job_id).runtime or {})
+                                            and "ducking_strength"
+                                            in (self.store.get(job_id).runtime or {})
                                             else getattr(settings, "ducking_strength", 1.0)
                                         ),
                                         limiter=bool(
@@ -2050,9 +2195,15 @@ class JobQueue:
                                             original_wav=Path(str(wav)),
                                             dubbed_wav=final_mix_wav,
                                             dialogue_wav=tts_wav,
-                                            background_wav=bg if background_wav is not None else None,
+                                            background_wav=(
+                                                bg if background_wav is not None else None
+                                            ),
                                         )
-                                        if str(getattr(settings, "container", "mkv")).lower() == "mkv" and "mkv" in emit:
+                                        if (
+                                            str(getattr(settings, "container", "mkv")).lower()
+                                            == "mkv"
+                                            and "mkv" in emit
+                                        ):
                                             outs2["mkv"] = export_mkv_multitrack(
                                                 video_in=video_in,
                                                 tracks=[
@@ -2084,7 +2235,10 @@ class JobQueue:
                                                 srt=subs_srt_path,
                                                 out_path=work_dir / f"{video_path.stem}.dub.mkv",
                                             )
-                                        elif str(getattr(settings, "container", "mkv")).lower() == "mp4":
+                                        elif (
+                                            str(getattr(settings, "container", "mkv")).lower()
+                                            == "mp4"
+                                        ):
                                             sidecar_dir = base_dir / "audio" / "tracks"
                                             export_m4a(
                                                 tracks.original_full_wav,
@@ -2111,7 +2265,10 @@ class JobQueue:
                                                 language="eng",
                                             )
                                     except Exception as ex:
-                                        self.store.append_log(job_id, f"[{now_utc()}] multitrack failed; continuing ({ex})")
+                                        self.store.append_log(
+                                            job_id,
+                                            f"[{now_utc()}] multitrack failed; continuing ({ex})",
+                                        )
 
                                 if "mkv" in emit and "mkv" not in outs2:
                                     outs2["mkv"] = export_mkv(
@@ -2214,26 +2371,73 @@ class JobQueue:
                                         dialogue_wav=tts_wav,
                                         background_wav=stems_bg,
                                     )
-                                    if str(getattr(settings, "container", "mkv")).lower() == "mkv" and out_mkv:
+                                    if (
+                                        str(getattr(settings, "container", "mkv")).lower() == "mkv"
+                                        and out_mkv
+                                    ):
                                         out_mkv = export_mkv_multitrack(
                                             video_in=video_in,
                                             tracks=[
-                                                {"path": str(tracks.original_full_wav), "title": "Original (JP)", "language": "jpn", "default": "0"},
-                                                {"path": str(tracks.dubbed_full_wav), "title": "Dubbed (EN)", "language": "eng", "default": "1"},
-                                                {"path": str(tracks.background_only_wav), "title": "Background Only", "language": "und", "default": "0"},
-                                                {"path": str(tracks.dialogue_only_wav), "title": "Dialogue Only", "language": "eng", "default": "0"},
+                                                {
+                                                    "path": str(tracks.original_full_wav),
+                                                    "title": "Original (JP)",
+                                                    "language": "jpn",
+                                                    "default": "0",
+                                                },
+                                                {
+                                                    "path": str(tracks.dubbed_full_wav),
+                                                    "title": "Dubbed (EN)",
+                                                    "language": "eng",
+                                                    "default": "1",
+                                                },
+                                                {
+                                                    "path": str(tracks.background_only_wav),
+                                                    "title": "Background Only",
+                                                    "language": "und",
+                                                    "default": "0",
+                                                },
+                                                {
+                                                    "path": str(tracks.dialogue_only_wav),
+                                                    "title": "Dialogue Only",
+                                                    "language": "eng",
+                                                    "default": "0",
+                                                },
                                             ],
                                             srt=subs_srt_path,
                                             out_path=Path(out_mkv),
                                         )
-                                    elif str(getattr(settings, "container", "mkv")).lower() == "mp4":
+                                    elif (
+                                        str(getattr(settings, "container", "mkv")).lower() == "mp4"
+                                    ):
                                         sidecar_dir = base_dir / "audio" / "tracks"
-                                        export_m4a(tracks.original_full_wav, sidecar_dir / "original_full.m4a", title="Original (JP)", language="jpn")
-                                        export_m4a(tracks.background_only_wav, sidecar_dir / "background_only.m4a", title="Background Only", language="und")
-                                        export_m4a(tracks.dialogue_only_wav, sidecar_dir / "dialogue_only.m4a", title="Dialogue Only", language="eng")
-                                        export_m4a(tracks.dubbed_full_wav, sidecar_dir / "dubbed_full.m4a", title="Dubbed (EN)", language="eng")
+                                        export_m4a(
+                                            tracks.original_full_wav,
+                                            sidecar_dir / "original_full.m4a",
+                                            title="Original (JP)",
+                                            language="jpn",
+                                        )
+                                        export_m4a(
+                                            tracks.background_only_wav,
+                                            sidecar_dir / "background_only.m4a",
+                                            title="Background Only",
+                                            language="und",
+                                        )
+                                        export_m4a(
+                                            tracks.dialogue_only_wav,
+                                            sidecar_dir / "dialogue_only.m4a",
+                                            title="Dialogue Only",
+                                            language="eng",
+                                        )
+                                        export_m4a(
+                                            tracks.dubbed_full_wav,
+                                            sidecar_dir / "dubbed_full.m4a",
+                                            title="Dubbed (EN)",
+                                            language="eng",
+                                        )
                             except Exception as ex:
-                                self.store.append_log(job_id, f"[{now_utc()}] multitrack failed; continuing ({ex})")
+                                self.store.append_log(
+                                    job_id, f"[{now_utc()}] multitrack failed; continuing ({ex})"
+                                )
                         try:
                             art = {"mkv": out_mkv}
                             if out_mp4 and Path(out_mp4).exists():
@@ -2404,8 +2608,12 @@ class JobQueue:
                             device=str(getattr(settings, "lipsync_device", "auto")).lower(),
                             bbox=bbox,
                             scene_limited=bool(getattr(settings, "lipsync_scene_limited", False)),
-                            sample_every_s=float(getattr(settings, "lipsync_sample_every_s", 0.5) or 0.5),
-                            min_face_ratio=float(getattr(settings, "lipsync_min_face_ratio", 0.60) or 0.60),
+                            sample_every_s=float(
+                                getattr(settings, "lipsync_sample_every_s", 0.5) or 0.5
+                            ),
+                            min_face_ratio=float(
+                                getattr(settings, "lipsync_min_face_ratio", 0.60) or 0.60
+                            ),
                             min_range_s=float(getattr(settings, "lipsync_min_range_s", 2.0) or 2.0),
                             merge_gap_s=float(getattr(settings, "lipsync_merge_gap_s", 0.6) or 0.6),
                             max_frames=int(getattr(settings, "lipsync_max_frames", 600) or 600),
@@ -2446,7 +2654,9 @@ class JobQueue:
                 snap = write_drift_snapshot(
                     job_dir=base_dir,
                     video_path=video_path,
-                    voice_memory_dir=Path(getattr(settings, "voice_memory_dir", Path.cwd() / "data" / "voice_memory")).resolve(),
+                    voice_memory_dir=Path(
+                        getattr(settings, "voice_memory_dir", Path.cwd() / "data" / "voice_memory")
+                    ).resolve(),
                     glossary_path=str(getattr(settings, "glossary_path", "") or ""),
                 )
                 write_drift_reports(job_dir=base_dir, snapshot_path=snap, compare_last_n=5)
@@ -2458,8 +2668,14 @@ class JobQueue:
             try:
                 curj = self.store.get(job_id)
                 rt2 = dict((curj.runtime or {}) if curj else runtime)
-                policy = str(rt2.get("cache_policy") or getattr(settings, "cache_policy", "full")).strip().lower()
-                retention_days = int(rt2.get("retention_days") or getattr(settings, "retention_days", 0) or 0)
+                policy = (
+                    str(rt2.get("cache_policy") or getattr(settings, "cache_policy", "full"))
+                    .strip()
+                    .lower()
+                )
+                retention_days = int(
+                    rt2.get("retention_days") or getattr(settings, "retention_days", 0) or 0
+                )
                 dry_run = bool(rt2.get("retention_dry_run") or False)
                 if policy in {"balanced", "minimal"} or retention_days > 0:
                     from anime_v2.storage.retention import apply_retention
@@ -2548,7 +2764,11 @@ class JobQueue:
         privacy_mode = str(rt.get("privacy_mode") or "").strip().lower()
         if not privacy_mode:
             try:
-                policy = str(rt.get("cache_policy") or getattr(settings, "cache_policy", "full")).strip().lower()
+                policy = (
+                    str(rt.get("cache_policy") or getattr(settings, "cache_policy", "full"))
+                    .strip()
+                    .lower()
+                )
                 privacy_mode = "minimal" if policy == "minimal" else ""
             except Exception:
                 privacy_mode = ""

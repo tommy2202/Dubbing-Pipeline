@@ -124,9 +124,7 @@ def _client_ip_for_limits(request: Request) -> str:
     try:
         trusted = str(getattr(s, "trusted_proxy_subnets", "") or "").strip()
         nets = [
-            ipaddress.ip_network(x.strip(), strict=False)
-            for x in trusted.split(",")
-            if x.strip()
+            ipaddress.ip_network(x.strip(), strict=False) for x in trusted.split(",") if x.strip()
         ]
         if not nets:
             # conservative: if not configured, do not trust
@@ -180,14 +178,20 @@ def _validate_media_or_400(path: Path, *, limits) -> float:
     if dur <= 0.5:
         raise HTTPException(status_code=400, detail="Video duration is too short or unreadable")
     if dur > float(limits.max_video_min) * 60.0:
-        raise HTTPException(status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)")
+        raise HTTPException(
+            status_code=400, detail=f"Video too long (> {limits.max_video_min} minutes)"
+        )
 
     w = int(info.get("width") or 0)
     h = int(info.get("height") or 0)
     if int(getattr(limits, "max_video_width", 0) or 0) > 0 and w > int(limits.max_video_width):
-        raise HTTPException(status_code=400, detail=f"Video width too large (> {int(limits.max_video_width)}px)")
+        raise HTTPException(
+            status_code=400, detail=f"Video width too large (> {int(limits.max_video_width)}px)"
+        )
     if int(getattr(limits, "max_video_height", 0) or 0) > 0 and h > int(limits.max_video_height):
-        raise HTTPException(status_code=400, detail=f"Video height too large (> {int(limits.max_video_height)}px)")
+        raise HTTPException(
+            status_code=400, detail=f"Video height too large (> {int(limits.max_video_height)}px)"
+        )
     if (
         int(getattr(limits, "max_video_pixels", 0) or 0) > 0
         and w > 0
@@ -232,7 +236,9 @@ async def uploads_init(
     filename = _safe_filename(str(body.get("filename") or "upload.mp4"))
     ext = Path(filename).suffix.lower()
     if ext not in _ALLOWED_UPLOAD_EXTS:
-        raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext or '(none)'}")
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported file extension: {ext or '(none)'}"
+        )
     try:
         total = int(body.get("total_bytes") or 0)
     except Exception:
@@ -299,7 +305,10 @@ async def uploads_status(
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
-    if str(rec.get("owner_id") or "") != str(ident.user.id) and str(ident.user.role.value) != "admin":
+    if (
+        str(rec.get("owner_id") or "") != str(ident.user.id)
+        and str(ident.user.role.value) != "admin"
+    ):
         raise HTTPException(status_code=403, detail="Forbidden")
     return {
         "upload_id": str(rec.get("id") or upload_id),
@@ -347,7 +356,10 @@ async def uploads_chunk(
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
-    if str(rec.get("owner_id") or "") != str(ident.user.id) and str(ident.user.role.value) != "admin":
+    if (
+        str(rec.get("owner_id") or "") != str(ident.user.id)
+        and str(ident.user.role.value) != "admin"
+    ):
         raise HTTPException(status_code=403, detail="Forbidden")
     if bool(rec.get("completed")):
         return {"ok": True, "already_completed": True}
@@ -388,9 +400,17 @@ async def uploads_chunk(
             received = {}
 
         prev = received.get(str(idx))
-        if isinstance(prev, dict) and str(prev.get("sha256") or "") == sha and int(prev.get("size") or 0) == len(body):
+        if (
+            isinstance(prev, dict)
+            and str(prev.get("sha256") or "") == sha
+            and int(prev.get("size") or 0) == len(body)
+        ):
             # already accepted
-            return {"ok": True, "received_bytes": int(rec2.get("received_bytes") or 0), "dedup": True}
+            return {
+                "ok": True,
+                "received_bytes": int(rec2.get("received_bytes") or 0),
+                "dedup": True,
+            }
 
         part_path.parent.mkdir(parents=True, exist_ok=True)
         # random-access write
@@ -445,7 +465,10 @@ async def uploads_complete(
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
-    if str(rec.get("owner_id") or "") != str(ident.user.id) and str(ident.user.role.value) != "admin":
+    if (
+        str(rec.get("owner_id") or "") != str(ident.user.id)
+        and str(ident.user.role.value) != "admin"
+    ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     body = await request.json()
@@ -495,7 +518,9 @@ async def uploads_complete(
         except Exception as ex:
             with suppress(Exception):
                 final_path.unlink(missing_ok=True)
-            raise HTTPException(status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}") from ex
+            raise HTTPException(
+                status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
+            ) from ex
 
         # Optional: encrypt uploads at rest (best-effort, but fail-safe when enabled).
         if encryption_enabled_for("uploads"):
@@ -506,7 +531,9 @@ async def uploads_complete(
                 # Fail-safe: do not keep plaintext when encryption is enabled but misconfigured.
                 with suppress(Exception):
                     final_path.unlink(missing_ok=True)
-                raise HTTPException(status_code=500, detail="Upload encryption misconfigured") from ex
+                raise HTTPException(
+                    status_code=500, detail="Upload encryption misconfigured"
+                ) from ex
             except Exception as ex:
                 with suppress(Exception):
                     enc_path.unlink(missing_ok=True)
@@ -517,7 +544,11 @@ async def uploads_complete(
                 final_path.unlink(missing_ok=True)
             final_path = enc_path
             store.update_upload(
-                upload_id, completed=True, final_path=str(final_path), encrypted=True, updated_at=_now_iso()
+                upload_id,
+                completed=True,
+                final_path=str(final_path),
+                encrypted=True,
+                updated_at=_now_iso(),
             )
         else:
             store.update_upload(upload_id, completed=True, updated_at=_now_iso())
@@ -560,7 +591,13 @@ async def list_server_files(
             continue
         try:
             if p.is_dir():
-                items.append({"type": "dir", "name": p.name, "path": str(p.relative_to(root)).replace("\\", "/")})
+                items.append(
+                    {
+                        "type": "dir",
+                        "name": p.name,
+                        "path": str(p.relative_to(root)).replace("\\", "/"),
+                    }
+                )
             elif p.is_file():
                 if p.suffix.lower() not in {".mp4", ".mkv", ".mov", ".webm", ".m4v"}:
                     continue
@@ -578,7 +615,11 @@ async def list_server_files(
             continue
         if len(items) >= 200:
             break
-    return {"root": str(root), "dir": str(target.relative_to(root)).replace("\\", "/"), "items": items}
+    return {
+        "root": str(root),
+        "dir": str(target.relative_to(root)).replace("\\", "/"),
+        "items": items,
+    }
 
 
 def _app_root() -> Path:
@@ -640,7 +681,8 @@ def _sanitize_video_path(p: str) -> Path:
     try:
         resolved.relative_to(up)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="video_path cannot be under INPUT_UPLOADS_DIR; use upload_id"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="video_path cannot be under INPUT_UPLOADS_DIR; use upload_id",
         )
     except HTTPException:
         raise
@@ -1013,10 +1055,30 @@ async def create_job(
         cache_policy = str(form.get("cache_policy") or cache_policy)
         # Privacy knobs (optional; persisted on job.runtime)
         privacy_mode = str(form.get("privacy") or form.get("privacy_mode") or "").strip()
-        no_store_transcript = str(form.get("no_store_transcript") or "").strip() not in {"", "0", "false", "off"}
-        no_store_source_audio = str(form.get("no_store_source_audio") or "").strip() not in {"", "0", "false", "off"}
-        minimal_artifacts = str(form.get("minimal_artifacts") or "").strip() not in {"", "0", "false", "off"}
-        speaker_smoothing = str(form.get("speaker_smoothing") or "").strip() not in {"", "0", "false", "off"}
+        no_store_transcript = str(form.get("no_store_transcript") or "").strip() not in {
+            "",
+            "0",
+            "false",
+            "off",
+        }
+        no_store_source_audio = str(form.get("no_store_source_audio") or "").strip() not in {
+            "",
+            "0",
+            "false",
+            "off",
+        }
+        minimal_artifacts = str(form.get("minimal_artifacts") or "").strip() not in {
+            "",
+            "0",
+            "false",
+            "off",
+        }
+        speaker_smoothing = str(form.get("speaker_smoothing") or "").strip() not in {
+            "",
+            "0",
+            "false",
+            "off",
+        }
         scene_detect = str(form.get("scene_detect") or scene_detect)
         director = str(form.get("director") or "").strip() not in {"", "0", "false", "off"}
         director_strength = float(form.get("director_strength") or director_strength)
@@ -1130,7 +1192,9 @@ async def create_job(
     except HTTPException:
         raise
     except FFmpegError as ex:
-        raise HTTPException(status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}") from ex
+        raise HTTPException(
+            status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
+        ) from ex
 
     jid = new_id()
     created = now_utc()
@@ -1273,7 +1337,10 @@ async def create_job(
             p.write_text(import_tgt_srt_text, encoding="utf-8")
             imports["tgt_srt_path"] = str(p)
         if import_transcript_json_text:
-            if len(import_transcript_json_text.encode("utf-8", errors="ignore")) > _MAX_IMPORT_TEXT_BYTES:
+            if (
+                len(import_transcript_json_text.encode("utf-8", errors="ignore"))
+                > _MAX_IMPORT_TEXT_BYTES
+            ):
                 raise HTTPException(status_code=400, detail="transcript_json_text too large")
             p = (imp_dir / "transcript.json").resolve()
             p.write_text(import_transcript_json_text, encoding="utf-8")
@@ -1392,7 +1459,9 @@ async def create_jobs_batch(
         except HTTPException:
             raise
         except Exception as ex:
-            raise HTTPException(status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}") from ex
+            raise HTTPException(
+                status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
+            ) from ex
 
         jid = new_id()
         created = now_utc()
@@ -1718,7 +1787,9 @@ async def set_job_tags(
     rt = dict(job.runtime or {})
     rt["tags"] = tags
     store.update(id, runtime=rt)
-    audit_event("job.tags", request=request, user_id=ident.user.id, meta={"job_id": id, "count": len(tags)})
+    audit_event(
+        "job.tags", request=request, user_id=ident.user.id, meta={"job_id": id, "count": len(tags)}
+    )
     return {"ok": True, "tags": tags}
 
 
@@ -1770,7 +1841,9 @@ async def delete_job_admin(
         try:
             p.resolve().relative_to(out_root)
         except Exception:
-            raise HTTPException(status_code=400, detail="Refusing to delete outside output dir") from None
+            raise HTTPException(
+                status_code=400, detail="Refusing to delete outside output dir"
+            ) from None
     # Best-effort cancel first
     try:
         q = _get_queue(request)
@@ -2489,7 +2562,9 @@ async def set_speaker_overrides_from_ui(
         )
         return {"ok": True}
     except Exception as ex:
-        raise HTTPException(status_code=400, detail=f"Failed to update speaker overrides: {ex}") from ex
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update speaker overrides: {ex}"
+        ) from ex
 
 
 @router.post("/api/jobs/{id}/transcript/synthesize")
@@ -2698,7 +2773,12 @@ async def post_job_review_helper(
             "review.helper",
             request=request,
             user_id=_.user.id,
-            meta={"job_id": id, "segment_id": int(segment_id), "kind": kind, "provider": provider_used},
+            meta={
+                "job_id": id,
+                "segment_id": int(segment_id),
+                "kind": kind,
+                "provider": provider_used,
+            },
         )
     return {"ok": True, "kind": kind, "provider_used": provider_used, "text": out}
 
@@ -3071,7 +3151,10 @@ async def job_files(
     if mkv is not None:
         data["mkv"] = {"url": rel_url(mkv), "path": str(mkv)}
     if mobile_orig_mp4 is not None:
-        data["mobile_original_mp4"] = {"url": rel_url(mobile_orig_mp4), "path": str(mobile_orig_mp4)}
+        data["mobile_original_mp4"] = {
+            "url": rel_url(mobile_orig_mp4),
+            "path": str(mobile_orig_mp4),
+        }
 
     # QA artifacts (best-effort)
     try:
@@ -3196,7 +3279,9 @@ async def ws_job(websocket: WebSocket, id: str):
                 try:
                     from itsdangerous import BadSignature, URLSafeTimedSerializer  # type: ignore
 
-                    ser = URLSafeTimedSerializer(s.session_secret.get_secret_value(), salt="session")
+                    ser = URLSafeTimedSerializer(
+                        s.session_secret.get_secret_value(), salt="session"
+                    )
                     token = str(ser.loads(sess, max_age=60 * 60 * 24 * 7))
                 except BadSignature:
                     token = ""

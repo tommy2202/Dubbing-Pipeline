@@ -126,7 +126,14 @@ def _atomic_delete_dir(p: Path) -> None:
 def _final_outputs(job_dir: Path) -> list[Path]:
     """Never delete by default."""
     out = []
-    for pat in ("dub.mkv", "dub.mp4", "*.dub.mkv", "*.dub.mp4", "final_lipsynced.mp4", "*.final_lipsynced.mp4"):
+    for pat in (
+        "dub.mkv",
+        "dub.mp4",
+        "*.dub.mkv",
+        "*.dub.mp4",
+        "final_lipsynced.mp4",
+        "*.final_lipsynced.mp4",
+    ):
         out.extend(list(job_dir.glob(pat)))
     # streaming stitched final
     out.extend(list((job_dir / "stream").glob("final*.mp4")))
@@ -242,9 +249,18 @@ def apply_retention(
             if p.name == "retention_report.json":
                 continue
             if p.is_dir():
-                deletions.append(DeleteAction(kind="dir", path=p, bytes=0, reason="balanced:heavy_or_tmp"))
+                deletions.append(
+                    DeleteAction(kind="dir", path=p, bytes=0, reason="balanced:heavy_or_tmp")
+                )
             elif p.is_file():
-                deletions.append(DeleteAction(kind="file", path=p, bytes=_safe_stat_bytes(p), reason="balanced:heavy_or_tmp"))
+                deletions.append(
+                    DeleteAction(
+                        kind="file",
+                        path=p,
+                        bytes=_safe_stat_bytes(p),
+                        reason="balanced:heavy_or_tmp",
+                    )
+                )
     else:  # minimal
         keep = set()
         keep |= finals
@@ -271,28 +287,56 @@ def apply_retention(
                 # never delete the job root itself
                 continue
             if p.is_file():
-                deletions.append(DeleteAction(kind="file", path=p, bytes=_safe_stat_bytes(p), reason="minimal:prune"))
+                deletions.append(
+                    DeleteAction(
+                        kind="file", path=p, bytes=_safe_stat_bytes(p), reason="minimal:prune"
+                    )
+                )
 
         # prune known heavy dirs as dirs
-        for d in [job_dir / "stems", job_dir / "chunks", job_dir / "segments", job_dir / "tmp", job_dir / "audio" / "tracks"]:
+        for d in [
+            job_dir / "stems",
+            job_dir / "chunks",
+            job_dir / "segments",
+            job_dir / "tmp",
+            job_dir / "audio" / "tracks",
+        ]:
             if d.exists() and d.is_dir():
                 try:
                     if d.resolve() not in keep:
-                        deletions.append(DeleteAction(kind="dir", path=d, bytes=0, reason="minimal:prune_dir"))
+                        deletions.append(
+                            DeleteAction(kind="dir", path=d, bytes=0, reason="minimal:prune_dir")
+                        )
                 except Exception:
-                    deletions.append(DeleteAction(kind="dir", path=d, bytes=0, reason="minimal:prune_dir"))
+                    deletions.append(
+                        DeleteAction(kind="dir", path=d, bytes=0, reason="minimal:prune_dir")
+                    )
 
     # Execute deletions
     bytes_freed = 0
     deleted: list[dict[str, Any]] = []
     if deletions:
-        logger.info("retention_start", job_dir=str(job_dir), policy=pol, dry_run=bool(dry_run), n=len(deletions))
+        logger.info(
+            "retention_start",
+            job_dir=str(job_dir),
+            policy=pol,
+            dry_run=bool(dry_run),
+            n=len(deletions),
+        )
     for act in deletions:
         p = Path(act.path)
         if not p.exists():
             continue
         if dry_run:
-            deleted.append({"kind": act.kind, "path": str(p), "bytes": int(act.bytes), "reason": act.reason, "dry_run": True})
+            deleted.append(
+                {
+                    "kind": act.kind,
+                    "path": str(p),
+                    "bytes": int(act.bytes),
+                    "reason": act.reason,
+                    "dry_run": True,
+                }
+            )
             continue
         try:
             if act.kind == "dir" and p.is_dir():
@@ -301,9 +345,19 @@ def apply_retention(
             elif act.kind == "file" and p.is_file():
                 bytes_freed += int(act.bytes)
                 _atomic_delete_file(p)
-                deleted.append({"kind": "file", "path": str(p), "bytes": int(act.bytes), "reason": act.reason})
+                deleted.append(
+                    {"kind": "file", "path": str(p), "bytes": int(act.bytes), "reason": act.reason}
+                )
         except Exception as ex:
-            deleted.append({"kind": act.kind, "path": str(p), "bytes": int(act.bytes), "reason": act.reason, "error": str(ex)})
+            deleted.append(
+                {
+                    "kind": act.kind,
+                    "path": str(p),
+                    "bytes": int(act.bytes),
+                    "reason": act.reason,
+                    "error": str(ex),
+                }
+            )
 
     report = {
         "job_dir": str(job_dir),
@@ -320,4 +374,3 @@ def apply_retention(
     (job_dir / "analysis").mkdir(parents=True, exist_ok=True)
     write_json(job_dir / "analysis" / "retention_report.json", report)
     return report
-

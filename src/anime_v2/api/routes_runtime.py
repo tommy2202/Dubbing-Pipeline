@@ -50,17 +50,26 @@ async def runtime_models(_: Identity = Depends(require_role(Role.admin))):
         low_space = True
     disk["low_space"] = bool(low_space)
     disk["summary"] = (
-        f"free {disk['free_gb']:.1f}GB / {disk['total_gb']:.1f}GB" if disk.get("free_gb") else "unknown"
+        f"free {disk['free_gb']:.1f}GB / {disk['total_gb']:.1f}GB"
+        if disk.get("free_gb")
+        else "unknown"
     )
 
-    enabled = bool(getattr(s, "enable_model_downloads", False)) and bool(getattr(s, "allow_egress", True))
+    enabled = bool(getattr(s, "enable_model_downloads", False)) and bool(
+        getattr(s, "allow_egress", True)
+    )
     hint = ""
     if not enabled:
         hint = "Set ENABLE_MODEL_DOWNLOADS=1 and ALLOW_EGRESS=1 to allow in-UI prewarm/downloads."
 
     return {
         "ok": True,
-        "paths": {"output_dir": out_dir, "hf_home": hf_home, "tts_home": tts_home, "torch_home": str(s.torch_home)},
+        "paths": {
+            "output_dir": out_dir,
+            "hf_home": hf_home,
+            "tts_home": tts_home,
+            "torch_home": str(s.torch_home),
+        },
         "disk": disk,
         "loaded": mm.state(),
         "downloads": {"enabled": bool(enabled), "hint": hint},
@@ -73,7 +82,9 @@ async def runtime_models_prewarm(
 ):
     s = get_settings()
     if not bool(getattr(s, "enable_model_downloads", False)):
-        raise HTTPException(status_code=400, detail="Model downloads/prewarm disabled (ENABLE_MODEL_DOWNLOADS=0)")
+        raise HTTPException(
+            status_code=400, detail="Model downloads/prewarm disabled (ENABLE_MODEL_DOWNLOADS=0)"
+        )
     if not bool(getattr(s, "allow_egress", True)):
         raise HTTPException(status_code=400, detail="Egress disabled (ALLOW_EGRESS=0)")
 
@@ -83,7 +94,9 @@ async def runtime_models_prewarm(
 
     # Choose conservative defaults
     whisper = {"low": "small", "medium": "medium", "high": "large-v3"}[preset]
-    tts = str(getattr(s, "tts_model", "tts_models/multilingual/multi-dataset/xtts_v2") or "").strip()
+    tts = str(
+        getattr(s, "tts_model", "tts_models/multilingual/multi-dataset/xtts_v2") or ""
+    ).strip()
 
     import threading
     from uuid import uuid4

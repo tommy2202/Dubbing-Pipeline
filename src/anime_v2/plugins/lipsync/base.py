@@ -16,7 +16,9 @@ class LipSyncRequest:
     bbox: tuple[int, int, int, int] | None = None  # x1,y1,x2,y2 (only when face_mode=bbox)
     # Feature J: scene-limited lip-sync
     scene_limited: bool = False
-    ranges: list[tuple[float, float]] | None = None  # explicit ranges (seconds) to apply lip-sync; gaps are pass-through
+    ranges: list[tuple[float, float]] | None = (
+        None  # explicit ranges (seconds) to apply lip-sync; gaps are pass-through
+    )
     # face visibility gating for auto-range selection (best-effort; offline)
     sample_every_s: float = 0.5
     min_face_ratio: float = 0.60
@@ -49,4 +51,3 @@ class LipSyncPlugin(ABC):
         - not require internet
         - be safe to call when optional deps are missing (raise a clear error)
         """
-

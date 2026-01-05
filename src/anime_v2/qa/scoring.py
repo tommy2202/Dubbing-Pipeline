@@ -114,7 +114,9 @@ def _median(xs: list[float]) -> float:
     return float((ys[mid - 1] + ys[mid]) / 2.0)
 
 
-def _tts_line_for_segment(tts_manifest: dict[str, Any] | None, seg_id: int) -> dict[str, Any] | None:
+def _tts_line_for_segment(
+    tts_manifest: dict[str, Any] | None, seg_id: int
+) -> dict[str, Any] | None:
     if not isinstance(tts_manifest, dict):
         return None
     lines = tts_manifest.get("lines")
@@ -237,7 +239,9 @@ def _load_segments(job_dir: Path) -> tuple[list[dict[str, Any]], dict[int, dict[
 
     # fallback: review segments as source
     if review_by_id:
-        return [dict(s) for _, s in sorted(review_by_id.items(), key=lambda kv: kv[0])], review_by_id
+        return [
+            dict(s) for _, s in sorted(review_by_id.items(), key=lambda kv: kv[0])
+        ], review_by_id
     return [], review_by_id
 
 
@@ -324,7 +328,9 @@ def score_job(
             "wall_time_s": time.perf_counter() - t0,
         }
         if write_outputs:
-            atomic_write_text(qa_dir / "summary.json", json.dumps(summary, indent=2, sort_keys=True), "utf-8")
+            atomic_write_text(
+                qa_dir / "summary.json", json.dumps(summary, indent=2, sort_keys=True), "utf-8"
+            )
         return summary
 
     segments, review_by_id = _load_segments(job_dir)
@@ -398,10 +404,18 @@ def score_job(
             peak_fail = float(th.get("peak_fail", peak_fail))
             asr_lowconf_warn = float(th.get("asr_lowconf_warn", asr_lowconf_warn))
             asr_lowconf_fail = float(th.get("asr_lowconf_fail", asr_lowconf_fail))
-            rewrite_heavy_ratio_warn = float(th.get("rewrite_heavy_ratio_warn", rewrite_heavy_ratio_warn))
-            rewrite_heavy_ratio_fail = float(th.get("rewrite_heavy_ratio_fail", rewrite_heavy_ratio_fail))
-            rewrite_heavy_passes_warn = int(th.get("rewrite_heavy_passes_warn", rewrite_heavy_passes_warn))
-            rewrite_heavy_passes_fail = int(th.get("rewrite_heavy_passes_fail", rewrite_heavy_passes_fail))
+            rewrite_heavy_ratio_warn = float(
+                th.get("rewrite_heavy_ratio_warn", rewrite_heavy_ratio_warn)
+            )
+            rewrite_heavy_ratio_fail = float(
+                th.get("rewrite_heavy_ratio_fail", rewrite_heavy_ratio_fail)
+            )
+            rewrite_heavy_passes_warn = int(
+                th.get("rewrite_heavy_passes_warn", rewrite_heavy_passes_warn)
+            )
+            rewrite_heavy_passes_fail = int(
+                th.get("rewrite_heavy_passes_fail", rewrite_heavy_passes_fail)
+            )
             pacing_near_limit_frac = float(th.get("pacing_near_limit_frac", pacing_near_limit_frac))
             translation_outlier_ratio_warn = float(
                 th.get("translation_outlier_ratio_warn", translation_outlier_ratio_warn)
@@ -450,13 +464,20 @@ def score_job(
         try:
             if bool(seg.get("stream_is_chunk_first")) and i > 0:
                 prev = segments[i - 1]
-                if bool(prev.get("stream_is_chunk_last")) and int(prev.get("stream_chunk_idx") or -1) != int(
-                    seg.get("stream_chunk_idx") or -2
-                ):
+                if bool(prev.get("stream_is_chunk_last")) and int(
+                    prev.get("stream_chunk_idx") or -1
+                ) != int(seg.get("stream_chunk_idx") or -2):
                     # Different chunk; treat as a boundary pair.
                     t_prev = _norm_text_simple(str(prev.get("text") or ""))
                     t_cur = _norm_text_simple(str(seg.get("text") or ""))
-                    if t_prev and t_cur and (t_prev == t_cur or (len(t_prev) > 10 and (t_prev in t_cur or t_cur in t_prev))):
+                    if (
+                        t_prev
+                        and t_cur
+                        and (
+                            t_prev == t_cur
+                            or (len(t_prev) > 10 and (t_prev in t_cur or t_cur in t_prev))
+                        )
+                    ):
                         issues.append(
                             QAIssue(
                                 check_id="stream_boundary_duplicate",
@@ -641,7 +662,10 @@ def score_job(
                             impact=0.0,
                             message="Segment overlaps detected music region (dialogue may be suppressed).",
                             suggested_action="If false-positive, lower music threshold or disable music-detect.",
-                            details={"music_kind": str(r.get("kind") or "music"), "confidence": r.get("confidence")},
+                            details={
+                                "music_kind": str(r.get("kind") or "music"),
+                                "confidence": r.get("confidence"),
+                            },
                         )
                     )
                     break
@@ -661,7 +685,9 @@ def score_job(
             )
 
         # alignment drift + overlap: requires per-seg audio path
-        audio_p = _audio_path_for_segment(seg_id=sid, review_by_id=review_by_id, tts_manifest=tts_manifest)
+        audio_p = _audio_path_for_segment(
+            seg_id=sid, review_by_id=review_by_id, tts_manifest=tts_manifest
+        )
         if audio_p is not None and dur > 0.0:
             adur = _wav_duration_s(audio_p)
             peak = _wav_peak(audio_p)
@@ -677,7 +703,11 @@ def score_job(
                             impact=0.22,
                             message=f"Audio duration exceeds segment window ({adur:.2f}s > {dur:.2f}s).",
                             suggested_action="Enable pacing or regenerate with shorter text; if locked, unlock/regenerate then re-lock.",
-                            details={"audio_duration_s": adur, "segment_duration_s": dur, "ratio": ratio},
+                            details={
+                                "audio_duration_s": adur,
+                                "segment_duration_s": dur,
+                                "ratio": ratio,
+                            },
                         )
                     )
                 elif ratio >= drift_warn_ratio:
@@ -688,7 +718,11 @@ def score_job(
                             impact=0.12,
                             message=f"Audio slightly long for window ({adur:.2f}s vs {dur:.2f}s).",
                             suggested_action="Consider pacing or a small text edit for this segment.",
-                            details={"audio_duration_s": adur, "segment_duration_s": dur, "ratio": ratio},
+                            details={
+                                "audio_duration_s": adur,
+                                "segment_duration_s": dur,
+                                "ratio": ratio,
+                            },
                         )
                     )
 
@@ -744,7 +778,9 @@ def score_job(
             passes = int(tf.get("passes") or 0) if isinstance(tf, dict) else 0
             if pre and post and len(pre) > 0:
                 ratio = max(0.0, float(len(pre) - len(post)) / float(len(pre)))
-                if ratio >= float(rewrite_heavy_ratio_fail) or passes >= int(rewrite_heavy_passes_fail):
+                if ratio >= float(rewrite_heavy_ratio_fail) or passes >= int(
+                    rewrite_heavy_passes_fail
+                ):
                     issues.append(
                         QAIssue(
                             check_id="rewrite_heavy",
@@ -760,7 +796,9 @@ def score_job(
                             },
                         )
                     )
-                elif ratio >= float(rewrite_heavy_ratio_warn) or passes >= int(rewrite_heavy_passes_warn):
+                elif ratio >= float(rewrite_heavy_ratio_warn) or passes >= int(
+                    rewrite_heavy_passes_warn
+                ):
                     issues.append(
                         QAIssue(
                             check_id="rewrite_heavy",
@@ -803,7 +841,12 @@ def score_job(
                             impact=0.18,
                             message="Pacing hit last-resort hard trim to fit the segment window.",
                             suggested_action="Open segment editor; shorten text; increase tolerance only if safe; regenerate then lock.",
-                            details={"hard_trim": True, "atempo_ratio": atempo_ratio, "min_ratio": min_r, "max_ratio": max_r},
+                            details={
+                                "hard_trim": True,
+                                "atempo_ratio": atempo_ratio,
+                                "min_ratio": min_r,
+                                "max_ratio": max_r,
+                            },
                         )
                     )
                 elif near_limit:
@@ -814,7 +857,11 @@ def score_job(
                             impact=0.10,
                             message="Pacing is near stretch limits (risk of artifacts or unnatural delivery).",
                             suggested_action="Open segment editor; consider a rewrite; adjust pacing/stretch limits if needed.",
-                            details={"atempo_ratio": atempo_ratio, "min_ratio": min_r, "max_ratio": max_r},
+                            details={
+                                "atempo_ratio": atempo_ratio,
+                                "min_ratio": min_r,
+                                "max_ratio": max_r,
+                            },
                         )
                     )
         except Exception:
@@ -860,7 +907,9 @@ def score_job(
     issues_sorted = sorted(all_issues, key=issue_key, reverse=False)
     # reverse sorting trick above is messy; just sort explicitly:
     issues_sorted = sorted(
-        all_issues, key=lambda x: (-_severity_rank(x[1].severity), float(x[1].impact)), reverse=False
+        all_issues,
+        key=lambda x: (-_severity_rank(x[1].severity), float(x[1].impact)),
+        reverse=False,
     )
     if fail_only:
         issues_sorted = [x for x in issues_sorted if str(x[1].severity).lower() == "fail"]
@@ -882,7 +931,7 @@ def score_job(
                     "ui_url": f"/ui/jobs/{job_dir.name}?tab=transcript&seg={int(sid)}",
                     "cli": [
                         f"anime-v2 review show {job_dir.name} {int(sid)}",
-                        f"anime-v2 review edit {job_dir.name} {int(sid)} --text \"...\"",
+                        f'anime-v2 review edit {job_dir.name} {int(sid)} --text "..."',
                         f"anime-v2 review regen {job_dir.name} {int(sid)}",
                         f"anime-v2 review lock {job_dir.name} {int(sid)}",
                     ],
@@ -918,12 +967,16 @@ def score_job(
             lines.append(json.dumps(s.to_dict(), sort_keys=True))
         atomic_write_text(seg_path, "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
-        atomic_write_text(summary_path, json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+        atomic_write_text(
+            summary_path, json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
         md = ["## Quality report", ""]
         md.append(f"- **Score**: {job_score:.1f}/100")
         md.append(f"- **Segments**: {len(seg_rows)}")
-        md.append(f"- **Counts**: fail={by_sev['fail']} warn={by_sev['warn']} info={by_sev['info']}")
+        md.append(
+            f"- **Counts**: fail={by_sev['fail']} warn={by_sev['warn']} info={by_sev['info']}"
+        )
         md.append("")
         md.append("## Top issues")
         md.append("")
@@ -939,4 +992,3 @@ def score_job(
         atomic_write_text(top_md, "\n".join(md) + "\n", encoding="utf-8")
 
     return summary
-

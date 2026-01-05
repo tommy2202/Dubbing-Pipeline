@@ -114,10 +114,18 @@ def _detect_faces_opencv(frames_dir: Path) -> tuple[list[FaceSample], str, list[
     """
     cv2 = _try_import_cv2()
     if cv2 is None:
-        return [], "none", ["opencv-python not installed; face detection unavailable (preview will be heuristic-only)."]
+        return (
+            [],
+            "none",
+            [
+                "opencv-python not installed; face detection unavailable (preview will be heuristic-only)."
+            ],
+        )
 
     try:
-        cascade_path = Path(str(getattr(cv2.data, "haarcascades", ""))) / "haarcascade_frontalface_default.xml"
+        cascade_path = (
+            Path(str(getattr(cv2.data, "haarcascades", ""))) / "haarcascade_frontalface_default.xml"
+        )
         if not cascade_path.exists():
             return [], "none", ["OpenCV haar cascade not found; face detection unavailable."]
         cascade = cv2.CascadeClassifier(str(cascade_path))
@@ -133,14 +141,24 @@ def _detect_faces_opencv(frames_dir: Path) -> tuple[list[FaceSample], str, list[
         try:
             img = cv2.imread(str(fp))
             if img is None:
-                out.append(FaceSample(t_s=float(idx), face_found=False, face_count=None, method="opencv_haar"))
+                out.append(
+                    FaceSample(
+                        t_s=float(idx), face_found=False, face_count=None, method="opencv_haar"
+                    )
+                )
                 continue
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            faces = cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+            )
             n = int(len(faces)) if faces is not None else 0
-            out.append(FaceSample(t_s=float(idx), face_found=(n > 0), face_count=n, method="opencv_haar"))
+            out.append(
+                FaceSample(t_s=float(idx), face_found=(n > 0), face_count=n, method="opencv_haar")
+            )
         except Exception:
-            out.append(FaceSample(t_s=float(idx), face_found=False, face_count=None, method="opencv_haar"))
+            out.append(
+                FaceSample(t_s=float(idx), face_found=False, face_count=None, method="opencv_haar")
+            )
     return out, "opencv_haar", []
 
 
@@ -320,6 +338,7 @@ def preview_lipsync_ranges(
 def write_preview_report(rep: LipSyncPreviewReport, *, out_path: Path) -> Path:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(out_path, json.dumps(rep.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+    atomic_write_text(
+        out_path, json.dumps(rep.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
+    )
     return out_path
-

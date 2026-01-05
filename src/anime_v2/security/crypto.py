@@ -277,4 +277,3 @@ def write_bytes_encrypted(path: Path, data: bytes, *, kind: str, job_id: str | N
     # Encrypt via in-memory temp file format.
     blob = encrypt_bytes(data, kind=kind, job_id=job_id)
     atomic_write_bytes(Path(path), blob)
-

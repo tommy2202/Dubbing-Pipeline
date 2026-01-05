@@ -49,7 +49,7 @@ def _parse_auth(raw: str) -> dict[str, str]:
 
 def _sleep_backoff(attempt: int) -> None:
     # Exponential backoff with jitter; cap to keep job worker responsive.
-    base = 0.5 * (2**max(0, attempt))
+    base = 0.5 * (2 ** max(0, attempt))
     delay = min(6.0, base) + random.random() * 0.25
     time.sleep(delay)
 
@@ -129,7 +129,9 @@ def notify(
         auth_raw = None
     auth_headers = _parse_auth(auth_raw or "") if auth_raw else {}
 
-    n = Notification(event=event, title=title, message=message, url=url, tags=tags, priority=priority)
+    n = Notification(
+        event=event, title=title, message=message, url=url, tags=tags, priority=priority
+    )
     retries = max(0, int(getattr(s, "ntfy_retries", 3) or 0))
     timeout_sec = float(getattr(s, "ntfy_timeout_sec", 5.0) or 5.0)
     tls_insecure = bool(getattr(s, "ntfy_tls_insecure", False))
@@ -163,9 +165,8 @@ def notify(
                 last_status = None
             last_error = "http_error"
             if (
-                (last_status in {408, 425, 429} or (last_status is not None and last_status >= 500))
-                and (attempt < retries)
-            ):
+                last_status in {408, 425, 429} or (last_status is not None and last_status >= 500)
+            ) and (attempt < retries):
                 _sleep_backoff(attempt)
                 continue
             break
@@ -202,4 +203,3 @@ def notify(
         )
 
     return bool(ok)
-
