@@ -668,6 +668,16 @@ def _sanitize_video_path(p: str) -> Path:
     raw = Path(p)
     resolved = raw.resolve() if raw.is_absolute() else (_app_root() / raw).resolve()
 
+    # CI compatibility: some environments check out the repo under a non-/workspace path.
+    # Tests (and some docs/scripts) historically reference absolute `/workspace/...` paths.
+    # If `/workspace` does not exist on this host, treat it as a placeholder for APP_ROOT.
+    if raw.is_absolute() and not resolved.exists():
+        try:
+            if not Path("/workspace").exists() and str(raw).startswith("/workspace/"):
+                resolved = (_app_root() / raw.relative_to("/workspace")).resolve()
+        except Exception:
+            pass
+
     # File inputs are allowlisted to INPUT_DIR only (prevents arbitrary reads under APP_ROOT).
     inp = _input_dir().resolve()
     try:
