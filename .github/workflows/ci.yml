@@ -108,7 +108,7 @@ jobs:
 
       - name: Generate SBOM (Syft)
         id: syft
-        uses: anchore/syft-action@v0
+        uses: anchore/sbom-action@v0
         with:
           image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           output-format: spdx-json
