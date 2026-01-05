@@ -623,7 +623,14 @@ async def list_server_files(
 
 
 def _app_root() -> Path:
-    return Path(get_settings().app_root).resolve()
+    # CI compatibility: many tests and docs use `/workspace` as a stable placeholder path.
+    # On some CI runners, the repo checkout is not actually mounted at `/workspace`.
+    # If APP_ROOT is set to `/workspace` but that directory doesn't exist, treat the
+    # current working directory as the effective app root.
+    p = Path(get_settings().app_root).resolve()
+    if str(p) == "/workspace" and not p.exists():
+        return Path.cwd().resolve()
+    return p
 
 
 def _input_dir() -> Path:
