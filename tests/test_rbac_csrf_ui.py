@@ -11,6 +11,24 @@ from anime_v2.server import app
 from anime_v2.utils.crypto import PasswordHasher, random_id
 
 
+def _runtime_video_path(tmp_path: Path) -> str:
+    root = tmp_path.resolve()
+    in_dir = root / "Input"
+    out_dir = root / "Output"
+    logs_dir = root / "logs"
+    in_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    vp = in_dir / "Test.mp4"
+    if not vp.exists():
+        vp.write_bytes(b"\x00" * 1024)
+    os.environ["APP_ROOT"] = str(root)
+    os.environ["INPUT_DIR"] = str(in_dir)
+    os.environ["ANIME_V2_OUTPUT_DIR"] = str(out_dir)
+    os.environ["ANIME_V2_LOG_DIR"] = str(logs_dir)
+    return str(vp)
+
+
 def _login(c: TestClient, *, username: str, password: str) -> dict[str, str]:
     r = c.post("/api/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200
@@ -19,9 +37,8 @@ def _login(c: TestClient, *, username: str, password: str) -> dict[str, str]:
 
 
 def test_viewer_is_read_only_for_state_changing_apis(tmp_path: Path) -> None:
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
+    video_path = _runtime_video_path(tmp_path)
     os.environ["ANIME_V2_SETTINGS_PATH"] = str(tmp_path / "settings.json")
-    os.environ["APP_ROOT"] = "/workspace"
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
     os.environ["COOKIE_SECURE"] = "0"
@@ -48,7 +65,7 @@ def test_viewer_is_read_only_for_state_changing_apis(tmp_path: Path) -> None:
         rj = c.post(
             "/api/jobs",
             headers=headers,
-            json={"video_path": "/workspace/Input/Test.mp4", "device": "cpu", "mode": "low"},
+            json={"video_path": video_path, "device": "cpu", "mode": "low"},
         )
         assert rj.status_code in {403, 401}
 
@@ -58,9 +75,8 @@ def test_viewer_is_read_only_for_state_changing_apis(tmp_path: Path) -> None:
 
 
 def test_operator_can_submit_jobs_but_cannot_manage_presets_projects(tmp_path: Path) -> None:
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
+    _ = _runtime_video_path(tmp_path)
     os.environ["ANIME_V2_SETTINGS_PATH"] = str(tmp_path / "settings.json")
-    os.environ["APP_ROOT"] = "/workspace"
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
     os.environ["COOKIE_SECURE"] = "0"
@@ -94,8 +110,7 @@ def test_operator_can_submit_jobs_but_cannot_manage_presets_projects(tmp_path: P
 
 
 def test_admin_state_change_requires_csrf_when_using_cookies(tmp_path: Path) -> None:
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
-    os.environ["APP_ROOT"] = "/workspace"
+    _ = _runtime_video_path(tmp_path)
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
     os.environ["COOKIE_SECURE"] = "0"
