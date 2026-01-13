@@ -46,6 +46,23 @@ Additional focused docs:
 python3 -m pip install -e .
 ```
 
+### Runtime directories (important)
+
+- `Input/` and `Output/` are **runtime folders**. They are intentionally kept **empty in git** (only `.gitkeep`) and must **not** be committed.
+- If you need a tiny MP4 for local testing, generate one offline and copy it into `Input/`:
+
+```bash
+ffmpeg -y \
+  -f lavfi -i "testsrc=size=320x180:rate=10" \
+  -f lavfi -i "sine=frequency=440:sample_rate=44100" \
+  -t 2.0 \
+  -c:v libx264 -pix_fmt yuv420p \
+  -c:a aac \
+  samples/Test.mp4
+
+cp samples/Test.mp4 Input/Test.mp4
+```
+
 ---
 
 ## Web UI authentication (mobile-safe)

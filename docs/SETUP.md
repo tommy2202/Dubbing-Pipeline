@@ -150,12 +150,25 @@ Note:
 Run a test job:
 
 ```bash
+ffmpeg -y \
+  -f lavfi -i "testsrc=size=320x180:rate=10" \
+  -f lavfi -i "sine=frequency=440:sample_rate=44100" \
+  -t 2.0 \
+  -c:v libx264 -pix_fmt yuv420p \
+  -c:a aac \
+  samples/Test.mp4
+
+cp samples/Test.mp4 Input/Test.mp4
+
 anime-v2 Input/Test.mp4 --mode medium --device auto
 ```
 
 Outputs land in:
 - `Output/Test/<Test>.dub.mkv`
 - `Output/Test/<Test>.dub.mp4`
+
+Note:
+- `Input/` and `Output/` are runtime folders and should not be committed (only `.gitkeep` is tracked).
 
 If you see `weak_secrets_detected`, it’s safe for local testing; set real secrets before exposing remotely.
 

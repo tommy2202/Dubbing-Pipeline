@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,7 +13,7 @@ def main() -> int:
     Minimal smoke run.
 
     - Always: print safe config report + import smoke
-    - Optional: run a low-mode CPU pass if `samples/sample.mp4` exists AND
+    - Optional: run a low-mode CPU pass if `samples/Test.mp4` exists (or can be generated) AND
       the user sets SMOKE_RUN_PIPELINE=1 (prevents accidental heavy runs).
     """
     repo = Path(__file__).resolve().parents[1]
@@ -43,10 +45,39 @@ def main() -> int:
         print("Skipping pipeline run (set SMOKE_RUN_PIPELINE=1 to enable).")
         return 0
 
-    sample = repo / "samples" / "sample.mp4"
+    sample = repo / "samples" / "Test.mp4"
     if not sample.exists():
-        print(f"Sample missing: {sample}", file=sys.stderr)
-        return 2
+        # Prefer generating a tiny synthetic sample (offline) over shipping real media.
+        if not shutil.which("ffmpeg"):
+            print(f"Sample missing and ffmpeg not found: {sample}", file=sys.stderr)
+            return 2
+        sample.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=320x180:rate=10",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=44100",
+                "-t",
+                "2.0",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                str(sample),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     from anime_v2.cli import cli
 

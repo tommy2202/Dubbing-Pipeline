@@ -7,7 +7,7 @@ Constraints honored:
 
 ## Executive summary
 
-This repository currently has multiple categories of **tracked runtime/build artifacts** that should not be in source control and must not be shipped in release zips:
+This repository has had multiple categories of **tracked runtime/build artifacts** that should not be in source control and must not be shipped in release zips:
 
 - **Python bytecode caches** (`__pycache__/`, `*.pyc`) are committed (including under `src/` and `tests/`).
 - **Setuptools build output** under `build/lib/**` is committed (duplicated source tree).
@@ -15,8 +15,8 @@ This repository currently has multiple categories of **tracked runtime/build art
   - audio (`*.wav`)
   - sqlite dbs (`auth.db`, `jobs.db`)
   - intermediate JSON/JSONL/MD reports
-- **Backups** are committed (`backups/*.zip` and manifest).
-- **Runtime `Input/` content** is committed (`Input/Test.mp4`).
+- **Backups** were committed (`backups/*.zip` and manifest).
+- **Runtime `Input/` content** was committed (`Input/Test.mp4`).
 - Additional “ship risk” assets are committed (generated reports under `data/reports/**`, and `voices/embeddings/Speaker1.npy`).
 
 Primary risks:
@@ -463,7 +463,7 @@ backups/backup-20260101-0254.zip
 
 **Recommended disposition**
 - Runtime media under `_tmp_*` and `Input/` should be **deleted + untracked**.
-- `samples/sample.mp4` is a special case: it may be a legitimate test fixture, but should be **excluded from release zips**; consider Git LFS or downloading in CI.
+- Prefer **not committing** real media under `samples/`. Instead, generate a tiny synthetic sample via `ffmpeg` in smoke scripts; if any media is kept, it should be **excluded from release zips** by default.
 
 Tracked paths:
 
@@ -550,7 +550,7 @@ voices/embeddings/Speaker1.npy
 
 - **Test/sample media (`samples/*.mp4`)**
   - **Why**: size/licensing; not needed in runtime distribution.
-  - **Action**: optional to keep tracked (if licensed) but **exclude from release zip**; consider Git LFS or download-on-demand in CI.
+  - **Action**: prefer generating synthetic samples in smoke scripts; avoid committing real media; exclude from release zip if any remain.
 
 ## Proposed `.gitignore` additions (delta)
 

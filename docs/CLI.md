@@ -24,6 +24,23 @@ anime-v2 character --help
 ### What it does
 Runs the full pipeline on a local video file (or a batch of files) and writes outputs under `Output/<stem>/`.
 
+### Runtime folders + sample media
+
+- `Input/` and `Output/` are **runtime-only** folders and must not be committed.
+- Most examples below assume you have `Input/Test.mp4`. If you don’t, generate a tiny sample and copy it into place:
+
+```bash
+ffmpeg -y \
+  -f lavfi -i "testsrc=size=320x180:rate=10" \
+  -f lavfi -i "sine=frequency=440:sample_rate=44100" \
+  -t 2.0 \
+  -c:v libx264 -pix_fmt yuv420p \
+  -c:a aac \
+  samples/Test.mp4
+
+cp samples/Test.mp4 Input/Test.mp4
+```
+
 ### Basic examples
 
 ```bash
