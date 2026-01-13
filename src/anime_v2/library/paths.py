@@ -64,6 +64,17 @@ def get_job_output_root(job: Job) -> Path:
     return (out_root / stem).resolve()
 
 
+def output_dir_for_video(video_path: Path) -> Path:
+    """
+    Legacy-compatible Output/<video_stem>/ resolver.
+
+    Prefer using get_job_output_root(Job) when you have a Job instance, but many
+    CLI tools operate only on a video path.
+    """
+    vp = Path(video_path)
+    return (_output_root() / vp.stem).resolve()
+
+
 def get_library_root_for_job(job: Job) -> Path:
     """
     Canonical grouped library directory for a job.

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from anime_v2.config import get_settings
+from anime_v2.library.paths import output_dir_for_video
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +59,11 @@ def output_root(work_dir: Path | None = None) -> Path:
 
 
 def output_dir_for(video_path: Path, work_dir: Path | None = None) -> Path:
-    return output_root(work_dir) / video_path.stem
+    # Single source of truth: keep legacy helper, but route to library/paths.
+    # (work_dir overrides are legacy; if set, preserve previous behavior.)
+    if work_dir is not None:
+        return output_root(work_dir) / video_path.stem
+    return output_dir_for_video(video_path)
 
 
 def voices_root(work_dir: Path | None = None) -> Path:

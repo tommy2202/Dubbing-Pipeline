@@ -499,8 +499,9 @@ async def readyz(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request, _: object = Depends(require_role(Role.viewer))):
-    videos = _iter_videos()
-    return TEMPLATES.TemplateResponse(request, "index.html", {"videos": videos})
+    # Legacy entrypoint: redirect to the grouped Library UI.
+    # Keeps "/" stable while avoiding a separate filesystem-scan library view.
+    return RedirectResponse(url="/ui/library", status_code=302)
 
 
 @app.get("/login")

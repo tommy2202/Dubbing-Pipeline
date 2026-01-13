@@ -12,6 +12,8 @@ from anime_v2.api.deps import current_identity
 from anime_v2.api.routes_settings import UserSettingsStore
 from anime_v2.api.security import issue_csrf_token
 from anime_v2.config import get_settings
+from anime_v2.jobs.models import Job
+from anime_v2.library.paths import get_job_output_root
 from anime_v2.utils.io import read_json
 from anime_v2.ops import audit
 
@@ -79,18 +81,17 @@ def _audit_ui_page_view(request: Request, *, user_id: str, page: str, meta: dict
 
 def _job_base_dir_from_dict(job: dict[str, Any]) -> Path:
     """
-    Mirror routes_jobs._job_base_dir without importing it (avoid circular imports).
+    Canonical job output root resolution for UI helpers.
     """
-    out_root = Path(get_settings().output_dir).resolve()
-    out_mkv = str(job.get("output_mkv") or "").strip()
-    if out_mkv:
-        with suppress(Exception):
-            p = Path(out_mkv)
-            if p.parent.exists():
-                return p.parent.resolve()
-    vp = str(job.get("video_path") or "").strip()
-    stem = Path(vp).stem if vp else str(job.get("id") or "job")
-    return (out_root / stem).resolve()
+    try:
+        j = Job.from_dict(job)
+        return get_job_output_root(j)
+    except Exception:
+        # Last-resort fallback for malformed dicts.
+        out_root = Path(get_settings().output_dir).resolve()
+        vp = str(job.get("video_path") or "").strip()
+        stem = Path(vp).stem if vp else str(job.get("id") or "job")
+        return (out_root / stem).resolve()
 
 
 def _qa_score_for_job_dict(job: dict[str, Any]) -> float | None:

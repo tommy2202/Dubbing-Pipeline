@@ -911,17 +911,23 @@ def _write_srt_segments(path: Path, segments: list[dict[str, Any]]) -> None:
 
 
 def _job_base_dir(job: Job) -> Path:
-    # Prefer parent of output_mkv (stable Output/<stem>/), else use Output/<video_stem>.
-    if job.output_mkv:
-        with suppress(Exception):
-            p = Path(str(job.output_mkv))
-            if p.parent.exists():
-                return p.parent.resolve()
+    # Canonical Output/ layout (single source of truth).
     try:
-        stem = Path(str(job.video_path)).stem
+        from anime_v2.library.paths import get_job_output_root
+
+        return get_job_output_root(job)
     except Exception:
-        stem = job.id
-    return (_output_root() / stem).resolve()
+        # Conservative fallback
+        if job.output_mkv:
+            with suppress(Exception):
+                p = Path(str(job.output_mkv))
+                if p.parent.exists():
+                    return p.parent.resolve()
+        try:
+            stem = Path(str(job.video_path)).stem
+        except Exception:
+            stem = job.id
+        return (_output_root() / stem).resolve()
 
 
 def _transcript_store_paths(base_dir: Path) -> tuple[Path, Path]:
