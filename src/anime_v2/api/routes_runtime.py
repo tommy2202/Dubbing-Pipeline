@@ -23,6 +23,26 @@ async def runtime_state(_: Identity = Depends(require_role(Role.operator))):
     return {"ok": True, "state": s.state()}
 
 
+@router.get("/queue")
+async def runtime_queue_status(request: Request, _: Identity = Depends(require_role(Role.operator))):
+    """
+    Queue mode visibility for operators.
+    Useful for diagnosing Redis-down fallback behavior without exposing secrets.
+    """
+    qb = getattr(request.app.state, "queue_backend", None)
+    if qb is None:
+        return {"ok": True, "mode": "fallback", "detail": "queue_backend not installed"}
+    st = qb.status()
+    return {
+        "ok": True,
+        "mode": str(getattr(st, "mode", "")),
+        "redis_configured": bool(getattr(st, "redis_configured", False)),
+        "redis_ok": bool(getattr(st, "redis_ok", False)),
+        "detail": str(getattr(st, "detail", "")),
+        "banner": getattr(st, "banner", None),
+    }
+
+
 @router.get("/models")
 async def runtime_models(_: Identity = Depends(require_role(Role.admin))):
     s = get_settings()

@@ -116,9 +116,10 @@ def main() -> int:
     log_dir = str(getattr(s, "log_dir", "logs"))
     state_dir = str(getattr(s, "state_dir", "") or (Path(output_dir) / "_state"))
 
-    # Redis is optional today (rate limiter + scheduler mutex); queue mode is currently in-proc.
+    # Redis is optional; when enabled it powers Level-2 queue state/locks/counters.
     redis_url = str(getattr(s, "redis_url", "") or "")
     redis_enabled = bool(redis_url.strip())
+    queue_mode_cfg = str(getattr(s, "queue_mode", "auto") or "auto").strip().lower()
 
     items = [
         Item("HOST", _redact("HOST", host), _source_for_key("HOST", env, env_file, secrets_file)),
@@ -145,7 +146,11 @@ def main() -> int:
         ),
         Item("REDIS_URL", _redact("REDIS_URL", redis_url), _source_for_key("REDIS_URL", env, env_file, secrets_file)),
         Item("REDIS_ENABLED", str(redis_enabled), "computed"),
-        Item("QUEUE_MODE", "in-proc (JobQueue + Scheduler)", "computed"),
+        Item(
+            "QUEUE_MODE",
+            _redact("QUEUE_MODE", queue_mode_cfg),
+            _source_for_key("QUEUE_MODE", env, env_file, secrets_file),
+        ),
     ]
     _print_kv("Core", items)
 
@@ -264,7 +269,7 @@ def main() -> int:
     print("--------------")
     print("- Queue/execution: jobs run on this server process (in-proc workers).")
     print("- Backpressure: if the internal scheduler queue is too long, mode may degrade: high -> medium -> low.")
-    print("- Redis (if configured): currently used for rate limiting and a best-effort scheduler mutex (not a job queue).")
+    print("- Redis (if configured): provides Level-2 queue state + locks + counters; falls back to local queue if unavailable.")
     print("")
 
     # Useful operator hints

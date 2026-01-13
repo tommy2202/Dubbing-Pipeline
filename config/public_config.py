@@ -364,6 +364,10 @@ class PublicConfig(BaseSettings):
     max_jobs_medium: int = Field(default=0, alias="MAX_JOBS_MEDIUM")
     max_jobs_low: int = Field(default=0, alias="MAX_JOBS_LOW")
 
+    # Global cross-instance queue limits (enforced in Redis-backed queue at dispatch time).
+    # Safe default for unknown concurrency: at most 1 high-mode job running globally.
+    max_high_running_global: int = Field(default=1, alias="MAX_HIGH_RUNNING_GLOBAL")
+
     # runtime model manager / allocator
     prewarm_whisper: str = Field(default="", alias="PREWARM_WHISPER")  # comma-separated models
     prewarm_tts: str = Field(default="", alias="PREWARM_TTS")  # comma-separated models
@@ -376,6 +380,25 @@ class PublicConfig(BaseSettings):
 
     # --- job submission idempotency ---
     idempotency_ttl_sec: int = Field(default=86400, alias="IDEMPOTENCY_TTL_SEC")
+
+    # --- Level 2 queue (Redis) ---
+    # auto: use Redis if configured+healthy, else fallback to local queue
+    # redis: require Redis (falls back only if unreachable at runtime)
+    # fallback: force local queue
+    queue_mode: str = Field(default="auto", alias="QUEUE_MODE")  # auto|redis|fallback
+    # Redis key prefix for queue/locks/counters (no secrets)
+    redis_queue_prefix: str = Field(default="dp", alias="REDIS_QUEUE_PREFIX")
+    # Per-job lock lease (ms). Must be refreshed while a job runs.
+    redis_lock_ttl_ms: int = Field(default=300_000, alias="REDIS_LOCK_TTL_MS")  # 5 minutes
+    redis_lock_refresh_ms: int = Field(default=20_000, alias="REDIS_LOCK_REFRESH_MS")  # 20 seconds
+    # Queue delivery attempts (primarily for crash re-delivery / dispatch failures)
+    redis_queue_max_attempts: int = Field(default=8, alias="REDIS_QUEUE_MAX_ATTEMPTS")
+    redis_queue_backoff_ms: int = Field(default=750, alias="REDIS_QUEUE_BACKOFF_MS")
+    redis_queue_backoff_cap_ms: int = Field(default=30_000, alias="REDIS_QUEUE_BACKOFF_CAP_MS")
+    # Cancel flag TTL (ms): how long to keep cancel markers (helps late consumers)
+    redis_cancel_ttl_ms: int = Field(default=24 * 3600_000, alias="REDIS_CANCEL_TTL_MS")
+    # Active set TTL (ms): keep per-user active job sets bounded
+    redis_active_set_ttl_ms: int = Field(default=6 * 3600_000, alias="REDIS_ACTIVE_SET_TTL_MS")
 
     # --- job limits/watchdogs ---
     max_video_min: int = Field(default=120, alias="MAX_VIDEO_MIN")

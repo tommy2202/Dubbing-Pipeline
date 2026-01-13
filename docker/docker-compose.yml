@@ -39,7 +39,10 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-1}
 
       # optional redis for rate limiting
-      REDIS_URL: ${REDIS_URL:-}
+      # Redis is not exposed publicly; only on the internal docker network.
+      # If you want Redis-backed queue/locks/counters, leave this as the default.
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      QUEUE_MODE: ${QUEUE_MODE:-auto}
     volumes:
       - output:/app/Output
       - data:/app/data
@@ -59,6 +62,21 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+    networks:
+      - internal
+
+  # Internal Redis (no published ports)
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    cap_drop: [ "ALL" ]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 2s
+      retries: 10
     networks:
       - internal
 

@@ -87,7 +87,12 @@ def _write_srt(lines: list[dict], path: Path) -> None:
 
 class JobQueue:
     def __init__(
-        self, store: JobStore, *, concurrency: int = 1, app_root: Path | None = None
+        self,
+        store: JobStore,
+        *,
+        concurrency: int = 1,
+        app_root: Path | None = None,
+        queue_backend: object | None = None,
     ) -> None:
         self.store = store
         self.concurrency = max(1, int(concurrency))
@@ -99,6 +104,8 @@ class JobQueue:
             self.app_root = app_root.resolve()
         else:
             self.app_root = Path(get_settings().app_root).resolve()
+        # Optional Level-2 queue backend hooks (Redis locks/counters). Kept generic to avoid import cycles.
+        self.queue_backend = queue_backend
 
     async def start(self) -> None:
         if self._tasks:
@@ -157,6 +164,16 @@ class JobQueue:
         self.store.put(job)
         await self._q.put(job.id)
 
+    async def enqueue_id(self, job_id: str) -> None:
+        """
+        Enqueue an existing job id without rewriting the JobStore.
+        This is used by Redis-backed queue intake (Level 2).
+        """
+        jid = str(job_id or "").strip()
+        if not jid:
+            return
+        await self._q.put(jid)
+
     async def cancel(self, id: str) -> Job | None:
         async with self._cancel_lock:
             self._cancel.add(id)
@@ -209,7 +226,45 @@ class JobQueue:
                     await asyncio.sleep(0.25)
                     await self._q.put(job_id)
                     continue
+
+                # Level-2: acquire distributed lock/counters before running.
+                # If unavailable or denied, the backend may defer/requeue via Redis and we skip execution.
+                backend = getattr(self, "queue_backend", None)
+                if backend is not None:
+                    try:
+                        uid = str(getattr(j, "owner_id", "") or "") if j is not None else ""
+                        ok_to_run = await backend.before_job_run(job_id=str(job_id), user_id=(uid or None))
+                        if not ok_to_run:
+                            # backend handled deferral/cancel; do not run locally.
+                            continue
+                    except Exception as ex:
+                        logger.warning(
+                            "queue_before_job_run_failed",
+                            job_id=str(job_id),
+                            error=str(ex),
+                        )
+                        # Conservative: skip execution if backend is present but failed.
+                        continue
+
                 await self._run_job(job_id)
+
+                # Best-effort post-run hook: ack/release locks based on persisted final state.
+                if backend is not None:
+                    try:
+                        j2 = self.store.get(job_id)
+                        st = ""
+                        if j2 is not None and getattr(j2, "state", None) is not None:
+                            st = str(getattr(j2.state, "value", "") or "")
+                        uid2 = str(getattr(j2, "owner_id", "") or "") if j2 is not None else ""
+                        await backend.after_job_run(
+                            job_id=str(job_id),
+                            user_id=(uid2 or None),
+                            final_state=st,
+                            ok=st == "DONE",
+                            error=None,
+                        )
+                    except Exception:
+                        pass
             finally:
                 self._q.task_done()
 

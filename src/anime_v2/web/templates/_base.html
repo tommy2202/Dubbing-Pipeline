@@ -61,6 +61,14 @@
         <a class="underline" href="/ui/login">/ui/login</a>.
       </div>
     </div>
+    <!-- Queue warning banner (Redis down => fallback) -->
+    {% if queue_banner %}
+    <div class="bg-amber-900/30 border-b border-amber-800/50 text-amber-100 px-4 py-3 text-sm">
+      <div class="mx-auto max-w-6xl">
+        <strong>Queue notice:</strong> {{ queue_banner }}
+      </div>
+    </div>
+    {% endif %}
     <!-- CSRF token for JS/HTMX -->
     <input type="hidden" id="csrf" value="{{ csrf_token }}" />
 
@@ -81,6 +89,7 @@
           <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/projects">Projects</a>
           {% if user and user.role and user.role.value == "admin" %}
           <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/models">Models</a>
+          <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/admin/queue">Admin Queue</a>
           {% endif %}
           <a class="text-slate-200 hover:text-white px-2 py-1 rounded" href="/ui/settings">Settings</a>
 

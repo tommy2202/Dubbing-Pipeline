@@ -1281,6 +1281,15 @@ async def create_job(
 
     # Per-user quotas/policy (authoritative, server-side).
     all_jobs = store.list(limit=1000)
+    # Policy check (canonical module). Prefer Redis counters/quotas when queue backend is active.
+    qb = getattr(request.app.state, "queue_backend", None)
+    counts_override = None
+    user_quota = None
+    if qb is not None:
+        with suppress(Exception):
+            counts_override = await qb.user_counts(user_id=str(ident.user.id))
+        with suppress(Exception):
+            user_quota = await qb.user_quota(user_id=str(ident.user.id))
     pol = evaluate_submission(
         jobs=all_jobs,
         user_id=str(ident.user.id),
@@ -1288,6 +1297,8 @@ async def create_job(
         requested_mode=mode,
         requested_device=device,
         job_id=jid,
+        counts_override=counts_override,
+        user_quota=user_quota,
     )
     if not pol.ok:
         raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
@@ -1465,16 +1476,33 @@ async def create_job(
     )
     if idem_key:
         store.put_idempotency(idem_key, jid)
+    # Enqueue via the canonical queue backend (Redis L2 with fallback to local L1).
+    qb = getattr(request.app.state, "queue_backend", None)
     try:
-        scheduler.submit(
-            JobRecord(
+        if qb is not None:
+            await qb.submit_job(
                 job_id=jid,
-                mode=mode,
-                device_pref=device,
-                created_at=time.time(),
+                user_id=str(ident.user.id),
+                mode=str(mode),
+                device=str(device),
                 priority=100,
+                meta={
+                    "series_slug": series_slug,
+                    "season_number": int(season_number),
+                    "episode_number": int(episode_number),
+                    "user_role": str(getattr(ident.user.role, "value", "") or ""),
+                },
             )
-        )
+        else:
+            scheduler.submit(
+                JobRecord(
+                    job_id=jid,
+                    mode=mode,
+                    device_pref=device,
+                    created_at=time.time(),
+                    priority=100,
+                )
+            )
     except RuntimeError as ex:
         if "draining" in str(ex).lower():
             ra = str(lifecycle.retry_after_seconds(60))
@@ -1615,17 +1643,35 @@ async def create_jobs_batch(
             rt["style_guide_path"] = str(style_guide_path).strip()
         job.runtime = rt
         store.put(job)
+        qb = getattr(request.app.state, "queue_backend", None)
         try:
-            scheduler.submit(
-                JobRecord(
-                    job_id=jid, mode=mode, device_pref=device, created_at=time.time(), priority=100
+            if qb is not None:
+                await qb.submit_job(
+                    job_id=jid,
+                    user_id=str(ident.user.id),
+                    mode=str(mode),
+                    device=str(device),
+                    priority=100,
+                    meta={
+                        "series_slug": str(series_slug),
+                        "season_number": int(season_number),
+                        "episode_number": int(episode_number),
+                        "user_role": str(getattr(ident.user.role, "value", "") or ""),
+                    },
                 )
-            )
+            else:
+                scheduler.submit(
+                    JobRecord(
+                        job_id=jid,
+                        mode=mode,
+                        device_pref=device,
+                        created_at=time.time(),
+                        priority=100,
+                    )
+                )
         except RuntimeError as ex:
             if "draining" in str(ex).lower():
-                raise HTTPException(
-                    status_code=503, detail="Server is draining; try again later"
-                ) from ex
+                raise HTTPException(status_code=503, detail="Server is draining; try again later") from ex
             raise
         jobs_queued.inc()
         pipeline_job_total.inc()
@@ -1641,6 +1687,14 @@ async def create_jobs_batch(
         )
         # Policy check once for batch admission (counts inflight jobs prior to this batch).
         all_jobs = store.list(limit=1000)
+        qb = getattr(request.app.state, "queue_backend", None)
+        counts_override = None
+        user_quota = None
+        if qb is not None:
+            with suppress(Exception):
+                counts_override = await qb.user_counts(user_id=str(ident.user.id))
+            with suppress(Exception):
+                user_quota = await qb.user_quota(user_id=str(ident.user.id))
         pol = evaluate_submission(
             jobs=all_jobs,
             user_id=str(ident.user.id),
@@ -1648,6 +1702,8 @@ async def create_jobs_batch(
             requested_mode=str(body.get("mode") or "medium"),
             requested_device=str(body.get("device") or "auto"),
             job_id=None,
+            counts_override=counts_override,
+            user_quota=user_quota,
         )
         if not pol.ok:
             raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
@@ -1684,6 +1740,8 @@ async def create_jobs_batch(
                 requested_mode=mode,
                 requested_device=device,
                 job_id=None,
+                counts_override=counts_override,
+                user_quota=user_quota,
             )
             if not pol2.ok:
                 raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
@@ -1751,6 +1809,14 @@ async def create_jobs_batch(
             dict(form)
         )
         all_jobs = store.list(limit=1000)
+        qb = getattr(request.app.state, "queue_backend", None)
+        counts_override = None
+        user_quota = None
+        if qb is not None:
+            with suppress(Exception):
+                counts_override = await qb.user_counts(user_id=str(ident.user.id))
+            with suppress(Exception):
+                user_quota = await qb.user_quota(user_id=str(ident.user.id))
         pol = evaluate_submission(
             jobs=all_jobs,
             user_id=str(ident.user.id),
@@ -1758,6 +1824,8 @@ async def create_jobs_batch(
             requested_mode=str(form.get("mode") or "medium"),
             requested_device=str(form.get("device") or "auto"),
             job_id=None,
+            counts_override=counts_override,
+            user_quota=user_quota,
         )
         if not pol.ok:
             raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
@@ -1778,6 +1846,8 @@ async def create_jobs_batch(
             requested_mode=mode,
             requested_device=device,
             job_id=None,
+            counts_override=counts_override,
+            user_quota=user_quota,
         )
         if not pol2.ok:
             raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
@@ -2197,6 +2267,11 @@ async def cancel_job(
 ) -> dict[str, Any]:
     store = _get_store(request)
     queue = _get_queue(request)
+    # Level-2: set cancel flag in Redis so other instances can observe it.
+    qb = getattr(request.app.state, "queue_backend", None)
+    with suppress(Exception):
+        if qb is not None:
+            await qb.cancel_job(job_id=str(id), user_id=str(_.user.id))
     await queue.cancel(id)
     job = store.get(id)
     if job is None:
@@ -2246,6 +2321,7 @@ async def resume_job(
     store = _get_store(request)
     queue = _get_queue(request)
     scheduler = _get_scheduler(request)
+    qb = getattr(request.app.state, "queue_backend", None)
     job = store.get(id)
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
@@ -2254,13 +2330,27 @@ async def resume_job(
     j2 = await queue.resume(id)
     if j2 is None:
         raise HTTPException(status_code=404, detail="Not found")
-    # re-submit to scheduler (best-effort)
+    # Re-submit via canonical queue backend (best-effort).
     with suppress(Exception):
-        scheduler.submit(
-            JobRecord(
-                job_id=id, mode=j2.mode, device_pref=j2.device, created_at=time.time(), priority=100
+        if qb is not None:
+            await qb.submit_job(
+                job_id=str(id),
+                user_id=str(_.user.id),
+                mode=str(j2.mode),
+                device=str(j2.device),
+                priority=100,
+                meta={"user_role": str(getattr(_.user.role, "value", "") or "")},
             )
-        )
+        else:
+            scheduler.submit(
+                JobRecord(
+                    job_id=id,
+                    mode=j2.mode,
+                    device_pref=j2.device,
+                    created_at=time.time(),
+                    priority=100,
+                )
+            )
     return j2.to_dict()
 
 
@@ -2757,6 +2847,7 @@ async def synthesize_from_approved(
 ) -> dict[str, Any]:
     store = _get_store(request)
     scheduler = _get_scheduler(request)
+    qb = getattr(request.app.state, "queue_backend", None)
     job = store.get(id)
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
@@ -2777,15 +2868,25 @@ async def synthesize_from_approved(
         runtime=rt,
     )
     with suppress(Exception):
-        scheduler.submit(
-            JobRecord(
-                job_id=id,
-                mode=(job2.mode if job2 else job.mode),
-                device_pref=(job2.device if job2 else job.device),
-                created_at=time.time(),
+        if qb is not None:
+            await qb.submit_job(
+                job_id=str(id),
+                user_id=str(_.user.id),
+                mode=str((job2.mode if job2 else job.mode)),
+                device=str((job2.device if job2 else job.device)),
                 priority=50,
+                meta={"user_role": str(getattr(_.user.role, "value", "") or "")},
             )
-        )
+        else:
+            scheduler.submit(
+                JobRecord(
+                    job_id=id,
+                    mode=(job2.mode if job2 else job.mode),
+                    device_pref=(job2.device if job2 else job.device),
+                    created_at=time.time(),
+                    priority=50,
+                )
+            )
     return {"ok": True}
 
 

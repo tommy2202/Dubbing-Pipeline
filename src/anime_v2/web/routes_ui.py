@@ -55,7 +55,23 @@ def _render(request: Request, template: str, ctx: dict[str, Any]) -> HTMLRespons
     templates = _get_templates(request)
     user = _current_user_optional(request)
     csrf = issue_csrf_token()
-    context = {"request": request, "user": user, "csrf_token": csrf, **(ctx or {})}
+    # Queue banner (Redis down -> fallback queue). Best-effort; must never break UI rendering.
+    qb = getattr(request.app.state, "queue_backend", None)
+    banner = None
+    mode = "unknown"
+    with suppress(Exception):
+        if qb is not None:
+            st = qb.status()
+            banner = getattr(st, "banner", None)
+            mode = str(getattr(st, "mode", "unknown") or "unknown")
+    context = {
+        "request": request,
+        "user": user,
+        "csrf_token": csrf,
+        "queue_banner": banner,
+        "queue_mode": mode,
+        **(ctx or {}),
+    }
     resp = templates.TemplateResponse(request, template, context)
     _with_csrf_cookie(resp, csrf)
     return resp
@@ -381,6 +397,21 @@ async def ui_settings(request: Request) -> HTMLResponse:
             },
         },
     )
+
+
+@router.get("/admin/queue")
+async def ui_admin_queue(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        if not (user.role and user.role.value == "admin"):
+            return RedirectResponse(url="/ui/dashboard", status_code=302)
+    except Exception:
+        return RedirectResponse(url="/ui/dashboard", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="admin_queue")
+    return _render(request, "admin_queue.html", {})
 
 
 @router.get("/qr")

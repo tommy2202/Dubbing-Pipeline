@@ -1,0 +1,158 @@
+{% extends "_base.html" %}
+
+{% block title %}Admin Queue • anime_v2{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Admin Queue</h1>
+    <p class="mt-1 text-sm text-slate-400">Queued and running jobs (cancel / reprioritize / quotas).</p>
+  </div>
+  <button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" onclick="loadQueue()">Refresh</button>
+</div>
+
+<div class="mt-6 grid gap-4 lg:grid-cols-2">
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <div class="flex items-center justify-between">
+      <div class="text-sm text-slate-300">Pending</div>
+      <div id="pendingCount" class="text-xs text-slate-500"></div>
+    </div>
+    <div id="pendingList" class="mt-3 space-y-2 text-sm"></div>
+  </div>
+
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <div class="flex items-center justify-between">
+      <div class="text-sm text-slate-300">Running</div>
+      <div id="runningCount" class="text-xs text-slate-500"></div>
+    </div>
+    <div id="runningList" class="mt-3 space-y-2 text-sm"></div>
+  </div>
+</div>
+
+<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+  <div class="text-sm text-slate-300">User quotas</div>
+  <div class="mt-2 grid gap-3 sm:grid-cols-4 text-sm">
+    <div class="sm:col-span-2">
+      <label class="block text-xs text-slate-500" for="quotaUser">User ID</label>
+      <input id="quotaUser" class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="u_..." />
+    </div>
+    <div>
+      <label class="block text-xs text-slate-500" for="quotaRun">Max running</label>
+      <input id="quotaRun" class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="1" />
+    </div>
+    <div>
+      <label class="block text-xs text-slate-500" for="quotaQueued">Max queued</label>
+      <input id="quotaQueued" class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="5" />
+    </div>
+  </div>
+  <div class="mt-3 flex items-center gap-2">
+    <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm" onclick="setQuota()">Set quotas</button>
+    <div id="quotaMsg" class="text-xs text-slate-400"></div>
+  </div>
+</div>
+
+<script>
+  async function loadQueue() {
+    const csrf = document.getElementById("csrf")?.value || "";
+    const r = await fetch("/api/admin/queue?limit=200", { headers: { "X-CSRF-Token": csrf } });
+    const data = await r.json();
+    const b = data && data.backend ? data.backend : {};
+    const pending = b.pending || [];
+    const running = b.running || [];
+    document.getElementById("pendingCount").textContent = `${pending.length} jobs`;
+    document.getElementById("runningCount").textContent = `${running.length} jobs`;
+    const pendEl = document.getElementById("pendingList");
+    const runEl = document.getElementById("runningList");
+    pendEl.innerHTML = pending.map(renderItem).join("");
+    runEl.innerHTML = running.map(renderItem).join("");
+  }
+
+  function esc(s) {
+    return String(s || "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+  }
+
+  function renderItem(it) {
+    const jid = esc(it.job_id);
+    const uid = esc(it.user_id || it.owner_user_id || "");
+    const mode = esc(it.mode || "");
+    const pr = (it.priority !== null && it.priority !== undefined) ? String(it.priority) : "";
+    const st = esc(it.state || it.status || "");
+    return `
+      <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="text-slate-200 font-medium truncate">${jid}</div>
+            <div class="mt-1 text-xs text-slate-500">
+              <span>user:</span> <span>${uid}</span>
+              <span class="ml-2">mode:</span> <span>${mode}</span>
+              <span class="ml-2">state:</span> <span>${st}</span>
+              ${pr ? `<span class="ml-2">priority:</span> <span>${esc(pr)}</span>` : ``}
+            </div>
+          </div>
+          <div class="shrink-0 flex items-center gap-2">
+            <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-xs text-red-100"
+                    onclick="adminCancel('${jid}')">Cancel</button>
+            <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs"
+                    onclick="adminPriority('${jid}')">Priority…</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  async function adminCancel(jobId) {
+    const csrf = document.getElementById("csrf")?.value || "";
+    const r = await fetch(`/api/admin/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+      body: JSON.stringify({})
+    });
+    if (!r.ok) window.showToast(`Cancel failed: ${await r.text()}`, "error");
+    else window.showToast("Canceled", "success");
+    loadQueue();
+  }
+
+  async function adminPriority(jobId) {
+    const p = prompt("Set priority (0..1000):", "100");
+    if (p === null) return;
+    const pr = parseInt(p, 10);
+    if (!Number.isFinite(pr)) return;
+    const csrf = document.getElementById("csrf")?.value || "";
+    const r = await fetch(`/api/admin/jobs/${encodeURIComponent(jobId)}/priority`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+      body: JSON.stringify({ priority: pr })
+    });
+    if (!r.ok) window.showToast(`Priority failed: ${await r.text()}`, "error");
+    else window.showToast("Priority updated", "success");
+    loadQueue();
+  }
+
+  async function setQuota() {
+    const uid = document.getElementById("quotaUser").value || "";
+    const mr = document.getElementById("quotaRun").value || "";
+    const mq = document.getElementById("quotaQueued").value || "";
+    if (!uid.trim()) return;
+    const body = {};
+    if (mr.trim()) body.max_running = parseInt(mr, 10);
+    if (mq.trim()) body.max_queued = parseInt(mq, 10);
+    const csrf = document.getElementById("csrf")?.value || "";
+    const r = await fetch(`/api/admin/users/${encodeURIComponent(uid)}/quotas`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+      body: JSON.stringify(body)
+    });
+    const msg = document.getElementById("quotaMsg");
+    if (!r.ok) {
+      msg.textContent = `Failed: ${await r.text()}`;
+      window.showToast("Quota update failed", "error");
+    } else {
+      msg.textContent = "Updated.";
+      window.showToast("Quotas updated", "success");
+    }
+  }
+
+  loadQueue();
+</script>
+{% endblock %}
+

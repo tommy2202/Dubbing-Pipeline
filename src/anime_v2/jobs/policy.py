@@ -21,6 +21,21 @@ class PolicyResult:
     counts: dict[str, int]
 
 
+@dataclass(frozen=True, slots=True)
+class DispatchDecision:
+    """
+    Dispatch-time safety net decision.
+
+    This must use the same canonical policy logic as submission-time enforcement, but
+    it returns a simpler shape (no HTTP codes).
+    """
+
+    ok: bool
+    reasons: list[str]
+    # Optional retry hint for queue backends (seconds).
+    retry_after_s: float | None = None
+
+
 def _gpu_available() -> bool:
     try:
         import torch  # type: ignore
@@ -66,6 +81,75 @@ def _count_user_jobs(jobs: list[Job], *, user_id: str) -> dict[str, int]:
     return {"running": running, "queued": queued, "today": total_today}
 
 
+def _resolve_limits_for_user(*, user_role: Role, user_quota: dict[str, int] | None = None) -> tuple[int, int]:
+    """
+    Resolve per-user max_running and max_queued.
+
+    - Defaults come from PublicConfig.
+    - Admins can still be constrained by quotas if explicitly set, but by default bypass caps.
+    """
+    s = get_settings()
+    max_active = max(0, int(getattr(s, "max_active_jobs_per_user", 1)))
+    max_queued = max(0, int(getattr(s, "max_queued_jobs_per_user", 5)))
+    if user_role == Role.admin and not user_quota:
+        # Admin default: allow (policy safety remains for high-mode admin-only and global caps).
+        return max_active, max_queued
+    if isinstance(user_quota, dict):
+        if "max_running" in user_quota:
+            with __import__("contextlib").suppress(Exception):
+                max_active = max(0, int(user_quota["max_running"]))
+        if "max_queued" in user_quota:
+            with __import__("contextlib").suppress(Exception):
+                max_queued = max(0, int(user_quota["max_queued"]))
+    return max_active, max_queued
+
+
+def evaluate_dispatch(
+    *,
+    user_id: str,
+    user_role: Role,
+    requested_mode: str,
+    # Current counters from the queue backend (Redis in L2, local scan in fallback).
+    running: int,
+    queued: int,
+    # Global counters (Redis in L2). Only required for enforcing global high-mode cap.
+    global_high_running: int | None = None,
+    # Optional per-user quota overrides (admin-controlled).
+    user_quota: dict[str, int] | None = None,
+    job_id: str | None = None,
+) -> DispatchDecision:
+    """
+    Dispatch-time safety net.
+
+    Enforced even if submission-time checks were skipped/stale.
+    """
+    s = get_settings()
+    mode = str(requested_mode or "medium").strip().lower()
+    high_admin_only = bool(getattr(s, "high_mode_admin_only", True))
+
+    reasons: list[str] = []
+    if mode == "high" and high_admin_only and user_role != Role.admin:
+        reasons.append("high_mode_admin_only")
+        return DispatchDecision(ok=False, reasons=reasons, retry_after_s=60.0)
+
+    max_active, max_queued = _resolve_limits_for_user(user_role=user_role, user_quota=user_quota)
+    # Safety net: do not start running if user already at max_active.
+    if user_role != Role.admin and max_active > 0 and int(running) >= int(max_active):
+        reasons.append("user_running_cap")
+        return DispatchDecision(ok=False, reasons=reasons, retry_after_s=5.0)
+
+    # Global high-mode running cap (cross-instance, Redis-backed).
+    max_high_running_global = max(0, int(getattr(s, "max_high_running_global", 1)))
+    if mode == "high" and max_high_running_global > 0:
+        cur = int(global_high_running or 0)
+        if cur >= max_high_running_global:
+            reasons.append("global_high_running_cap")
+            return DispatchDecision(ok=False, reasons=reasons, retry_after_s=10.0)
+
+    # OK to dispatch.
+    return DispatchDecision(ok=True, reasons=reasons)
+
+
 def evaluate_submission(
     *,
     jobs: list[Job],
@@ -74,6 +158,10 @@ def evaluate_submission(
     requested_mode: str,
     requested_device: str,
     job_id: str | None = None,
+    # Optional: override counts from a queue backend (Redis L2) to avoid stale per-process counts.
+    counts_override: dict[str, int] | None = None,
+    # Optional: per-user quota overrides (admin-controlled; queue backend stores these).
+    user_quota: dict[str, int] | None = None,
 ) -> PolicyResult:
     """
     Evaluate submission policy for a new job.
@@ -84,13 +172,18 @@ def evaluate_submission(
     mode = str(requested_mode or "medium").strip().lower()
     device = str(requested_device or "auto").strip().lower()
 
-    counts = _count_user_jobs(jobs, user_id=str(user_id))
-    running = int(counts["running"])
-    queued = int(counts["queued"])
+    if isinstance(counts_override, dict):
+        running = int(counts_override.get("running") or 0)
+        queued = int(counts_override.get("queued") or 0)
+        today = int(counts_override.get("today") or 0)
+    else:
+        counts = _count_user_jobs(jobs, user_id=str(user_id))
+        running = int(counts["running"])
+        queued = int(counts["queued"])
+        today = int(counts["today"])
     inflight = running + queued
 
-    max_active = max(0, int(getattr(s, "max_active_jobs_per_user", 1)))
-    max_queued = max(0, int(getattr(s, "max_queued_jobs_per_user", 5)))
+    max_active, max_queued = _resolve_limits_for_user(user_role=user_role, user_quota=user_quota)
     daily_cap = max(0, int(getattr(s, "daily_job_cap", 0)))
     high_admin_only = bool(getattr(s, "high_mode_admin_only", True))
 
@@ -132,7 +225,7 @@ def evaluate_submission(
             mode = "medium"
 
     # Per-user daily job cap (optional).
-    if daily_cap > 0 and int(counts["today"]) >= daily_cap and user_role != Role.admin:
+    if daily_cap > 0 and int(today) >= daily_cap and user_role != Role.admin:
         reasons.append("daily_job_cap")
         _audit_policy(
             "policy.job_rejected",
@@ -141,7 +234,7 @@ def evaluate_submission(
             meta={
                 "reason": "daily_job_cap",
                 "daily_cap": daily_cap,
-                "today": int(counts["today"]),
+                "today": int(today),
                 "requested_mode": requested_mode,
             },
         )
@@ -155,20 +248,19 @@ def evaluate_submission(
             counts={"running": running, "queued": queued, "inflight": inflight},
         )
 
-    # Per-user inflight cap: safe default protects server from spam even if jobs haven't started yet.
-    inflight_limit = max_active + max_queued
-    if user_role != Role.admin and inflight_limit > 0 and inflight >= inflight_limit:
-        reasons.append("user_inflight_cap")
+    # Per-user queued cap: safe default for unknown concurrency.
+    # Note: running cap is enforced at dispatch time (safety net) so users can queue while one runs.
+    if user_role != Role.admin and max_queued > 0 and queued >= max_queued:
+        reasons.append("user_queued_cap")
         _audit_policy(
             "policy.job_rejected",
             user_id=user_id,
             job_id=job_id,
             meta={
-                "reason": "user_inflight_cap",
-                "inflight": inflight,
+                "reason": "user_queued_cap",
                 "running": running,
                 "queued": queued,
-                "max_active": max_active,
+                "max_running": max_active,
                 "max_queued": max_queued,
                 "requested_mode": requested_mode,
             },
@@ -176,7 +268,7 @@ def evaluate_submission(
         return PolicyResult(
             ok=False,
             status_code=429,
-            detail=f"Too many in-flight jobs (running={running}, queued={queued}, limit={inflight_limit})",
+            detail=f"Too many queued jobs (queued={queued}, limit={max_queued})",
             effective_mode=mode,
             effective_device=device,
             reasons=reasons,
@@ -191,7 +283,7 @@ def evaluate_submission(
         meta={
             "running": running,
             "queued": queued,
-            "max_active": max_active,
+            "max_running": max_active,
             "max_queued": max_queued,
             "requested_mode": requested_mode,
             "requested_device": requested_device,

@@ -42,6 +42,7 @@ from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import install_egress_policy
 from anime_v2.utils.ratelimit import RateLimiter
+from anime_v2.queue.manager import AutoQueueBackend
 from anime_v2.web.routes_jobs import router as jobs_router
 from anime_v2.web.routes_ui import router as ui_router
 from anime_v2.web.routes_webrtc import router as webrtc_router
@@ -136,6 +137,17 @@ async def lifespan(app: FastAPI):
     sched.start()
     app.state.scheduler = sched
 
+    # Queue backend (Level 2 Redis with Level 1 fallback).
+    # This extends the existing Scheduler/JobQueue flow without creating a parallel job system.
+    queue_backend = AutoQueueBackend(
+        scheduler=sched,
+        get_store_cb=lambda: app.state.job_store,
+        enqueue_job_id_cb=lambda job_id: q.enqueue_id(job_id),
+    )
+    app.state.queue_backend = queue_backend
+    # Let JobQueue consult the backend for locks/counters/acks.
+    q.queue_backend = queue_backend
+
     # auth store
     auth_store = AuthStore(auth_db)
     app.state.auth_store = auth_store
@@ -179,6 +191,9 @@ async def lifespan(app: FastAPI):
         except Exception as ex:
             logger.warning("admin bootstrap failed (%s)", ex)
 
+    # Start queue backend before starting workers (so redis intake is ready).
+    with suppress(Exception):
+        await queue_backend.start()
     await q.start()
     # Periodic cleanup of stale work/ directories (best-effort).
     import asyncio as _asyncio2
@@ -210,6 +225,8 @@ async def lifespan(app: FastAPI):
     lifecycle.begin_draining(timeout_sec=int(s.drain_timeout_sec))
     with suppress(Exception):
         sched.stop()
+    with suppress(Exception):
+        await queue_backend.stop()
     try:
         await q.graceful_shutdown(timeout_s=int(s.drain_timeout_sec))
     finally:
