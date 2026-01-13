@@ -43,13 +43,9 @@ def assert_safe_runtime_db_path(
     for comp in parts:
         c = str(comp)
         if c in {"build", "dist", "backups"}:
-            raise UnsafeRuntimeDbPath(
-                f"Refusing to store {purpose} DB in '{c}/' (unsafe): {p}"
-            )
+            raise UnsafeRuntimeDbPath(f"Refusing to store {purpose} DB in '{c}/' (unsafe): {p}")
         if c.startswith("_tmp"):
-            raise UnsafeRuntimeDbPath(
-                f"Refusing to store {purpose} DB in '_tmp*' (unsafe): {p}"
-            )
+            raise UnsafeRuntimeDbPath(f"Refusing to store {purpose} DB in '_tmp*' (unsafe): {p}")
 
     if repo_root is None:
         return
@@ -98,4 +94,3 @@ def assert_safe_runtime_db_path(
         except Exception:
             # Never block boot purely because git isn't available.
             pass
-
