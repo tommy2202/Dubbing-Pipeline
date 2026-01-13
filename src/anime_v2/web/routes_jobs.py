@@ -76,6 +76,49 @@ _MAX_IMPORT_TEXT_BYTES = 2 * 1024 * 1024  # 2MB per imported text file (SRT/JSON
 _UPLOAD_LOCKS: dict[str, asyncio.Lock] = {}
 
 
+def _parse_library_metadata_or_422(payload: dict[str, Any]) -> tuple[str, str, int, int]:
+    """
+    Parse required library metadata for job submission.
+    Backwards-compatible for old persisted jobs, but NEW submissions must include:
+      - series_title (non-empty)
+      - season (parseable int >= 1)
+      - episode (parseable int >= 1)
+    """
+    from anime_v2.library.normalize import normalize_series_title, parse_int_strict, series_to_slug
+
+    series_title = normalize_series_title(str(payload.get("series_title") or ""))
+    if not series_title:
+        raise HTTPException(status_code=422, detail="series_title is required")
+    slug = str(payload.get("series_slug") or "").strip()
+    if not slug:
+        slug = series_to_slug(series_title)
+    if not slug:
+        raise HTTPException(status_code=422, detail="series_title is invalid (cannot derive slug)")
+
+    # Accept either *_number or *_text (UI sends text).
+    season_in = payload.get("season_number")
+    if season_in is None:
+        season_in = payload.get("season_text")
+    if season_in is None:
+        season_in = payload.get("season")
+    episode_in = payload.get("episode_number")
+    if episode_in is None:
+        episode_in = payload.get("episode_text")
+    if episode_in is None:
+        episode_in = payload.get("episode")
+
+    try:
+        season_number = parse_int_strict(season_in, "season_number")
+    except ValueError as ex:
+        raise HTTPException(status_code=422, detail=str(ex)) from None
+    try:
+        episode_number = parse_int_strict(episode_in, "episode_number")
+    except ValueError as ex:
+        raise HTTPException(status_code=422, detail=str(ex)) from None
+
+    return series_title, slug, int(season_number), int(episode_number)
+
+
 def _now_iso() -> str:
     return now_utc()
 
@@ -999,6 +1042,12 @@ async def create_job(
     video_path: Path | None = None
     duration_s = 0.0
 
+    # Required library metadata.
+    series_title = ""
+    series_slug = ""
+    season_number = 0
+    episode_number = 0
+
     upload_id = ""
     upload_stem = ""
     import_src_srt_text: str | None = None
@@ -1009,6 +1058,10 @@ async def create_job(
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Invalid JSON")
+        # Library metadata is required for new jobs (validate early).
+        series_title, series_slug, season_number, episode_number = _parse_library_metadata_or_422(
+            body
+        )
         mode = str(body.get("mode") or mode)
         device = str(body.get("device") or device)
         src_lang = str(body.get("src_lang") or src_lang)
@@ -1060,6 +1113,9 @@ async def create_job(
     else:
         # multipart/form-data
         form = parsed_form or await request.form()
+        series_title, series_slug, season_number, episode_number = _parse_library_metadata_or_422(
+            dict(form)
+        )
         mode = str(form.get("mode") or mode)
         device = str(form.get("device") or device)
         src_lang = str(form.get("src_lang") or src_lang)
@@ -1252,6 +1308,10 @@ async def create_job(
         work_dir="",
         log_path="",
         error=None,
+        series_title=str(series_title),
+        series_slug=str(series_slug),
+        season_number=int(season_number),
+        episode_number=int(episode_number),
     )
     # Per-job (session) flags; NOT persisted as global defaults.
     rt = dict(job.runtime or {})
@@ -1457,6 +1517,10 @@ async def create_jobs_batch(
     async def _submit_one(
         *,
         video_path: Path,
+        series_title: str,
+        series_slug: str,
+        season_number: int,
+        episode_number: int,
         mode: str,
         device: str,
         src_lang: str,
@@ -1502,6 +1566,10 @@ async def create_jobs_batch(
             work_dir="",
             log_path="",
             error=None,
+            series_title=str(series_title),
+            series_slug=str(series_slug),
+            season_number=int(season_number),
+            episode_number=int(episode_number),
         )
         rt = dict(job.runtime or {})
         if preset:
@@ -1554,6 +1622,9 @@ async def create_jobs_batch(
         body = await request.json()
         if not isinstance(body, dict) or not isinstance(body.get("items"), list):
             raise HTTPException(status_code=400, detail="Invalid JSON body")
+        base_series_title, base_series_slug, base_season, base_episode = _parse_library_metadata_or_422(
+            body
+        )
         for it in body["items"]:
             if not isinstance(it, dict):
                 continue
@@ -1592,9 +1663,35 @@ async def create_jobs_batch(
                 project["output_subdir"] = _sanitize_output_subdir(
                     str(project.get("output_subdir") or "")
                 )
+            # Batch default: episode auto-increments by item order unless explicitly set.
+            idx = int(len(created_ids))
+            meta_payload = {
+                "series_title": base_series_title,
+                "series_slug": base_series_slug,
+                "season_number": base_season,
+                "episode_number": base_episode + idx,
+            }
+            # Allow per-item override (still validated).
+            for k in [
+                "series_title",
+                "series_slug",
+                "season_number",
+                "season_text",
+                "episode_number",
+                "episode_text",
+            ]:
+                if k in it:
+                    meta_payload[k] = it.get(k)
+            series_title, series_slug, season_number, episode_number = _parse_library_metadata_or_422(
+                meta_payload
+            )
             created_ids.append(
                 await _submit_one(
                     video_path=video_path,
+                    series_title=series_title,
+                    series_slug=series_slug,
+                    season_number=season_number,
+                    episode_number=episode_number,
                     mode=mode,
                     device=device,
                     src_lang=src_lang,
@@ -1611,6 +1708,9 @@ async def create_jobs_batch(
             )
     else:
         form = await request.form()
+        base_series_title, base_series_slug, base_season, base_episode = _parse_library_metadata_or_422(
+            dict(form)
+        )
         preset_id = str(form.get("preset_id") or "").strip()
         project_id = str(form.get("project_id") or "").strip()
         preset = store.get_preset(preset_id) if preset_id else None
@@ -1661,9 +1761,14 @@ async def create_jobs_batch(
                             status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)"
                         )
                     f.write(chunk)
+            idx = int(len(created_ids))
             created_ids.append(
                 await _submit_one(
                     video_path=dest,
+                    series_title=base_series_title,
+                    series_slug=base_series_slug,
+                    season_number=base_season,
+                    episode_number=(base_episode + idx),
                     mode=mode,
                     device=device,
                     src_lang=src_lang,
