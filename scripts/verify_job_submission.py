@@ -157,6 +157,9 @@ def main() -> int:
                     "/api/jobs",
                     json={
                         "upload_id": upload_id,
+                        "series_title": "Test Series",
+                        "season_number": 1,
+                        "episode_number": 1,
                         "mode": "low",
                         "device": "cpu",
                         "src_lang": "auto",
