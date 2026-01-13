@@ -16,6 +16,11 @@ class JobState(str, Enum):
     CANCELED = "CANCELED"
 
 
+class Visibility(str, Enum):
+    private = "private"
+    public = "public"
+
+
 def now_utc() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
@@ -47,9 +52,17 @@ class Job:
     request_id: str = ""
     runtime: dict[str, Any] = field(default_factory=dict)
 
+    # Grouped library browsing metadata (optional for legacy jobs).
+    series_title: str = ""
+    series_slug: str = ""
+    season_number: int = 0
+    episode_number: int = 0
+    visibility: Visibility = Visibility.private
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["state"] = self.state.value
+        d["visibility"] = self.visibility.value
         return d
 
     @classmethod
@@ -61,8 +74,20 @@ class Job:
         dd.setdefault("request_id", "")
         dd.setdefault("error", None)
         dd.setdefault("runtime", {})
+        dd.setdefault("series_title", "")
+        dd.setdefault("series_slug", "")
+        dd.setdefault("season_number", 0)
+        dd.setdefault("episode_number", 0)
+        dd.setdefault("visibility", "private")
         st = dd["state"]
         if isinstance(st, str) and st.startswith("JobState."):
             st = st.split(".", 1)[1]
         dd["state"] = JobState(st)
+        vis = dd.get("visibility")
+        if isinstance(vis, str) and vis.startswith("Visibility."):
+            vis = vis.split(".", 1)[1]
+        try:
+            dd["visibility"] = Visibility(str(vis))
+        except Exception:
+            dd["visibility"] = Visibility.private
         return cls(**dd)
