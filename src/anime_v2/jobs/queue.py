@@ -29,6 +29,7 @@ from anime_v2.ops.metrics import (
 from anime_v2.runtime.scheduler import Scheduler
 from anime_v2.security.crypto import CryptoConfigError, decrypt_file, is_encrypted_path
 from anime_v2.stages import audio_extractor, mkv_export, tts
+from anime_v2.ops import audit
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.diarization import DiarizeConfig
 from anime_v2.stages.diarization import diarize as diarize_v2
@@ -296,6 +297,13 @@ class JobQueue:
         settings = get_settings()
         self.store.update(job_id, state=JobState.RUNNING, progress=0.0, message="Starting")
         self.store.append_log(job_id, f"[{now_utc()}] start job={job_id}")
+        with suppress(Exception):
+            audit.emit(
+                "job.started",
+                user_id=str(job.owner_id or "") or None,
+                job_id=str(job_id),
+                meta={"mode": str(job.mode), "device": str(job.device)},
+            )
 
         degraded_marked = False
 
@@ -2723,6 +2731,13 @@ class JobQueue:
                     self.store.update(job_id, runtime=rt2)
             jobs_finished.labels(state="DONE").inc()
             self.store.append_log(job_id, f"[{now_utc()}] done in {time.perf_counter()-t0:.2f}s")
+            with suppress(Exception):
+                audit.emit(
+                    "job.finished",
+                    user_id=str(job.owner_id or "") or None,
+                    job_id=str(job_id),
+                    meta={"state": "DONE"},
+                )
             # Cleanup temp workdir (keep logs + checkpoint + final outputs in Output/<stem>/).
             with suppress(Exception):
                 shutil.rmtree(work_dir, ignore_errors=True)
@@ -2730,6 +2745,13 @@ class JobQueue:
             self.store.append_log(job_id, f"[{now_utc()}] canceled")
             self.store.update(job_id, state=JobState.CANCELED, message="Canceled", error=None)
             jobs_finished.labels(state="CANCELED").inc()
+            with suppress(Exception):
+                audit.emit(
+                    "job.canceled",
+                    user_id=str(job.owner_id or "") or None,
+                    job_id=str(job_id),
+                    meta={"state": "CANCELED"},
+                )
             # optional cleanup of in-progress outputs: leave as-is (ignored by state)
         except Exception as ex:
             self.store.append_log(job_id, f"[{now_utc()}] failed: {ex}")
@@ -2742,6 +2764,13 @@ class JobQueue:
                 await self._notify_job_finished(job_id, state="FAILED")
             jobs_finished.labels(state="FAILED").inc()
             pipeline_job_failed_total.inc()
+            with suppress(Exception):
+                audit.emit(
+                    "job.failed",
+                    user_id=str(job.owner_id or "") or None,
+                    job_id=str(job_id),
+                    meta={"state": "FAILED", "error": str(ex)},
+                )
         finally:
             dt = time.perf_counter() - t0
             logger.info(

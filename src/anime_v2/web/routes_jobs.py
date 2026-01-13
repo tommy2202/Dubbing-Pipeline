@@ -28,8 +28,9 @@ from anime_v2.api.middleware import audit_event
 from anime_v2.api.models import AuthStore, Role
 from anime_v2.api.security import decode_token
 from anime_v2.config import get_settings
-from anime_v2.jobs.limits import concurrent_jobs_for_user, get_limits, used_minutes_today
+from anime_v2.jobs.limits import get_limits, used_minutes_today
 from anime_v2.jobs.models import Job, JobState, new_id, now_utc
+from anime_v2.jobs.policy import evaluate_submission
 from anime_v2.ops.metrics import jobs_queued, pipeline_job_total
 from anime_v2.ops.storage import ensure_free_space
 from anime_v2.runtime import lifecycle
@@ -1272,14 +1273,21 @@ async def create_job(
     jid = new_id()
     created = now_utc()
 
-    # Per-user quotas (concurrency + daily processing minutes)
+    # Per-user quotas/policy (authoritative, server-side).
     all_jobs = store.list(limit=1000)
-    conc = concurrent_jobs_for_user(all_jobs, user_id=ident.user.id)
-    if conc >= limits.max_concurrent_per_user:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Too many concurrent jobs (limit={limits.max_concurrent_per_user})",
-        )
+    pol = evaluate_submission(
+        jobs=all_jobs,
+        user_id=str(ident.user.id),
+        user_role=ident.user.role,
+        requested_mode=mode,
+        requested_device=device,
+        job_id=jid,
+    )
+    if not pol.ok:
+        raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
+    # Apply policy adjustments (GPU downgrade / mode downgrade).
+    mode = str(pol.effective_mode or mode)
+    device = str(pol.effective_device or device)
     used_min = used_minutes_today(all_jobs, user_id=ident.user.id, now_iso=created)
     req_min = duration_s / 60.0
     if (used_min + req_min) > float(limits.daily_processing_minutes):
@@ -1625,6 +1633,18 @@ async def create_jobs_batch(
         base_series_title, base_series_slug, base_season, base_episode = _parse_library_metadata_or_422(
             body
         )
+        # Policy check once for batch admission (counts inflight jobs prior to this batch).
+        all_jobs = store.list(limit=1000)
+        pol = evaluate_submission(
+            jobs=all_jobs,
+            user_id=str(ident.user.id),
+            user_role=ident.user.role,
+            requested_mode=str(body.get("mode") or "medium"),
+            requested_device=str(body.get("device") or "auto"),
+            job_id=None,
+        )
+        if not pol.ok:
+            raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
         for it in body["items"]:
             if not isinstance(it, dict):
                 continue
@@ -1650,6 +1670,19 @@ async def create_jobs_batch(
                 raise HTTPException(status_code=400, detail=f"video_path does not exist: {vp}")
             mode = str(it.get("mode") or (preset.get("mode") if preset else "medium"))
             device = str(it.get("device") or (preset.get("device") if preset else "auto"))
+            # Apply policy adjustments (GPU/mode downgrade) per item.
+            pol2 = evaluate_submission(
+                jobs=all_jobs,
+                user_id=str(ident.user.id),
+                user_role=ident.user.role,
+                requested_mode=mode,
+                requested_device=device,
+                job_id=None,
+            )
+            if not pol2.ok:
+                raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
+            mode = str(pol2.effective_mode or mode)
+            device = str(pol2.effective_device or device)
             src_lang = str(it.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
             tgt_lang = str(it.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
             pg = str(it.get("pg") or "off")
@@ -1711,6 +1744,17 @@ async def create_jobs_batch(
         base_series_title, base_series_slug, base_season, base_episode = _parse_library_metadata_or_422(
             dict(form)
         )
+        all_jobs = store.list(limit=1000)
+        pol = evaluate_submission(
+            jobs=all_jobs,
+            user_id=str(ident.user.id),
+            user_role=ident.user.role,
+            requested_mode=str(form.get("mode") or "medium"),
+            requested_device=str(form.get("device") or "auto"),
+            job_id=None,
+        )
+        if not pol.ok:
+            raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
         preset_id = str(form.get("preset_id") or "").strip()
         project_id = str(form.get("project_id") or "").strip()
         preset = store.get_preset(preset_id) if preset_id else None
@@ -1721,6 +1765,18 @@ async def create_jobs_batch(
             )
         mode = str(form.get("mode") or (preset.get("mode") if preset else "medium"))
         device = str(form.get("device") or (preset.get("device") if preset else "auto"))
+        pol2 = evaluate_submission(
+            jobs=all_jobs,
+            user_id=str(ident.user.id),
+            user_role=ident.user.role,
+            requested_mode=mode,
+            requested_device=device,
+            job_id=None,
+        )
+        if not pol2.ok:
+            raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
+        mode = str(pol2.effective_mode or mode)
+        device = str(pol2.effective_device or device)
         src_lang = str(form.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
         tgt_lang = str(form.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
         pg = str(form.get("pg") or "off")

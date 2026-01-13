@@ -21,6 +21,7 @@ from anime_v2.api.models import AuthStore, Role, User, now_ts
 from anime_v2.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
 from anime_v2.api.routes_audit import router as audit_router
 from anime_v2.api.routes_auth import router as auth_router
+from anime_v2.api.routes_admin import router as admin_router
 from anime_v2.api.routes_keys import router as keys_router
 from anime_v2.api.routes_library import router as library_router
 from anime_v2.api.routes_runtime import router as runtime_router
@@ -274,6 +275,7 @@ app.include_router(auth_router)
 # Also expose auth endpoints under /api/auth/* for browser-friendly UI wiring.
 app.include_router(auth_router, prefix="/api")
 app.include_router(audit_router)
+app.include_router(admin_router)
 app.include_router(keys_router)
 app.include_router(runtime_router)
 app.include_router(settings_router)
