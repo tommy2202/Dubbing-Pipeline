@@ -3,7 +3,7 @@
 Constraints honored:
 - **No pipeline logic refactors.**
 - Focus on **repo hygiene**, **packaging boundaries**, and **safety** (secrets/PII/copyrighted media).
-- This document is a **plan only**. No code changes are performed here.
+- This document started as a plan; see **Implementation status** for what was actually changed in-repo.
 
 ## Executive summary
 
@@ -23,6 +23,36 @@ Primary risks:
 - **Security/privacy**: `*.db` and backups can contain tokens, user identifiers, job metadata, and other sensitive content.
 - **Noise & bloat**: build trees and caches create large diffs, merge conflicts, and inflate release artifacts.
 - **Licensing/copyright**: committed media files in runtime dirs (`Input/*.mp4`, `_tmp_*/**/*.wav`) are risky to redistribute.
+
+## Implementation status (applied in-repo)
+
+The following repo hygiene fixes were applied with minimal impact to working code:
+
+- **`.gitignore`**:
+  - Added/confirmed ignores for `__pycache__/`, `*.pyc`, `*.pyo`, `build/`, `dist/`, `*.egg-info/`, `Output/**`, `Input/**`, `backups/`, `logs/`, `*.log`, `_tmp*/`, `_tmp_*/`, `tmp/`, and `*.db`.
+  - Added exceptions so placeholders remain tracked: `!Input/.gitkeep` and `!Output/.gitkeep`.
+
+- **Placeholders**:
+  - Added `Input/.gitkeep` and `Output/.gitkeep`.
+
+- **Cleanup scripts**:
+  - Added `scripts/cleanup_git_artifacts.sh` and `scripts/cleanup_git_artifacts.ps1`.
+  - Both scripts default to **dry-run**, list what will be untracked, require confirmation unless `--yes` / `-Yes`, run `git rm -r --cached` only on **tracked** artifact paths, then re-add `.gitkeep` files (forced add).
+
+- **Artifacts untracked from git (kept on disk)**:
+  - Untracked **296** tracked artifact paths matching the patterns above, including:
+    - `build/lib/**`
+    - committed `__pycache__/**` and `*.pyc`
+    - `_tmp_*` scratch outputs (including `*.db`, `*.wav`, and intermediate reports)
+    - `backups/backup-20260101-0254.*`
+    - `Input/Test.mp4`
+
+- **Repo-internal junk deleted from disk (explicitly allowed)**:
+  - Deleted `build/` and `__pycache__/` directories from the working tree after untracking (to reduce local noise). No runtime/user media or `_tmp_*` content was deleted from disk by the cleanup.
+
+Items intentionally **not changed yet** (need a separate decision/policy because they may be fixtures):
+- `data/reports/**`
+- `voices/embeddings/Speaker1.npy`
 
 ## Inventory: tracked artifacts discovered (exact paths)
 
