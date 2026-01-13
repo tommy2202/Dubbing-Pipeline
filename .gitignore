@@ -9,6 +9,7 @@ secrets/
 # python caches
 __pycache__/
 *.pyc
+*.pyo
 *.egg-info/
 .mypy_cache/
 .pytest_cache/
@@ -16,13 +17,27 @@ __pycache__/
 
 # runtime artifacts
 logs/
-Output/
-Input/
+*.log
+Output/**
+Input/**
 uploads/
 outputs/
 _tmp*/
+_tmp_*/
+tmp/
 *.db
 Input/uploads/
 
 # ntfy local/private config (do not commit)
 docker/ntfy/server.yml
+
+# packaging/build output (generated)
+build/
+dist/
+
+# local backups (never commit)
+backups/
+
+# keep placeholders (runtime dirs must exist but stay empty in git)
+!Input/.gitkeep
+!Output/.gitkeep
