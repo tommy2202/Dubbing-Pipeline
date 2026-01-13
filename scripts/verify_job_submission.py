@@ -77,10 +77,12 @@ def main() -> int:
         app = FastAPI()
         out_root = Path(os.environ["ANIME_V2_OUTPUT_DIR"]).resolve()
         out_root.mkdir(parents=True, exist_ok=True)
+        state_root = (out_root / "_state").resolve()
+        state_root.mkdir(parents=True, exist_ok=True)
 
         # state wiring similar to server lifespan
-        app.state.auth_store = AuthStore(out_root / "auth.db")
-        store = JobStore(out_root / "jobs.db")
+        app.state.auth_store = AuthStore(state_root / "auth.db")
+        store = JobStore(state_root / "jobs.db")
         app.state.job_store = store
         app.state.job_queue = JobQueue(store, concurrency=1)
         app.state.scheduler = _FakeScheduler()

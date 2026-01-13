@@ -1,4 +1,4 @@
-.PHONY: fmt lint type test check
+.PHONY: fmt lint type test check security
 .PHONY: check-all
 
 PYTHON ?= python3
@@ -18,6 +18,9 @@ type:
 test:
 	$(PYTHON) -m pytest -q
 
-check: lint test
+security:
+	$(PYTHON) scripts/check_no_sensitive_runtime_files.py
+
+check: lint test security
 
 check-all: lint type test

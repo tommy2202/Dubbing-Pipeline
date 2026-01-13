@@ -26,6 +26,8 @@ _tmp*/
 _tmp_*/
 tmp/
 *.db
+*.sqlite
+*.sqlite3
 Input/uploads/
 
 # ntfy local/private config (do not commit)
@@ -41,3 +43,6 @@ backups/
 # keep placeholders (runtime dirs must exist but stay empty in git)
 !Input/.gitkeep
 !Output/.gitkeep
+
+# optional runtime state dir if configured under repo root
+data/runtime/

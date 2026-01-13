@@ -46,6 +46,11 @@ class PublicConfig(BaseSettings):
     log_dir: Path = Field(
         default_factory=lambda: (Path.cwd() / "logs").resolve(), alias="ANIME_V2_LOG_DIR"
     )
+    # Runtime-only state directory (DBs, internal state). Prefer a non-repo mount in production.
+    # If unset, defaults to "<ANIME_V2_OUTPUT_DIR>/_state".
+    state_dir: Path | None = Field(default=None, alias="ANIME_V2_STATE_DIR")
+    auth_db_name: str = Field(default="auth.db", alias="ANIME_V2_AUTH_DB_NAME")
+    jobs_db_name: str = Field(default="jobs.db", alias="ANIME_V2_JOBS_DB_NAME")
     cache_dir: Path | None = Field(default=None, alias="ANIME_V2_CACHE_DIR")
     models_dir: Path = Field(default=Path("/models"), alias="MODELS_DIR")
 
