@@ -74,45 +74,45 @@ def _check_canonical_modules(repo_root: Path) -> list[str]:
         # config + modes
         "config/public_config.py",
         "config/settings.py",
-        "src/anime_v2/modes.py",
+        "src/dubbing_pipeline/modes.py",
         # profiles + text transforms
-        "src/anime_v2/projects/loader.py",
-        "src/anime_v2/text/style_guide.py",
-        "src/anime_v2/text/pg_filter.py",
+        "src/dubbing_pipeline/projects/loader.py",
+        "src/dubbing_pipeline/text/style_guide.py",
+        "src/dubbing_pipeline/text/pg_filter.py",
         # timing + rewrite hook
-        "src/anime_v2/timing/fit_text.py",
-        "src/anime_v2/timing/rewrite_provider.py",
+        "src/dubbing_pipeline/timing/fit_text.py",
+        "src/dubbing_pipeline/timing/rewrite_provider.py",
         # audio/music + overrides
-        "src/anime_v2/audio/music_detect.py",
-        "src/anime_v2/review/overrides.py",
+        "src/dubbing_pipeline/audio/music_detect.py",
+        "src/dubbing_pipeline/review/overrides.py",
         # QA
-        "src/anime_v2/qa/scoring.py",
+        "src/dubbing_pipeline/qa/scoring.py",
         # voice memory tools
-        "src/anime_v2/voice_memory/store.py",
-        "src/anime_v2/voice_memory/tools.py",
-        "src/anime_v2/voice_memory/audition.py",
+        "src/dubbing_pipeline/voice_memory/store.py",
+        "src/dubbing_pipeline/voice_memory/tools.py",
+        "src/dubbing_pipeline/voice_memory/audition.py",
         # streaming
-        "src/anime_v2/streaming/runner.py",
-        "src/anime_v2/streaming/context.py",
+        "src/dubbing_pipeline/streaming/runner.py",
+        "src/dubbing_pipeline/streaming/context.py",
         # lipsync plugin
-        "src/anime_v2/plugins/lipsync/base.py",
-        "src/anime_v2/plugins/lipsync/registry.py",
-        "src/anime_v2/plugins/lipsync/wav2lip_plugin.py",
-        "src/anime_v2/plugins/lipsync/preview.py",
+        "src/dubbing_pipeline/plugins/lipsync/base.py",
+        "src/dubbing_pipeline/plugins/lipsync/registry.py",
+        "src/dubbing_pipeline/plugins/lipsync/wav2lip_plugin.py",
+        "src/dubbing_pipeline/plugins/lipsync/preview.py",
         # subs formatting
-        "src/anime_v2/subs/formatting.py",
+        "src/dubbing_pipeline/subs/formatting.py",
         # retention/cache policy
-        "src/anime_v2/storage/retention.py",
+        "src/dubbing_pipeline/storage/retention.py",
         # drift reports
-        "src/anime_v2/reports/drift.py",
+        "src/dubbing_pipeline/reports/drift.py",
         # existing required modules
-        "src/anime_v2/diarization/smoothing.py",
-        "src/anime_v2/expressive/director.py",
-        "src/anime_v2/stages/export.py",
-        "src/anime_v2/audio/tracks.py",
+        "src/dubbing_pipeline/diarization/smoothing.py",
+        "src/dubbing_pipeline/expressive/director.py",
+        "src/dubbing_pipeline/stages/export.py",
+        "src/dubbing_pipeline/audio/tracks.py",
     ]
     must_not_exist = [
-        "src/anime_v2/stages/diarize.py",  # removed legacy path
+        "src/dubbing_pipeline/stages/diarize.py",  # removed legacy path
     ]
 
     for rel in must_exist:
@@ -124,13 +124,13 @@ def _check_canonical_modules(repo_root: Path) -> list[str]:
 
     # Duplicate implementation guardrails (tight allowlist).
     # We permit two retention modules:
-    # - src/anime_v2/storage/retention.py (per-job cache policy retention)
-    # - src/anime_v2/ops/retention.py (global input/log retention)
+    # - src/dubbing_pipeline/storage/retention.py (per-job cache policy retention)
+    # - src/dubbing_pipeline/ops/retention.py (global input/log retention)
     allowed_retention = {
-        (repo_root / "src/anime_v2/storage/retention.py").resolve(),
-        (repo_root / "src/anime_v2/ops/retention.py").resolve(),
+        (repo_root / "src/dubbing_pipeline/storage/retention.py").resolve(),
+        (repo_root / "src/dubbing_pipeline/ops/retention.py").resolve(),
     }
-    found_retention = {p.resolve() for p in repo_root.glob("src/anime_v2/**/retention.py")}
+    found_retention = {p.resolve() for p in repo_root.glob("src/dubbing_pipeline/**/retention.py")}
     extra = sorted(str(p) for p in (found_retention - allowed_retention))
     missing = sorted(str(p) for p in (allowed_retention - found_retention))
     if missing:

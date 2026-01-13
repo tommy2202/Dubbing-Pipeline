@@ -10,7 +10,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 def main() -> int:
-    from anime_v2.timing.fit_text import (
+    from dubbing_pipeline.timing.fit_text import (
         estimate_speaking_seconds,
         fit_translation_to_time,
         shorten_english,
@@ -36,7 +36,7 @@ def main() -> int:
         print("stats:", stats.to_dict())
 
     # Ensure atempo chain helper doesn't crash
-    from anime_v2.timing.pacing import compute_ratio
+    from dubbing_pipeline.timing.pacing import compute_ratio
 
     assert compute_ratio(2.0, 1.0) > 1.0
     assert compute_ratio(1.0, 2.0) < 1.0

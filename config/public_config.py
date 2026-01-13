@@ -41,20 +41,20 @@ class PublicConfig(BaseSettings):
     # --- core paths ---
     app_root: Path = Field(default_factory=_default_app_root, alias="APP_ROOT")
     output_dir: Path = Field(
-        default_factory=lambda: (Path.cwd() / "Output").resolve(), alias="ANIME_V2_OUTPUT_DIR"
+        default_factory=lambda: (Path.cwd() / "Output").resolve(), alias="DUBBING_OUTPUT_DIR"
     )
     log_dir: Path = Field(
-        default_factory=lambda: (Path.cwd() / "logs").resolve(), alias="ANIME_V2_LOG_DIR"
+        default_factory=lambda: (Path.cwd() / "logs").resolve(), alias="DUBBING_LOG_DIR"
     )
     # Runtime-only state directory (DBs, internal state). Prefer a non-repo mount in production.
-    # If unset, defaults to "<ANIME_V2_OUTPUT_DIR>/_state".
-    state_dir: Path | None = Field(default=None, alias="ANIME_V2_STATE_DIR")
-    auth_db_name: str = Field(default="auth.db", alias="ANIME_V2_AUTH_DB_NAME")
-    jobs_db_name: str = Field(default="jobs.db", alias="ANIME_V2_JOBS_DB_NAME")
-    cache_dir: Path | None = Field(default=None, alias="ANIME_V2_CACHE_DIR")
+    # If unset, defaults to "<DUBBING_OUTPUT_DIR>/_state".
+    state_dir: Path | None = Field(default=None, alias="DUBBING_STATE_DIR")
+    auth_db_name: str = Field(default="auth.db", alias="DUBBING_AUTH_DB_NAME")
+    jobs_db_name: str = Field(default="jobs.db", alias="DUBBING_JOBS_DB_NAME")
+    cache_dir: Path | None = Field(default=None, alias="DUBBING_CACHE_DIR")
     models_dir: Path = Field(default=Path("/models"), alias="MODELS_DIR")
 
-    # v2 input layout (web/API uploads)
+    # Web/API input layout (uploads)
     # Defaults match the repo's historical container layout: <APP_ROOT>/Input/uploads
     input_dir: Path | None = Field(default=None, alias="INPUT_DIR")
     input_uploads_dir: Path | None = Field(default=None, alias="INPUT_UPLOADS_DIR")
@@ -70,20 +70,20 @@ class PublicConfig(BaseSettings):
         alias="OUTPUTS_DIR",
     )
 
-    # --- legacy v1 defaults (keep historical behavior; configurable) ---
-    v1_output_dir: Path = Field(default=Path("/data/out"), alias="V1_OUTPUT_DIR")
-    v1_ui_host: str = Field(default="0.0.0.0", alias="V1_HOST")
-    v1_ui_port: int = Field(default=7860, alias="V1_PORT")
+    # --- legacy defaults (optional; configurable) ---
+    legacy_output_dir: Path = Field(default=Path("/data/out"), alias="LEGACY_OUTPUT_DIR")
+    legacy_ui_host: str = Field(default="0.0.0.0", alias="LEGACY_HOST")
+    legacy_ui_port: int = Field(default=7860, alias="LEGACY_PORT")
 
     # --- tool binaries ---
     ffmpeg_bin: str = Field(default="ffmpeg", alias="FFMPEG_BIN")
     ffprobe_bin: str = Field(default="ffprobe", alias="FFPROBE_BIN")
 
     # --- per-user settings storage ---
-    user_settings_path: Path | None = Field(default=None, alias="ANIME_V2_SETTINGS_PATH")
+    user_settings_path: Path | None = Field(default=None, alias="DUBBING_SETTINGS_PATH")
 
     # --- UI telemetry / audit (optional; off by default to avoid noisy logs) ---
-    ui_audit_page_views: bool = Field(default=False, alias="ANIME_V2_UI_AUDIT_PAGE_VIEWS")
+    ui_audit_page_views: bool = Field(default=False, alias="DUBBING_UI_AUDIT_PAGE_VIEWS")
 
     # --- alignment / metadata ---
     whisper_word_timestamps: bool = Field(default=False, alias="WHISPER_WORD_TIMESTAMPS")
@@ -410,12 +410,12 @@ class PublicConfig(BaseSettings):
     max_concurrent_per_user: int = Field(default=1, alias="MAX_CONCURRENT")
     daily_processing_minutes: int = Field(default=240, alias="DAILY_PROCESSING_MINUTES")
 
-    # --- submission policy (v2 jobs) ---
+    # --- submission policy ---
     # Safe defaults: allow 1 running job per user, small queue, and restrict high mode.
-    max_active_jobs_per_user: int = Field(default=1, alias="ANIME_V2_MAX_ACTIVE_JOBS_PER_USER")
-    max_queued_jobs_per_user: int = Field(default=5, alias="ANIME_V2_MAX_QUEUED_JOBS_PER_USER")
-    daily_job_cap: int = Field(default=0, alias="ANIME_V2_DAILY_JOB_CAP")  # 0 disables
-    high_mode_admin_only: bool = Field(default=True, alias="ANIME_V2_HIGH_MODE_ADMIN_ONLY")
+    max_active_jobs_per_user: int = Field(default=1, alias="DUBBING_MAX_ACTIVE_JOBS_PER_USER")
+    max_queued_jobs_per_user: int = Field(default=5, alias="DUBBING_MAX_QUEUED_JOBS_PER_USER")
+    daily_job_cap: int = Field(default=0, alias="DUBBING_DAILY_JOB_CAP")  # 0 disables
+    high_mode_admin_only: bool = Field(default=True, alias="DUBBING_HIGH_MODE_ADMIN_ONLY")
 
     watchdog_audio_s: int = Field(default=10 * 60, alias="WATCHDOG_AUDIO_S")
     watchdog_diarize_s: int = Field(default=20 * 60, alias="WATCHDOG_DIARIZE_S")
@@ -439,7 +439,7 @@ class PublicConfig(BaseSettings):
     otel_exporter_otlp_endpoint: str | None = Field(
         default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT"
     )
-    otel_service_name: str = Field(default="anime_v2", alias="OTEL_SERVICE_NAME")
+    otel_service_name: str = Field(default="dubbing_pipeline", alias="OTEL_SERVICE_NAME")
 
     # --- WebRTC defaults (TURN creds live in secrets) ---
     webrtc_stun: str = Field(default="stun:stun.l.google.com:19302", alias="WEBRTC_STUN")

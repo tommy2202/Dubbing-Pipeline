@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def main() -> int:
-    from anime_v2.projects.loader import list_project_profiles, load_project_profile
+    from dubbing_pipeline.projects.loader import list_project_profiles, load_project_profile
 
     names = list_project_profiles()
     if not names:

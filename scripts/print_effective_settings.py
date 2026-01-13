@@ -5,9 +5,9 @@ import argparse
 import json
 from pathlib import Path
 
-from anime_v2.config import get_settings
-from anime_v2.modes import resolve_effective_settings
-from anime_v2.utils.io import write_json
+from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.modes import resolve_effective_settings
+from dubbing_pipeline.utils.io import write_json
 
 
 def main() -> int:

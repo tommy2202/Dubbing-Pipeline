@@ -1,5 +1,5 @@
 services:
-  api:
+  dubbing-web:
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -10,7 +10,7 @@ services:
       # server
       PORT: "8080"
       HOST: "0.0.0.0"
-      ANIME_V2_OUTPUT_DIR: /app/Output
+      DUBBING_OUTPUT_DIR: /app/Output
 
       # auth secrets (set these!)
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
@@ -41,7 +41,7 @@ services:
       # optional redis for rate limiting
       # Redis is not exposed publicly; only on the internal docker network.
       # If you want Redis-backed queue/locks/counters, leave this as the default.
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_URL: ${REDIS_URL:-redis://dubbing-redis:6379/0}
       QUEUE_MODE: ${QUEUE_MODE:-auto}
     volumes:
       - output:/app/Output
@@ -66,7 +66,7 @@ services:
       - internal
 
   # Internal Redis (no published ports)
-  redis:
+  dubbing-redis:
     image: redis:7-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     cap_drop: [ "ALL" ]
@@ -84,7 +84,7 @@ services:
     image: caddy:2-alpine
     profiles: ["public_tls"]
     depends_on:
-      - api
+      - dubbing-web
     ports:
       - "443:443"
     volumes:
@@ -103,7 +103,7 @@ services:
     image: cloudflare/cloudflared:latest
     profiles: ["tunnel"]
     depends_on:
-      - api
+      - dubbing-web
     command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN:?set CLOUDFLARED_TOKEN}
     cap_drop: [ "ALL" ]
     security_opt:
@@ -115,7 +115,7 @@ services:
   # tailscale:
   #   image: tailscale/tailscale:stable
   #   profiles: ["tunnel"]
-  #   hostname: anime-v2
+  #   hostname: dubbing-pipeline
   #   environment:
   #     TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY}
   #     TS_STATE_DIR: /var/lib/tailscale

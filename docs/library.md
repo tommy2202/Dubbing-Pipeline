@@ -1,6 +1,6 @@
 ## Library management (jobs list, tags, archive, delete)
 
-The “Library” is the jobs list + filtering features in the v2 web UI.
+The “Library” is the jobs list + filtering features in the web UI.
 
 ### Where it lives
 - **UI**: `/ui/` dashboard (jobs list/cards)

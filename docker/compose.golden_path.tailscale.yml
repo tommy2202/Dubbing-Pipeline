@@ -1,5 +1,5 @@
 services:
-  api:
+  dubbing-web:
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -17,12 +17,12 @@ services:
       COOKIE_SECURE: "0"
 
       # Optional Redis (internal-only; no published Redis ports)
-      REDIS_URL: "redis://redis:6379/0"
+      REDIS_URL: "redis://dubbing-redis:6379/0"
     ports:
       # Web UI / API only. No additional ports are exposed.
       - "8000:8000"
     depends_on:
-      redis:
+      dubbing-redis:
         condition: service_healthy
     volumes:
       - ../Output:/app/Output
@@ -41,7 +41,7 @@ services:
       retries: 3
       start_period: 10s
 
-  redis:
+  dubbing-redis:
     image: redis:7-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:

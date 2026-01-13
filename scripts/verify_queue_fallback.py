@@ -21,9 +21,9 @@ async def _main_async() -> int:
     os.environ.pop("REDIS_URL", None)
     os.environ["QUEUE_MODE"] = "fallback"
 
-    from anime_v2.jobs.store import JobStore
-    from anime_v2.queue.fallback_local_queue import FallbackLocalQueue
-    from anime_v2.runtime.scheduler import JobRecord, Scheduler
+    from dubbing_pipeline.jobs.store import JobStore
+    from dubbing_pipeline.queue.fallback_local_queue import FallbackLocalQueue
+    from dubbing_pipeline.runtime.scheduler import JobRecord, Scheduler
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td).resolve()

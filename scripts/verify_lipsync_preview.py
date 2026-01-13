@@ -5,8 +5,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from anime_v2.plugins.lipsync.preview import preview_lipsync_ranges, write_preview_report
-from anime_v2.utils.ffmpeg_safe import run_ffmpeg
+from dubbing_pipeline.plugins.lipsync.preview import preview_lipsync_ranges, write_preview_report
+from dubbing_pipeline.utils.ffmpeg_safe import run_ffmpeg
 
 
 def _tmp_dir() -> Path:

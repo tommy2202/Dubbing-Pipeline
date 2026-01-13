@@ -1,6 +1,6 @@
-## Security (vNext)
+## Security
 
-This repo’s hardened web/API stack is the **v2 server** (`src/anime_v2/server.py`). Remote access is **opt-in** and all advanced security/privacy/ops features are **default-off** unless configured.
+This repo’s hardened web/API stack is the canonical server app (`src/dubbing_pipeline/server.py`). Remote access is **opt-in** and all advanced security/privacy/ops features are **default-off** unless configured.
 
 ### Auth + sessions (mobile-safe)
 - **Primary**: username/password (argon2) + short-lived access token + rotating refresh token (server-side stored).

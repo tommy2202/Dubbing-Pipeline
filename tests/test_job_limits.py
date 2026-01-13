@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from anime_v2.jobs.limits import concurrent_jobs_for_user, used_minutes_today
-from anime_v2.jobs.models import Job, JobState
+from dubbing_pipeline.jobs.limits import concurrent_jobs_for_user, used_minutes_today
+from dubbing_pipeline.jobs.models import Job, JobState
 
 
 def _job(*, owner_id: str, created_at: str, duration_s: float, state: JobState) -> Job:

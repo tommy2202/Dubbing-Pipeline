@@ -6,8 +6,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from anime_v2.config import get_settings
-from anime_v2.server import app
+from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.server import app
 
 
 def _runtime_video_path(tmp_path: Path) -> str:
@@ -49,8 +49,8 @@ def _runtime_video_path(tmp_path: Path) -> str:
         )
     os.environ["APP_ROOT"] = str(root)
     os.environ["INPUT_DIR"] = str(in_dir)
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(out_dir)
-    os.environ["ANIME_V2_LOG_DIR"] = str(logs_dir)
+    os.environ["DUBBING_OUTPUT_DIR"] = str(out_dir)
+    os.environ["DUBBING_LOG_DIR"] = str(logs_dir)
     return str(vp)
 
 

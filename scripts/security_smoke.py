@@ -30,8 +30,8 @@ def main() -> int:
             f.write(b"\x00" * 1024)
 
         os.environ.setdefault("APP_ROOT", root)
-        os.environ.setdefault("ANIME_V2_OUTPUT_DIR", out_dir)
-        os.environ.setdefault("ANIME_V2_LOG_DIR", os.path.join(root, "logs"))
+        os.environ.setdefault("DUBBING_OUTPUT_DIR", out_dir)
+        os.environ.setdefault("DUBBING_LOG_DIR", os.path.join(root, "logs"))
         os.environ.setdefault("INPUT_DIR", in_dir)
         os.environ.setdefault("REMOTE_ACCESS_MODE", "off")
         os.environ.setdefault("COOKIE_SECURE", "0")
@@ -47,7 +47,7 @@ def main() -> int:
         except Exception:
             pass
 
-        from anime_v2.server import app
+        from dubbing_pipeline.server import app
 
         with TestClient(app) as c:
             # HTML route should have baseline security headers

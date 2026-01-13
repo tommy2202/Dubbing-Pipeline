@@ -88,7 +88,7 @@ ensure_env_file ".env" ".env.example"
 ensure_secrets_file
 
 echo "Checking Python package import (install if needed)..."
-if ! "$PY" -c "import anime_v2" >/dev/null 2>&1; then
+if ! "$PY" -c "import dubbing_pipeline" >/dev/null 2>&1; then
   echo "ERROR: package import failed. Install from repo root:"
   echo "  python3 -m pip install -e ."
   exit 2
@@ -116,5 +116,5 @@ echo ""
 
 echo "Starting web server (dev)..."
 echo "Stop with Ctrl+C."
-exec "$PY" -m anime_v2.web.run
+exec "$PY" -m dubbing_pipeline.web.run
 

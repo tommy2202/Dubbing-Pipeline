@@ -43,14 +43,14 @@ def main() -> int:
     api = "api_token_TEST_DO_NOT_LOG_3b7c2d1a"
     admin_pw = "admin_password_TEST_DO_NOT_LOG_8c2e7f90"
 
-    log_dir = Path("/tmp/anime_v2_no_leak_logs").resolve()
-    out_dir = Path("/tmp/anime_v2_no_leak_out").resolve()
+    log_dir = Path("/tmp/dubbing_pipeline_no_leak_logs").resolve()
+    out_dir = Path("/tmp/dubbing_pipeline_no_leak_out").resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     os.environ["APP_ROOT"] = "/workspace"
-    os.environ["ANIME_V2_LOG_DIR"] = str(log_dir)
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(out_dir)
+    os.environ["DUBBING_LOG_DIR"] = str(log_dir)
+    os.environ["DUBBING_OUTPUT_DIR"] = str(out_dir)
     os.environ["COOKIE_SECURE"] = "0"
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = admin_pw
@@ -60,8 +60,8 @@ def main() -> int:
     os.environ["API_TOKEN"] = api
     os.environ["STRICT_SECRETS"] = "1"
 
-    from anime_v2.config import get_settings
-    from anime_v2.server import app
+    from dubbing_pipeline.config import get_settings
+    from dubbing_pipeline.server import app
 
     get_settings.cache_clear()
 

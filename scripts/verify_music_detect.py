@@ -48,7 +48,7 @@ def main() -> int:
         return 2
 
     # Local imports (keep import-time light)
-    from anime_v2.audio.music_detect import (
+    from dubbing_pipeline.audio.music_detect import (
         analyze_audio_for_music_regions,
         build_music_preserving_bed,
         should_suppress_segment,

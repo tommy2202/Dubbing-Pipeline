@@ -93,7 +93,7 @@ def main() -> int:
 
     # Import after parsing so we can show both "raw source" and "effective values".
     try:
-        from anime_v2.config import get_settings
+        from dubbing_pipeline.config import get_settings
     except Exception as ex:
         print("ERROR: Python package not installed / import failed.")
         print("Run from repo root:")
@@ -131,18 +131,18 @@ def main() -> int:
         ),
         Item(
             "OUTPUT_DIR",
-            _redact("ANIME_V2_OUTPUT_DIR", output_dir),
-            _source_for_key("ANIME_V2_OUTPUT_DIR", env, env_file, secrets_file),
+            _redact("DUBBING_OUTPUT_DIR", output_dir),
+            _source_for_key("DUBBING_OUTPUT_DIR", env, env_file, secrets_file),
         ),
         Item(
             "LOG_DIR",
-            _redact("ANIME_V2_LOG_DIR", log_dir),
-            _source_for_key("ANIME_V2_LOG_DIR", env, env_file, secrets_file),
+            _redact("DUBBING_LOG_DIR", log_dir),
+            _source_for_key("DUBBING_LOG_DIR", env, env_file, secrets_file),
         ),
         Item(
             "STATE_DIR",
-            _redact("ANIME_V2_STATE_DIR", state_dir),
-            _source_for_key("ANIME_V2_STATE_DIR", env, env_file, secrets_file),
+            _redact("DUBBING_STATE_DIR", state_dir),
+            _source_for_key("DUBBING_STATE_DIR", env, env_file, secrets_file),
         ),
         Item("REDIS_URL", _redact("REDIS_URL", redis_url), _source_for_key("REDIS_URL", env, env_file, secrets_file)),
         Item("REDIS_ENABLED", str(redis_enabled), "computed"),
@@ -249,17 +249,17 @@ def main() -> int:
         Item(
             "HIGH_MODE_ADMIN_ONLY",
             str(bool(getattr(s, "high_mode_admin_only", True))),
-            _source_for_key("ANIME_V2_HIGH_MODE_ADMIN_ONLY", env, env_file, secrets_file),
+            _source_for_key("DUBBING_HIGH_MODE_ADMIN_ONLY", env, env_file, secrets_file),
         ),
         Item(
             "MAX_ACTIVE_JOBS_PER_USER",
             str(int(getattr(s, "max_active_jobs_per_user", 1))),
-            _source_for_key("ANIME_V2_MAX_ACTIVE_JOBS_PER_USER", env, env_file, secrets_file),
+            _source_for_key("DUBBING_MAX_ACTIVE_JOBS_PER_USER", env, env_file, secrets_file),
         ),
         Item(
             "MAX_QUEUED_JOBS_PER_USER",
             str(int(getattr(s, "max_queued_jobs_per_user", 5))),
-            _source_for_key("ANIME_V2_MAX_QUEUED_JOBS_PER_USER", env, env_file, secrets_file),
+            _source_for_key("DUBBING_MAX_QUEUED_JOBS_PER_USER", env, env_file, secrets_file),
         ),
     ]
     _print_kv("Limits", lim_items)

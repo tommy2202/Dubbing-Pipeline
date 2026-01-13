@@ -43,8 +43,8 @@ def main() -> int:
             "Voice cloning / speaker preservation",
             "Present",
             [
-                "src/anime_v2/stages/tts.py (XTTS clone + preset fallbacks)",
-                "src/anime_v2/web/routes_jobs.py (/api/jobs/{id}/characters voice map)",
+                "src/dubbing_pipeline/stages/tts.py (XTTS clone + preset fallbacks)",
+                "src/dubbing_pipeline/web/routes_jobs.py (/api/jobs/{id}/characters voice map)",
             ],
         )
     )
@@ -56,8 +56,8 @@ def main() -> int:
             "Emotion transfer / expressive speech control",
             "Present",
             [
-                "src/anime_v2/stages/tts.py (_apply_prosody_ffmpeg + emotion_mode)",
-                "src/anime_v2/cli.py (--emotion-mode/--speech-rate/--pitch/--energy)",
+                "src/dubbing_pipeline/stages/tts.py (_apply_prosody_ffmpeg + emotion_mode)",
+                "src/dubbing_pipeline/cli.py (--emotion-mode/--speech-rate/--pitch/--energy)",
             ],
         )
     )
@@ -69,8 +69,8 @@ def main() -> int:
             "Realtime / streaming dubbing",
             "Partial",
             [
-                "src/anime_v2/realtime.py (pseudo-streaming chunk mode)",
-                "src/anime_v2/cli.py (--realtime/--chunk-seconds/--chunk-overlap)",
+                "src/dubbing_pipeline/realtime.py (pseudo-streaming chunk mode)",
+                "src/dubbing_pipeline/cli.py (--realtime/--chunk-seconds/--chunk-overlap)",
             ],
         )
     )
@@ -82,8 +82,8 @@ def main() -> int:
             "Web-based UI / API",
             "Present",
             [
-                "src/anime_v2/server.py (FastAPI app + routers)",
-                "src/anime_v2/web/ (web UI + job routes)",
+                "src/dubbing_pipeline/server.py (FastAPI app + routers)",
+                "src/dubbing_pipeline/web/ (web UI + job routes)",
             ],
         )
     )
@@ -95,8 +95,8 @@ def main() -> int:
             "Multi-language support",
             "Present",
             [
-                "src/anime_v2/cli.py (--src-lang/--tgt-lang)",
-                "src/anime_v2/stages/translation.py (multi-engine MT)",
+                "src/dubbing_pipeline/cli.py (--src-lang/--tgt-lang)",
+                "src/dubbing_pipeline/stages/translation.py (multi-engine MT)",
             ],
         )
     )
@@ -108,8 +108,8 @@ def main() -> int:
             "Timing & alignment precision",
             "Partial",
             [
-                "src/anime_v2/stages/align.py (retime_tts + realign_srt)",
-                "src/anime_v2/stages/transcription.py (optional word timestamps when supported)",
+                "src/dubbing_pipeline/stages/align.py (retime_tts + realign_srt)",
+                "src/dubbing_pipeline/stages/transcription.py (optional word timestamps when supported)",
             ],
         )
     )
@@ -121,8 +121,8 @@ def main() -> int:
             "Subtitle generation (SRT/VTT)",
             "Present",
             [
-                "src/anime_v2/utils/subtitles.py (write_srt/write_vtt)",
-                "src/anime_v2/cli.py (--subs/--subs-format)",
+                "src/dubbing_pipeline/utils/subtitles.py (write_srt/write_vtt)",
+                "src/dubbing_pipeline/cli.py (--subs/--subs-format)",
             ],
         )
     )
@@ -134,8 +134,8 @@ def main() -> int:
             "Batch processing",
             "Present",
             [
-                "src/anime_v2/web/routes_jobs.py (/api/jobs/batch)",
-                "src/anime_v2/cli.py (--batch/--jobs/--resume/--fail-fast)",
+                "src/dubbing_pipeline/web/routes_jobs.py (/api/jobs/batch)",
+                "src/dubbing_pipeline/cli.py (--batch/--jobs/--resume/--fail-fast)",
             ],
         )
     )
@@ -147,9 +147,9 @@ def main() -> int:
             "Model selection & fine-tuning hooks",
             "Partial",
             [
-                "src/anime_v2/runtime/model_manager.py (model cache + device selection)",
+                "src/dubbing_pipeline/runtime/model_manager.py (model cache + device selection)",
                 "scripts/train_voice.py (dataset manifest builder for optional training)",
-                "src/anime_v2/stages/tts.py (tts_provider/voice_mode)",
+                "src/dubbing_pipeline/stages/tts.py (tts_provider/voice_mode)",
             ],
         )
     )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 
-from anime_v2.timing.rewrite_provider import fit_with_rewrite_provider
+from dubbing_pipeline.timing.rewrite_provider import fit_with_rewrite_provider
 
 
 def _assert(cond: bool, msg: str) -> None:

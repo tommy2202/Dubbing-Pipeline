@@ -17,7 +17,7 @@ python3 scripts/package_release.py --out dist
 ### 3) Verify release zip contents (no runtime artifacts)
 
 ```bash
-python3 scripts/verify_release_zip.py dist/anime-dubbing-release-*.zip
+python3 scripts/verify_release_zip.py dist/dubbing-pipeline-release-*.zip
 ```
 
 ### 4) Run smoke tests

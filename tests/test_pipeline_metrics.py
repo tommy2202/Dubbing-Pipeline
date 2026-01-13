@@ -4,7 +4,7 @@ import os
 
 from fastapi.testclient import TestClient
 
-from anime_v2.server import app
+from dubbing_pipeline.server import app
 
 
 def test_metrics_exposes_pipeline_histograms() -> None:

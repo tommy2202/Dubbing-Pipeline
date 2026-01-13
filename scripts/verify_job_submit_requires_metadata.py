@@ -63,7 +63,7 @@ def main() -> int:
         vid = in_dir / "Test.mp4"
         _make_tiny_mp4(vid)
 
-        from anime_v2.server import app
+        from dubbing_pipeline.server import app
 
         with TestClient(app) as c:
             # login (cookie session)

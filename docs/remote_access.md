@@ -24,7 +24,7 @@ This repo is **offline-first** and is designed to run safely without exposing yo
 
 ### 1) Install and log in
 - Install Tailscale on:
-  - the **server laptop** (where `anime-v2-web` runs)
+  - the **server laptop** (where `dubbing-web` runs)
   - your **phone**
 - Log in both devices to the same tailnet.
 
@@ -35,7 +35,7 @@ Run the web server normally:
 export REMOTE_ACCESS_MODE=tailscale
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 Notes:
@@ -76,7 +76,7 @@ export REMOTE_ACCESS_MODE=cloudflare
 export HOST=0.0.0.0
 export PORT=8000
 export TRUST_PROXY_HEADERS=1
-anime-v2-web
+dubbing-web
 ```
 
 Cloudflare mode:
@@ -115,7 +115,7 @@ The server will then require and verify the header:
 
 Notes:
 - JWKS fetch uses egress to `https://<team>.cloudflareaccess.com/...`.
-  - If you run with `ALLOW_EGRESS=0`, the server will only validate Access JWTs if it has a cached JWKS at `/tmp/anime_v2_cf_access_jwks.json`.
+  - If you run with `ALLOW_EGRESS=0`, the server will only validate Access JWTs if it has a cached JWKS at `/tmp/dubbing_pipeline_cf_access_jwks.json`.
 
 ---
 
@@ -129,7 +129,7 @@ python3 scripts/verify_remote_mode.py
 
 It simulates allowed and disallowed client IPs and asserts the server returns 200/403 correctly.
 
-### Job submission verification (no real anime required)
+### Job submission verification (no real content required)
 
 ```bash
 python3 scripts/verify_job_submission.py

@@ -9,7 +9,7 @@ from pathlib import Path
 
 def main() -> int:
     try:
-        from anime_v2.streaming.runner import run_streaming
+        from dubbing_pipeline.streaming.runner import run_streaming
     except Exception as ex:
         print(f"IMPORT_FAILED: {ex}")
         return 2

@@ -24,7 +24,7 @@ python -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"
 ```
 
 Set the container image:
-- `GHCR_IMAGE=ghcr.io/<owner>/anime-v2:<tag>`
+- `GHCR_IMAGE=ghcr.io/<owner>/dubbing-pipeline:<tag>`
 
 ---
 
@@ -41,7 +41,7 @@ Set the container image:
 
 - `DOMAIN=your.domain.example`
 - `CADDY_EMAIL=you@example.com`
-- `GHCR_IMAGE=ghcr.io/<owner>/anime-v2:<tag>`
+- `GHCR_IMAGE=ghcr.io/<owner>/dubbing-pipeline:<tag>`
 
 2) Start services:
 
@@ -71,15 +71,15 @@ This uses a **cloudflared sidecar** that creates an outbound-only tunnel. You do
 1) Create a tunnel in Cloudflare Zero Trust and map a hostname to your service:
 
 - Service: `http://api:8080`
-- Hostname: e.g. `anime-v2.yourdomain.example`
+- Hostname: e.g. `dubbing-pipeline.yourdomain.example`
 
 2) Copy the tunnel token and set:
 
 - `CLOUDFLARE_TUNNEL_TOKEN=...`
-- `GHCR_IMAGE=ghcr.io/<owner>/anime-v2:<tag>`
+- `GHCR_IMAGE=ghcr.io/<owner>/dubbing-pipeline:<tag>`
 
 Optional:
-- `CORS_ORIGINS=https://anime-v2.yourdomain.example`
+- `CORS_ORIGINS=https://dubbing-pipeline.yourdomain.example`
 
 3) Start services:
 
@@ -87,7 +87,7 @@ Optional:
 docker compose -f deploy/compose.tunnel.yml up -d
 ```
 
-4) Your **stable remote URL** is the hostname you configured in Cloudflare (e.g. `https://anime-v2.yourdomain.example/`).
+4) Your **stable remote URL** is the hostname you configured in Cloudflare (e.g. `https://dubbing-pipeline.yourdomain.example/`).
 
 ### Notes
 

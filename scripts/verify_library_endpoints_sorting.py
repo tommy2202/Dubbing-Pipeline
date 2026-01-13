@@ -7,13 +7,13 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from anime_v2.api.models import AuthStore, Role, User, now_ts
-from anime_v2.api.routes_library import router as library_router
-from anime_v2.api.security import create_access_token
-from anime_v2.jobs.models import Job, JobState, Visibility
-from anime_v2.jobs.store import JobStore
-from anime_v2.utils.crypto import PasswordHasher
-from anime_v2.utils.ratelimit import RateLimiter
+from dubbing_pipeline.api.models import AuthStore, Role, User, now_ts
+from dubbing_pipeline.api.routes_library import router as library_router
+from dubbing_pipeline.api.security import create_access_token
+from dubbing_pipeline.jobs.models import Job, JobState, Visibility
+from dubbing_pipeline.jobs.store import JobStore
+from dubbing_pipeline.utils.crypto import PasswordHasher
+from dubbing_pipeline.utils.ratelimit import RateLimiter
 
 
 def _make_user(*, user_id: str, role: Role) -> User:
@@ -84,11 +84,11 @@ def main() -> int:
         state.mkdir(parents=True, exist_ok=True)
 
         # Ensure consistent secrets/config.
-        os.environ["ANIME_V2_OUTPUT_DIR"] = str(out)
-        os.environ["ANIME_V2_APP_ROOT"] = str(root)
-        os.environ["ANIME_V2_JWT_SECRET"] = "test-secret-please-change"
-        os.environ["ANIME_V2_CSRF_SECRET"] = "test-secret-please-change"
-        os.environ["ANIME_V2_SESSION_SECRET"] = "test-secret-please-change"
+        os.environ["DUBBING_OUTPUT_DIR"] = str(out)
+        os.environ["DUBBING_APP_ROOT"] = str(root)
+        os.environ["DUBBING_JWT_SECRET"] = "test-secret-please-change"
+        os.environ["DUBBING_CSRF_SECRET"] = "test-secret-please-change"
+        os.environ["DUBBING_SESSION_SECRET"] = "test-secret-please-change"
 
         auth = AuthStore(state / "auth.db")
         u_admin = _make_user(user_id="u_admin", role=Role.admin)

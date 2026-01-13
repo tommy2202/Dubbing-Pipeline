@@ -1,20 +1,20 @@
 ## Overview
 
-This repository is an **offline-first anime/video dubbing pipeline**. It takes a source video (typically Japanese) and produces:
+This repository is an **offline-first dubbing pipeline**. It takes a source video and produces:
 - a **dubbed video** (high-quality MKV + browser-friendly MP4)
 - subtitle/transcript artifacts (SRT/JSON, optional)
 - optional QA reports and a human-in-the-loop review/edit loop
 
 It can be run:
-- as a **CLI** (`anime-v2`) for local processing, or
-- as a **FastAPI server + web UI** (`anime-v2-web`) for mobile-friendly job submission, progress monitoring, playback, QA, and editing.
+- as a **CLI** (`dubbing-pipeline`) for local processing, or
+- as a **FastAPI server + web UI** (`dubbing-web`) for mobile-friendly job submission, progress monitoring, playback, QA, and editing.
 
 ---
 
 ## Architecture (ASCII)
 
 ```text
-             (CLI) anime-v2 run                        (Web) anime-v2-web
+             (CLI) dubbing-pipeline run                        (Web) dubbing-web
         +---------------------------+           +------------------------------+
         |   reads file from disk    |           |  /ui/* pages + /api/*        |
         |   writes Output/<stem>/   |           |  uploads/jobs/QA/review      |
@@ -22,7 +22,7 @@ It can be run:
                       |                                         |
                       v                                         v
                +--------------+                          +--------------+
-               | Pipeline v2  |                          |  Job Queue   |
+               | Pipeline  |                          |  Job Queue   |
                | (stages)     |                          | + Scheduler  |
                +------+-------+                          +------+-------+
                       |                                         |

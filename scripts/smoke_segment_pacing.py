@@ -25,9 +25,9 @@ def main() -> int:
     os.environ.setdefault("STRICT_SECRETS", "0")
     from tempfile import TemporaryDirectory
 
-    from anime_v2.timing.pacing import match_segment_duration, measure_wav_seconds
+    from dubbing_pipeline.timing.pacing import match_segment_duration, measure_wav_seconds
 
-    with TemporaryDirectory(prefix="anime_v2_pacing_") as td:
+    with TemporaryDirectory(prefix="dubbing_pipeline_pacing_") as td:
         td_p = Path(td)
         long_wav = td_p / "long.wav"
         short_wav = td_p / "short.wav"

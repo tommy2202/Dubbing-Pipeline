@@ -1,16 +1,16 @@
 services:
-  api:
+  dubbing-web:
     # Prefer a published GHCR image:
-    #   GHCR_IMAGE=ghcr.io/<owner>/anime-v2:<tag>
+    #   GHCR_IMAGE=ghcr.io/<owner>/dubbing-pipeline:<tag>
     # Or build locally by uncommenting build: below.
-    image: ${GHCR_IMAGE:-ghcr.io/REPLACE_ME/anime-v2:latest}
+    image: ${GHCR_IMAGE:-ghcr.io/REPLACE_ME/dubbing-pipeline:latest}
     # build:
     #   context: ..
     #   dockerfile: docker/Dockerfile
     environment:
       - APP_ROOT=/app
-      - ANIME_V2_OUTPUT_DIR=/app/Output
-      - ANIME_V2_LOG_DIR=/app/logs
+      - DUBBING_OUTPUT_DIR=/app/Output
+      - DUBBING_LOG_DIR=/app/logs
       - JOBS_CONCURRENCY=${JOBS_CONCURRENCY:-1}
       # If you’re serving behind Caddy on the same host, set cookie security:
       - COOKIE_SECURE=1
@@ -40,7 +40,7 @@ services:
   caddy:
     image: caddy:2.8-alpine
     depends_on:
-      api:
+      dubbing-web:
         condition: service_healthy
     ports:
       - "80:80"

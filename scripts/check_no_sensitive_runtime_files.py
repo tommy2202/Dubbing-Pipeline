@@ -55,8 +55,8 @@ def _is_forbidden_location(path: Path, *, root: Path) -> bool:
 def main() -> int:
     root = _repo_root()
 
-    auth_db_name = (os.environ.get("ANIME_V2_AUTH_DB_NAME") or "auth.db").strip()
-    jobs_db_name = (os.environ.get("ANIME_V2_JOBS_DB_NAME") or "jobs.db").strip()
+    auth_db_name = (os.environ.get("DUBBING_AUTH_DB_NAME") or "auth.db").strip()
+    jobs_db_name = (os.environ.get("DUBBING_JOBS_DB_NAME") or "jobs.db").strip()
     names = {auth_db_name, jobs_db_name}
 
     offenders: list[str] = []
@@ -113,7 +113,7 @@ def main() -> int:
         for o in sorted(set(offenders)):
             print(f"- {o}", file=sys.stderr)
         print(
-            "Fix: ensure runtime DBs live under Output/_state (or ANIME_V2_STATE_DIR) and are never committed or bundled.",
+            "Fix: ensure runtime DBs live under Output/_state (or DUBBING_STATE_DIR) and are never committed or bundled.",
             file=sys.stderr,
         )
         return 1

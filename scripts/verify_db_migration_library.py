@@ -4,9 +4,9 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from anime_v2.jobs.models import Job, JobState, Visibility, new_id, now_utc
-from anime_v2.jobs.store import JobStore
-from anime_v2.library.normalize import normalize_series_title, parse_int_strict, series_to_slug
+from dubbing_pipeline.jobs.models import Job, JobState, Visibility, new_id, now_utc
+from dubbing_pipeline.jobs.store import JobStore
+from dubbing_pipeline.library.normalize import normalize_series_title, parse_int_strict, series_to_slug
 
 
 def _create_job(

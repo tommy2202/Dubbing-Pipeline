@@ -9,7 +9,7 @@ This wrapper runs the repo's verification scripts that together validate:
 - mobile playback variants
 - no secret leaks to logs
 
-It is safe to run on synthetic media (no real anime inputs required).
+It is safe to run on synthetic media (no real inputs required).
 """
 
 from __future__ import annotations

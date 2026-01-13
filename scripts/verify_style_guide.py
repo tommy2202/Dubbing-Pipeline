@@ -9,7 +9,7 @@ from config.settings import get_safe_config_report
 
 def main() -> int:
     print("safe_config_report:", get_safe_config_report())
-    from anime_v2.text.style_guide import apply_style_guide, load_style_guide
+    from dubbing_pipeline.text.style_guide import apply_style_guide, load_style_guide
 
     tmp = Path("_tmp_style_guide")
     tmp.mkdir(parents=True, exist_ok=True)

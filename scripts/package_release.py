@@ -165,7 +165,7 @@ def main() -> int:
     ap.add_argument(
         "--name",
         default="",
-        help="Zip filename. Defaults to anime-dubbing-release-YYYYmmdd-HHMMSS.zip",
+        help="Zip filename. Defaults to dubbing-pipeline-release-YYYYmmdd-HHMMSS.zip",
     )
     args = ap.parse_args()
 
@@ -212,7 +212,7 @@ def main() -> int:
     files = filtered
 
     ts = time.strftime("%Y%m%d-%H%M%S")
-    name = args.name.strip() or f"anime-dubbing-release-{ts}.zip"
+    name = args.name.strip() or f"dubbing-pipeline-release-{ts}.zip"
     if not name.endswith(".zip"):
         name += ".zip"
 

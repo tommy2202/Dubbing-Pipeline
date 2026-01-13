@@ -84,7 +84,7 @@ python3 -m pip install -e ".[diarization]"
 
 Or explicitly disable:
 ```bash
-anime-v2 Input/Test.mp4 --diarizer off
+dubbing-pipeline Input/Test.mp4 --diarizer off
 ```
 
 ---

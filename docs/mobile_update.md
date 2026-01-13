@@ -8,7 +8,7 @@ This repo includes a **mobile-safe FastAPI web UI** for:
 - QA + review/edit loop for iterative improvement
 
 The canonical server entrypoint is:
-- `src/anime_v2/server.py` (FastAPI `app`)
+- `src/dubbing_pipeline/server.py` (FastAPI `app`)
 
 ---
 
@@ -20,7 +20,7 @@ The canonical server entrypoint is:
 export REMOTE_ACCESS_MODE=off
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 2) From your phone (on the same Wi‑Fi), open:
@@ -47,7 +47,7 @@ Tailscale gives you private remote access without port-forwarding.
 export REMOTE_ACCESS_MODE=tailscale
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 3) Run the helper to find the exact URL:
@@ -71,7 +71,7 @@ export REMOTE_ACCESS_MODE=cloudflare
 export TRUST_PROXY_HEADERS=1
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 2) Configure the tunnel + Access:
@@ -99,7 +99,7 @@ Important:
 
 ---
 
-## Verification (synthetic, no real anime required)
+## Verification (synthetic, no real content required)
 
 Run the single end-to-end gate:
 

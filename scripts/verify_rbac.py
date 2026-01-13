@@ -25,16 +25,16 @@ def main() -> int:
 
         os.environ["APP_ROOT"] = str(root)
         os.environ["INPUT_DIR"] = str(in_root)
-        os.environ["ANIME_V2_OUTPUT_DIR"] = str(out_root)
+        os.environ["DUBBING_OUTPUT_DIR"] = str(out_root)
         os.environ["ADMIN_USERNAME"] = "admin"
         os.environ["ADMIN_PASSWORD"] = "adminpass"
         os.environ["COOKIE_SECURE"] = "0"
         os.environ["ENABLE_QR_LOGIN"] = "0"
 
-        from anime_v2.api.models import Role, User
-        from anime_v2.config import get_settings
-        from anime_v2.server import app
-        from anime_v2.utils.crypto import PasswordHasher
+        from dubbing_pipeline.api.models import Role, User
+        from dubbing_pipeline.config import get_settings
+        from dubbing_pipeline.server import app
+        from dubbing_pipeline.utils.crypto import PasswordHasher
 
         get_settings.cache_clear()
 
@@ -78,7 +78,7 @@ def main() -> int:
             )
 
         # Seed a dummy job so edit endpoints have a target.
-        from anime_v2.jobs.models import Job, JobState
+        from dubbing_pipeline.jobs.models import Job, JobState
 
         job_dir = out_root / "Sample"
         job_dir.mkdir(parents=True, exist_ok=True)

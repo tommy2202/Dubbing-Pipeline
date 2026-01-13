@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from anime_v2.config import get_settings
+from dubbing_pipeline.config import get_settings
 
 
 def main() -> int:
@@ -20,16 +20,16 @@ def main() -> int:
         print("verify_ntfy: enabled but NTFY_BASE_URL/NTFY_TOPIC not configured (skipping)", file=sys.stderr)
         return 0
 
-    from anime_v2.notify.ntfy import notify
+    from dubbing_pipeline.notify.ntfy import notify
 
     ok = notify(
         event="verify.ntfy",
-        title="anime_v2 ntfy test",
+        title="dubbing_pipeline ntfy test",
         message="This is a test notification from scripts/verify_ntfy.py",
         url=(str(getattr(s, "public_base_url", "") or "").strip().rstrip("/") + "/ui/dashboard")
         if str(getattr(s, "public_base_url", "") or "").strip()
         else None,
-        tags=["anime-v2", "test"],
+        tags=["dubbing-pipeline", "test"],
         priority=3,
         user_id=None,
         job_id=None,

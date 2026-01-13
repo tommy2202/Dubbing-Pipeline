@@ -42,7 +42,7 @@ def main() -> int:
 
     # ffmpeg availability (PATH or configured)
     try:
-        from anime_v2.utils.ffmpeg_safe import ffprobe_duration_seconds
+        from dubbing_pipeline.utils.ffmpeg_safe import ffprobe_duration_seconds
 
         sample = REPO_ROOT / "samples" / "sample.mp4"
         if sample.exists():
@@ -53,7 +53,7 @@ def main() -> int:
 
     # demucs optional availability
     try:
-        from anime_v2.audio.separation import demucs_available
+        from dubbing_pipeline.audio.separation import demucs_available
 
         print(f"DEMUX_AVAILABLE={bool(demucs_available())}")
     except Exception as ex:
@@ -64,9 +64,9 @@ def main() -> int:
     try:
         from tempfile import TemporaryDirectory
 
-        from anime_v2.audio.mix import MixParams, mix_dubbed_audio
+        from dubbing_pipeline.audio.mix import MixParams, mix_dubbed_audio
 
-        with TemporaryDirectory(prefix="anime_v2_audio_verify_") as td:
+        with TemporaryDirectory(prefix="dubbing_pipeline_audio_verify_") as td:
             td_p = Path(td)
             bg = td_p / "bg.wav"
             tts = td_p / "tts.wav"

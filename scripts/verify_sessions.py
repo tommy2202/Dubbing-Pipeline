@@ -8,13 +8,13 @@ from fastapi.testclient import TestClient
 
 def main() -> int:
     os.environ["APP_ROOT"] = "/workspace"
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(Path("/tmp") / "anime_v2_sessions_out")
+    os.environ["DUBBING_OUTPUT_DIR"] = str(Path("/tmp") / "dubbing_pipeline_sessions_out")
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
     os.environ["COOKIE_SECURE"] = "0"
 
-    from anime_v2.config import get_settings
-    from anime_v2.server import app
+    from dubbing_pipeline.config import get_settings
+    from dubbing_pipeline.server import app
 
     get_settings.cache_clear()
 

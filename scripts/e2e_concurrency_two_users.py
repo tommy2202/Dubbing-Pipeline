@@ -19,9 +19,9 @@ def main() -> int:
     os.environ["MAX_CONCURRENCY_TRANSCRIBE"] = "1"
     os.environ["MAX_CONCURRENCY_TTS"] = "1"
 
-    from anime_v2.jobs.models import Job, JobState, now_utc
-    from anime_v2.jobs.store import JobStore
-    from anime_v2.runtime.scheduler import JobRecord, Scheduler
+    from dubbing_pipeline.jobs.models import Job, JobState, now_utc
+    from dubbing_pipeline.jobs.store import JobStore
+    from dubbing_pipeline.runtime.scheduler import JobRecord, Scheduler
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td).resolve()

@@ -1,4 +1,4 @@
-## Tailscale setup (server + phone) for anime-v2-web
+## Tailscale setup (server + phone) for dubbing-web
 
 Goal: access the web UI from your phone on mobile data without port forwarding.
 
@@ -15,7 +15,7 @@ Goal: access the web UI from your phone on mobile data without port forwarding.
 export REMOTE_ACCESS_MODE=tailscale
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 4) Print the URL to open on phone:

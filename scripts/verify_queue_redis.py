@@ -65,7 +65,7 @@ async def _main_async() -> int:
     os.environ["REDIS_LOCK_REFRESH_MS"] = "5000"
     os.environ["REDIS_QUEUE_MAX_ATTEMPTS"] = "3"
 
-    from anime_v2.queue.redis_queue import RedisQueue
+    from dubbing_pipeline.queue.redis_queue import RedisQueue
 
     enq: list[str] = []
 

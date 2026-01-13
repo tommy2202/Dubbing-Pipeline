@@ -18,7 +18,7 @@ This repo supports an **optional, offline-only** rewrite hook used during **timi
 You must enable `--timing-fit` and opt in to the provider:
 
 ```bash
-anime-v2 Input/Test.mp4 \
+dubbing-pipeline Input/Test.mp4 \
   --timing-fit \
   --rewrite-provider local_llm \
   --rewrite-endpoint http://127.0.0.1:8080/completion \
@@ -27,7 +27,7 @@ anime-v2 Input/Test.mp4 \
 
 ### Endpoint formats supported
 - llama.cpp legacy endpoint: `http://127.0.0.1:8080/completion`
-- OpenAI-compatible chat endpoint: `http://127.0.0.1:8080/v1/chat/completions`
+- OpenAI-compatible chat endpoint: `http://127.0.0.1:8080/chat/completions` (provider-dependent)
 
 ### Verification
 - Heuristic path always:

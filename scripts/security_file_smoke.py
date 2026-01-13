@@ -23,14 +23,14 @@ def _sha256_hex(b: bytes) -> str:
 def main() -> int:
     # Tighten limits so we can test rejection cheaply.
     os.environ["APP_ROOT"] = "/workspace"
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(Path("/tmp") / "anime_v2_file_smoke_out")
+    os.environ["DUBBING_OUTPUT_DIR"] = str(Path("/tmp") / "dubbing_pipeline_file_smoke_out")
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
     os.environ["COOKIE_SECURE"] = "0"
     os.environ["MAX_UPLOAD_MB"] = "1"
 
-    from anime_v2.config import get_settings
-    from anime_v2.server import app
+    from dubbing_pipeline.config import get_settings
+    from dubbing_pipeline.server import app
 
     get_settings.cache_clear()
 

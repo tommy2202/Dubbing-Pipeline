@@ -76,7 +76,7 @@ Ensure-EnvFile ".env" ".env.example"
 Ensure-SecretsFile
 
 Write-Host "Checking Python package import (install if needed)..."
-python -c "import anime_v2" 2>$null
+python -c "import dubbing_pipeline" 2>$null
 if ($LASTEXITCODE -ne 0) {
   Write-Host "ERROR: package import failed. Install from repo root:"
   Write-Host "  python -m pip install -e ."
@@ -105,5 +105,5 @@ Write-Host ""
 
 Write-Host "Starting web server (dev)..."
 Write-Host "Stop with Ctrl+C."
-python -m anime_v2.web.run
+python -m dubbing_pipeline.web.run
 

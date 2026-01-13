@@ -141,7 +141,7 @@ docker run --gpus all ...
 With compose, your Docker installation must support GPU pass-through (NVIDIA Container Toolkit).
 
 Note:
-- `docker/Dockerfile.cuda` exists for legacy v1 experimentation and does **not** represent the feature-complete v2 stack. Prefer `docker/Dockerfile` + `docker/docker-compose.yml`.
+- `docker/Dockerfile.cuda` exists for legacy experimentation and does **not** represent the feature-complete stack. Prefer `docker/Dockerfile` + `docker/docker-compose.yml`.
 
 ---
 
@@ -160,7 +160,7 @@ ffmpeg -y \
 
 cp samples/Test.mp4 Input/Test.mp4
 
-anime-v2 Input/Test.mp4 --mode medium --device auto
+dubbing-pipeline Input/Test.mp4 --mode medium --device auto
 ```
 
 Outputs land in:
@@ -181,7 +181,7 @@ Start the server locally:
 ```bash
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 Open:
@@ -220,14 +220,14 @@ Start modes:
 export REMOTE_ACCESS_MODE=tailscale
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 
 # Cloudflare (only if you’re behind Cloudflare Tunnel/Access)
 export REMOTE_ACCESS_MODE=cloudflare
 export TRUST_PROXY_HEADERS=1
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 Details:
@@ -287,6 +287,6 @@ Global best-effort cleanup (old uploads/logs):
 - run manually:
 
 ```bash
-python3 -m anime_v2.ops.retention
+python3 -m dubbing_pipeline.ops.retention
 ```
 

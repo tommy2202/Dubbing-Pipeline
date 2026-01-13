@@ -21,13 +21,13 @@ Absolute rules honored:
 ### 1.1 Job DB/store layer (jobs)
 
 - **Job model + status/progress**
-  - `src/anime_v2/jobs/models.py`
+  - `src/dubbing_pipeline/jobs/models.py`
     - `JobState`: `QUEUED|PAUSED|RUNNING|DONE|FAILED|CANCELED`
     - `Job`: includes `progress` (float), `message` (str), `runtime` (dict), plus output paths (`output_mkv`, `output_srt`), `work_dir`, `log_path`.
 
 - **Job persistence**
-  - `src/anime_v2/jobs/store.py`
-    - `JobStore` backed by **SqliteDict** on a single SQLite file (default: `Output/_state/jobs.db` via `src/anime_v2/server.py`).
+  - `src/dubbing_pipeline/jobs/store.py`
+    - `JobStore` backed by **SqliteDict** on a single SQLite file (default: `Output/_state/jobs.db` via `src/dubbing_pipeline/server.py`).
     - Tables in the same DB file:
       - `jobs` (job_id -> job dict)
       - `idempotency` (idempotency key -> {job_id, ts})
@@ -37,12 +37,12 @@ Absolute rules honored:
     - No explicit SQL schema/migrations; compatibility is handled by `Job.from_dict()` defaults.
 
 - **Auth/session DB (separate, not part of JobStore)**
-  - `src/anime_v2/api/models.py`
+  - `src/dubbing_pipeline/api/models.py`
     - `AuthStore` using `sqlite3` directly.
     - Creates SQL tables (`users`, `api_keys`, `refresh_tokens`, `qr_login_codes`, `totp_recovery_codes`) and performs **best-effort schema migration** for refresh token columns.
-    - Stored under `Output/_state/auth.db` by default (`src/anime_v2/server.py`).
+    - Stored under `Output/_state/auth.db` by default (`src/dubbing_pipeline/server.py`).
 
-**Key point**: there are **two SQLite DB “styles”** in v2:
+**Key point**: there are **two SQLite DB “styles”** in this repo:
 
 - Jobs: `SqliteDict` (KV tables, no migrations)
 - Auth: `sqlite3` (SQL tables + migrations)
@@ -54,20 +54,20 @@ This is acceptable (different domains), but for “library” features we must *
 ### 1.2 Resume / “migrations” / progress tracking
 
 - **Checkpointing (resume-safe, artifact hashing)**
-  - `src/anime_v2/jobs/checkpoint.py`
+  - `src/dubbing_pipeline/jobs/checkpoint.py`
     - Writes `.checkpoint.json` under the job base dir (see output layout below).
     - Tracks per-stage artifacts with sha256/mtime/size; used to skip work safely.
     - This is a “manifest-like” system but optimized for resume correctness.
 
 - **Stage manifests (metadata, hashes, resume checks)**
-  - `src/anime_v2/jobs/manifests.py`
+  - `src/dubbing_pipeline/jobs/manifests.py`
     - `write_stage_manifest(job_dir, stage, inputs, params, outputs, completed=True)` -> `Output/<job>/manifests/<stage>.json`
     - `can_resume_stage(...)` checks manifest hashes and expected outputs.
 
 - **Runtime scheduler + queue updates**
-  - `src/anime_v2/jobs/queue.py`
+  - `src/dubbing_pipeline/jobs/queue.py`
     - Updates `JobStore` throughout execution (`progress`, `message`, `state`, `runtime`, etc.).
-  - `src/anime_v2/runtime/scheduler.py`
+  - `src/dubbing_pipeline/runtime/scheduler.py`
     - Backpressure (degrade modes / delay) and concurrency caps; also updates the persisted job `runtime.metadata.degraded`.
 
 ---
@@ -77,12 +77,12 @@ This is acceptable (different domains), but for “library” features we must *
 The pipeline is already “layout-aware” and relies on specific paths.
 
 - **Primary layout is implemented in**
-  - `src/anime_v2/jobs/queue.py` (canonical today)
+  - `src/dubbing_pipeline/jobs/queue.py` (canonical today)
 
 Current conventions:
 
 - **Output root**: `get_settings().output_dir` (commonly `Output/`)
-  - Set in `src/anime_v2/server.py` as `app.state.output_root`
+  - Set in `src/dubbing_pipeline/server.py` as `app.state.output_root`
 
 - **Canonical per-job base dir**:
   - `Output/<stem>/` by default (`stem` comes from `video_path.stem` OR `job.runtime.source_stem` if set)
@@ -95,23 +95,23 @@ Current conventions:
     - `target.txt` => absolute path to the canonical base dir
     - `job_id.txt`
     - `video.txt` (redacted when privacy is enabled)
-  - Implemented in `src/anime_v2/jobs/queue.py`
+  - Implemented in `src/dubbing_pipeline/jobs/queue.py`
 
 - **Per-run work directory**:
   - `Output/<stem>/work/<job_id>/` (temp/intermediate artifacts)
 
 - **Logs**
   - Job log file: `Output/<stem>/job.log`
-  - Structured logs: under `Output/<stem>/logs/**` (used by `src/anime_v2/utils/job_logs.py`, ffmpeg logs, etc.)
+  - Structured logs: under `Output/<stem>/logs/**` (used by `src/dubbing_pipeline/utils/job_logs.py`, ffmpeg logs, etc.)
 
 - **Other notable folders/files used by the pipeline/UI**
-  - `Output/<job>/stream/manifest.json` (streaming manifest for HLS/chunks) (referenced by `src/anime_v2/web/routes_jobs.py`, `src/anime_v2/reports/drift.py`, `src/anime_v2/qa/scoring.py`)
+  - `Output/<job>/stream/manifest.json` (streaming manifest for HLS/chunks) (referenced by `src/dubbing_pipeline/web/routes_jobs.py`, `src/dubbing_pipeline/reports/drift.py`, `src/dubbing_pipeline/qa/scoring.py`)
   - `Output/<job>/review/state.json`, `review/overrides.json`, `review/audio/*` (review tooling)
   - `Output/<job>/analysis/*` (reports, QA, retention report, etc.)
   - `Output/<job>/subs/*` (subtitle variants)
 
 - **Secondary layout helper exists but is not the canonical source**
-  - `src/anime_v2/utils/paths.py`
+  - `src/dubbing_pipeline/utils/paths.py`
     - `output_root()`, `output_dir_for(video_path)` etc.
     - It does **not** currently encode the full “project output_subdir + stable pointer + work/<job_id>” logic that `jobs/queue.py` uses.
 
@@ -121,17 +121,17 @@ Current conventions:
 
 There are multiple “manifest-like” outputs:
 
-- **Stage manifests**: `src/anime_v2/jobs/manifests.py` → `Output/<job>/manifests/<stage>.json`
-- **Checkpoint**: `src/anime_v2/jobs/checkpoint.py` → `Output/<job>/.checkpoint.json`
+- **Stage manifests**: `src/dubbing_pipeline/jobs/manifests.py` → `Output/<job>/manifests/<stage>.json`
+- **Checkpoint**: `src/dubbing_pipeline/jobs/checkpoint.py` → `Output/<job>/.checkpoint.json`
 - **TTS manifest**:
-  - `Output/<job>/tts_manifest.json` or `Output/<job>/work/<job_id>/tts_manifest.json` (multiple readers exist, e.g. `src/anime_v2/review/ops.py`, `src/anime_v2/qa/scoring.py`)
+  - `Output/<job>/tts_manifest.json` or `Output/<job>/work/<job_id>/tts_manifest.json` (multiple readers exist, e.g. `src/dubbing_pipeline/review/ops.py`, `src/dubbing_pipeline/qa/scoring.py`)
 - **Streaming manifest**:
   - `Output/<job>/stream/manifest.json` (served by `/api/jobs/{id}/stream/manifest`)
 - **Backup manifest** (repository backup tooling):
-  - `src/anime_v2/ops/backup.py` writes `backup-<stamp>.manifest.json` and embeds `manifest.json` in the zip
+  - `src/dubbing_pipeline/ops/backup.py` writes `backup-<stamp>.manifest.json` and embeds `manifest.json` in the zip
 - **Domain-specific manifests**:
-  - Voice memory audition/tools write `manifest.json` under `Output/<job>/audition/` (`src/anime_v2/voice_memory/audition.py`, `src/anime_v2/voice_memory/tools.py`)
-  - Review overrides writes `Output/<job>/manifests/overrides.json` and `analysis/overrides_applied.jsonl` (`src/anime_v2/review/overrides.py`)
+  - Voice memory audition/tools write `manifest.json` under `Output/<job>/audition/` (`src/dubbing_pipeline/voice_memory/audition.py`, `src/dubbing_pipeline/voice_memory/tools.py`)
+  - Review overrides writes `Output/<job>/manifests/overrides.json` and `analysis/overrides_applied.jsonl` (`src/dubbing_pipeline/review/overrides.py`)
 
 ---
 
@@ -139,16 +139,16 @@ There are multiple “manifest-like” outputs:
 
 There are two “web layers”:
 
-- **Core FastAPI app wiring**: `src/anime_v2/server.py`
+- **Core FastAPI app wiring**: `src/dubbing_pipeline/server.py`
   - Mounts and includes:
-    - API routers: `src/anime_v2/api/routes_auth.py`, `routes_keys.py`, `routes_runtime.py`, `routes_settings.py`, `routes_audit.py`
-    - Jobs/API+UI: `src/anime_v2/web/routes_jobs.py`, `src/anime_v2/web/routes_ui.py`, `src/anime_v2/web/routes_webrtc.py`
+    - API routers: `src/dubbing_pipeline/api/routes_auth.py`, `routes_keys.py`, `routes_runtime.py`, `routes_settings.py`, `routes_audit.py`
+    - Jobs/API+UI: `src/dubbing_pipeline/web/routes_jobs.py`, `src/dubbing_pipeline/web/routes_ui.py`, `src/dubbing_pipeline/web/routes_webrtc.py`
   - Also defines legacy/simple endpoints:
     - `/` (renders `index.html` with filesystem-scanned videos)
     - `/video/{job}` (plays a hashed-id video from `_iter_videos()`)
     - `/files/{path:path}` (range-serving from Output root; this is important and used by API results)
 
-- **Primary jobs + uploads + “library” API**: `src/anime_v2/web/routes_jobs.py`
+- **Primary jobs + uploads + “library” API**: `src/dubbing_pipeline/web/routes_jobs.py`
   - Uploads: `/api/uploads/*` (resumable uploads, chunking, encryption-at-rest)
   - File picker: `GET /api/files` (lists **Input** files only; not an output library)
   - Jobs:
@@ -165,7 +165,7 @@ There are two “web layers”:
 
 ### 1.6 UI routing/pages (job submit + browse)
 
-- **UI router**: `src/anime_v2/web/routes_ui.py` (prefix `/ui`)
+- **UI router**: `src/dubbing_pipeline/web/routes_ui.py` (prefix `/ui`)
   - Pages:
     - `/ui/login` (template: `login.html`)
     - `/ui/dashboard` (template: `dashboard.html`)
@@ -177,7 +177,7 @@ There are two “web layers”:
   - Partials:
     - `/ui/partials/jobs_table` (template: `_jobs_table.html`)
 
-Templates live under `src/anime_v2/web/templates/`.
+Templates live under `src/dubbing_pipeline/web/templates/`.
 
 **Note**: UI currently contains a deliberate duplicate:
 
@@ -190,11 +190,11 @@ Templates live under `src/anime_v2/web/templates/`.
 There are multiple layers (each is already in use; do not add another):
 
 - **Worker concurrency**
-  - `src/anime_v2/server.py` creates `JobQueue(store, concurrency=s.jobs_concurrency)`
-  - `src/anime_v2/jobs/queue.py` runs `self.concurrency` async workers consuming an internal queue.
+  - `src/dubbing_pipeline/server.py` creates `JobQueue(store, concurrency=s.jobs_concurrency)`
+  - `src/dubbing_pipeline/jobs/queue.py` runs `self.concurrency` async workers consuming an internal queue.
 
 - **Global scheduling + phase caps + backpressure**
-  - `src/anime_v2/runtime/scheduler.py`
+  - `src/dubbing_pipeline/runtime/scheduler.py`
     - Caps: `max_concurrency_global`, `max_concurrency_transcribe`, `max_concurrency_tts`
     - Optional per-mode caps: `max_jobs_high`, `max_jobs_medium`, `max_jobs_low`
     - Backpressure: `backpressure_q_max`:
@@ -202,18 +202,18 @@ There are multiple layers (each is already in use; do not add another):
       - if already low, delay enqueue with jitter/backoff
 
 - **Per-user quotas / limits**
-  - `src/anime_v2/jobs/limits.py`
+  - `src/dubbing_pipeline/jobs/limits.py`
     - `max_concurrent_per_user` (default 2)
     - `daily_processing_minutes` (default 240)
     - `max_upload_mb`, media validation caps, watchdog timeouts
-  - Enforced in `src/anime_v2/web/routes_jobs.py` during job submission.
+  - Enforced in `src/dubbing_pipeline/web/routes_jobs.py` during job submission.
 
 - **Request rate limiting**
-  - `src/anime_v2/utils/ratelimit.py` `RateLimiter` (used in auth + jobs routes).
+  - `src/dubbing_pipeline/utils/ratelimit.py` `RateLimiter` (used in auth + jobs routes).
 
 - **Admin/operator endpoints**
-  - `src/anime_v2/api/routes_runtime.py`: `/api/runtime/state`, `/api/runtime/models`, `/api/runtime/models/prewarm`
-  - `src/anime_v2/web/routes_jobs.py`: `kill`, `delete`, tags/archive controls with role gating
+  - `src/dubbing_pipeline/api/routes_runtime.py`: `/api/runtime/state`, `/api/runtime/models`, `/api/runtime/models/prewarm`
+  - `src/dubbing_pipeline/web/routes_jobs.py`: `kill`, `delete`, tags/archive controls with role gating
 
 ---
 
@@ -223,11 +223,11 @@ There are multiple layers (each is already in use; do not add another):
 
 Implementations:
 
-- Canonical base-dir creation: `src/anime_v2/jobs/queue.py` (uses `runtime.source_stem` and `project.output_subdir`)
-- Base-dir resolution for API: `src/anime_v2/web/routes_jobs.py::_job_base_dir(job)`
+- Canonical base-dir creation: `src/dubbing_pipeline/jobs/queue.py` (uses `runtime.source_stem` and `project.output_subdir`)
+- Base-dir resolution for API: `src/dubbing_pipeline/web/routes_jobs.py::_job_base_dir(job)`
   - Prefers parent of `job.output_mkv`, else `Output/<video_stem>`
   - Does **not** use the `Output/jobs/<job_id>/target.txt` pointer
-- Base-dir resolution for UI: `src/anime_v2/web/routes_ui.py::_job_base_dir_from_dict(job_dict)`
+- Base-dir resolution for UI: `src/dubbing_pipeline/web/routes_ui.py::_job_base_dir_from_dict(job_dict)`
   - Mirrors `routes_jobs` logic (duplicate-by-design)
 
 Risk:
@@ -243,9 +243,9 @@ Decision:
 ### 2.2 “Library browse” has two different sources of truth
 
 - **Filesystem scan**:
-  - `src/anime_v2/server.py::_iter_videos()` scans `Output/**` for `*.mp4/*.mkv`, generates hashed IDs, renders `/` index and serves `/video/{job}`.
+  - `src/dubbing_pipeline/server.py::_iter_videos()` scans `Output/**` for `*.mp4/*.mkv`, generates hashed IDs, renders `/` index and serves `/video/{job}`.
 - **JobStore-backed**:
-  - `src/anime_v2/web/routes_jobs.py` uses `JobStore.list()` for dashboard + APIs, and `job_files()` heuristics to discover outputs.
+  - `src/dubbing_pipeline/web/routes_jobs.py` uses `JobStore.list()` for dashboard + APIs, and `job_files()` heuristics to discover outputs.
 
 Risk:
 
@@ -259,8 +259,8 @@ Decision:
 
 ### 2.3 Filtering logic is duplicated between UI and API
 
-- API: `GET /api/jobs` in `src/anime_v2/web/routes_jobs.py` implements filtering by archived/project/mode/tag/text and pagination.
-- UI: `/ui/partials/jobs_table` in `src/anime_v2/web/routes_ui.py` implements similar filtering locally (duplicated logic).
+- API: `GET /api/jobs` in `src/dubbing_pipeline/web/routes_jobs.py` implements filtering by archived/project/mode/tag/text and pagination.
+- UI: `/ui/partials/jobs_table` in `src/dubbing_pipeline/web/routes_ui.py` implements similar filtering locally (duplicated logic).
 
 Decision:
 
@@ -288,8 +288,8 @@ Decision:
 
 Canonical choice:
 
-- **Jobs**: `src/anime_v2/jobs/store.py` (`JobStore` + `jobs.db` in `Output/_state/`)
-- **Auth**: `src/anime_v2/api/models.py` (`AuthStore` + `auth.db` in `Output/_state/`)
+- **Jobs**: `src/dubbing_pipeline/jobs/store.py` (`JobStore` + `jobs.db` in `Output/_state/`)
+- **Auth**: `src/dubbing_pipeline/api/models.py` (`AuthStore` + `auth.db` in `Output/_state/`)
 
 Rule:
 
@@ -312,22 +312,22 @@ Compatibility strategy:
 
 Canonical choice:
 
-- The layout encoded in `src/anime_v2/jobs/queue.py` is the contract:
+- The layout encoded in `src/dubbing_pipeline/jobs/queue.py` is the contract:
   - base dir: `Output/<project_subdir?>/<stem>/`
   - pointer dir: `Output/jobs/<job_id>/target.txt`
   - work dir: `Output/<...>/work/<job_id>/`
 
 Plan:
 
-- Make `src/anime_v2/utils/paths.py` the single canonical module for all layout derivations by **extending it** (not creating a parallel “layout” module).
+- Make `src/dubbing_pipeline/utils/paths.py` the single canonical module for all layout derivations by **extending it** (not creating a parallel “layout” module).
 
 Files to modify later:
 
-- `src/anime_v2/utils/paths.py` (add canonical helpers)
-- `src/anime_v2/jobs/queue.py` (use the helper; preserve exact behavior)
-- `src/anime_v2/web/routes_jobs.py` (replace `_job_base_dir()` with helper that prefers `Output/jobs/<job_id>/target.txt`)
-- `src/anime_v2/web/routes_ui.py` (delete mirror logic; import helper safely)
-- `src/anime_v2/server.py` (stop filesystem scanning for library; prefer JobStore or redirect)
+- `src/dubbing_pipeline/utils/paths.py` (add canonical helpers)
+- `src/dubbing_pipeline/jobs/queue.py` (use the helper; preserve exact behavior)
+- `src/dubbing_pipeline/web/routes_jobs.py` (replace `_job_base_dir()` with helper that prefers `Output/jobs/<job_id>/target.txt`)
+- `src/dubbing_pipeline/web/routes_ui.py` (delete mirror logic; import helper safely)
+- `src/dubbing_pipeline/server.py` (stop filesystem scanning for library; prefer JobStore or redirect)
 
 Proposed helper API (no new behavior; just centralization):
 
@@ -344,8 +344,8 @@ Proposed helper API (no new behavior; just centralization):
 
 Canonical choice:
 
-- Stage manifest writing: `src/anime_v2/jobs/manifests.py`
-- Resume checkpoints: `src/anime_v2/jobs/checkpoint.py` (keep; do not merge with manifests)
+- Stage manifest writing: `src/dubbing_pipeline/jobs/manifests.py`
+- Resume checkpoints: `src/dubbing_pipeline/jobs/checkpoint.py` (keep; do not merge with manifests)
 
 Missing piece (to avoid ad-hoc discovery):
 
@@ -370,9 +370,9 @@ Schema changes required:
 
 Files to modify later:
 
-- `src/anime_v2/jobs/manifests.py` (add helper to write/read `manifests/job.json` using existing `write_json`)
-- `src/anime_v2/jobs/queue.py` (write/update the job index manifest at submit/start/end; best-effort)
-- `src/anime_v2/web/routes_jobs.py` (prefer reading `manifests/job.json` for `job_files()` and job detail; fall back to heuristics)
+- `src/dubbing_pipeline/jobs/manifests.py` (add helper to write/read `manifests/job.json` using existing `write_json`)
+- `src/dubbing_pipeline/jobs/queue.py` (write/update the job index manifest at submit/start/end; best-effort)
+- `src/dubbing_pipeline/web/routes_jobs.py` (prefer reading `manifests/job.json` for `job_files()` and job detail; fall back to heuristics)
 
 ---
 
@@ -389,7 +389,7 @@ Canonical choice:
 
 Existing duplicates to deprecate:
 
-- `GET /` + `GET /video/{job}` in `src/anime_v2/server.py` are a second library view.
+- `GET /` + `GET /video/{job}` in `src/dubbing_pipeline/server.py` are a second library view.
 
 Endpoint definitions (existing; will be extended but not replaced):
 
@@ -407,8 +407,8 @@ Endpoint definitions (existing; will be extended but not replaced):
 
 Files to modify later:
 
-- `src/anime_v2/web/routes_jobs.py` (centralize output discovery; return a stable schema)
-- `src/anime_v2/server.py`
+- `src/dubbing_pipeline/web/routes_jobs.py` (centralize output discovery; return a stable schema)
+- `src/dubbing_pipeline/server.py`
   - Option A (preferred): make `/` redirect to `/ui/dashboard`
   - Option B: keep `/` but source it from `JobStore.list()` + `job_files()` (no filesystem scan hashing)
   - Keep `/files/*` as-is (it is the canonical file server)
@@ -419,7 +419,7 @@ Files to modify later:
 
 Canonical choice:
 
-- `/ui/*` pages in `src/anime_v2/web/routes_ui.py` + templates under `src/anime_v2/web/templates/`.
+- `/ui/*` pages in `src/dubbing_pipeline/web/routes_ui.py` + templates under `src/dubbing_pipeline/web/templates/`.
 
 Plan:
 
@@ -444,7 +444,7 @@ UI page flow (canonical):
 
 Duplicates to remove later (reroute):
 
-- `src/anime_v2/web/routes_ui.py::_job_base_dir_from_dict()` should be removed and replaced with the shared `utils/paths` helper.
+- `src/dubbing_pipeline/web/routes_ui.py::_job_base_dir_from_dict()` should be removed and replaced with the shared `utils/paths` helper.
 - `/ui/partials/jobs_table` should not duplicate filter logic; it should either:
   - call `GET /api/jobs` internally, or
   - import a shared filter helper used by both UI and API.
@@ -455,10 +455,10 @@ Duplicates to remove later (reroute):
 
 Canonical choices:
 
-- Global/phase/mode scheduling: `src/anime_v2/runtime/scheduler.py`
-- Worker execution: `src/anime_v2/jobs/queue.py`
-- Per-user and upload/media limits: `src/anime_v2/jobs/limits.py`
-- Admin visibility: `src/anime_v2/api/routes_runtime.py` + UI settings page
+- Global/phase/mode scheduling: `src/dubbing_pipeline/runtime/scheduler.py`
+- Worker execution: `src/dubbing_pipeline/jobs/queue.py`
+- Per-user and upload/media limits: `src/dubbing_pipeline/jobs/limits.py`
+- Admin visibility: `src/dubbing_pipeline/api/routes_runtime.py` + UI settings page
 
 Queue policy defaults (as implemented today; to be documented and kept stable):
 
@@ -485,7 +485,7 @@ Admin controls (existing):
 Plan (avoid parallel “admin control plane”):
 
 - Keep env/config as source-of-truth for caps (no new DB-based config system unless absolutely necessary).
-- If dynamic tuning is needed later, extend the existing settings store (`src/anime_v2/api/routes_settings.py` + `UserSettingsStore`) rather than adding a new config DB.
+- If dynamic tuning is needed later, extend the existing settings store (`src/dubbing_pipeline/api/routes_settings.py` + `UserSettingsStore`) rather than adding a new config DB.
 
 ---
 
@@ -495,11 +495,11 @@ This is sequenced to minimize risk and avoid behavior breaks.
 
 ### Phase 0 — Baseline: codify the canonical layout + discovery (no behavior change)
 
-- **Add canonical layout helpers** to `src/anime_v2/utils/paths.py` (extend existing module).
+- **Add canonical layout helpers** to `src/dubbing_pipeline/utils/paths.py` (extend existing module).
 - Update call sites to use the helpers while preserving current behavior:
-  - `src/anime_v2/jobs/queue.py` (creation)
-  - `src/anime_v2/web/routes_jobs.py` (resolution)
-  - `src/anime_v2/web/routes_ui.py` (resolution; delete mirror)
+  - `src/dubbing_pipeline/jobs/queue.py` (creation)
+  - `src/dubbing_pipeline/web/routes_jobs.py` (resolution)
+  - `src/dubbing_pipeline/web/routes_ui.py` (resolution; delete mirror)
 
 Exactly what duplicate code gets removed/rerouted:
 
@@ -511,8 +511,8 @@ Exactly what duplicate code gets removed/rerouted:
 ### Phase 1 — Canonical “job manifest index” (reduce output discovery duplication)
 
 - Add `Output/<job>/manifests/job.json` writing (best-effort):
-  - Prefer implementing in `src/anime_v2/jobs/manifests.py` alongside stage manifests (no new “manifest system”).
-- Update `src/anime_v2/jobs/queue.py` to write/update it:
+  - Prefer implementing in `src/dubbing_pipeline/jobs/manifests.py` alongside stage manifests (no new “manifest system”).
+- Update `src/dubbing_pipeline/jobs/queue.py` to write/update it:
   - on job creation (initial metadata + planned paths)
   - on job start (work_dir, state RUNNING)
   - on stage completion (link stage manifests)
@@ -525,7 +525,7 @@ Schema changes required:
 
 Exactly what duplicate code gets removed/rerouted:
 
-- `src/anime_v2/web/routes_jobs.py::job_files()` should prefer `manifests/job.json` and fall back to heuristics only if missing.
+- `src/dubbing_pipeline/web/routes_jobs.py::job_files()` should prefer `manifests/job.json` and fall back to heuristics only if missing.
 
 ---
 
@@ -533,7 +533,7 @@ Exactly what duplicate code gets removed/rerouted:
 
 Create a shared, import-safe function (do not create a parallel system; this is a refactor):
 
-- New module proposal: `src/anime_v2/jobs/outputs.py` (or similar under existing `jobs/` namespace)
+- New module proposal: `src/dubbing_pipeline/jobs/outputs.py` (or similar under existing `jobs/` namespace)
   - `discover_outputs(job: Job, base_dir: Path) -> dict[str, Any]`
   - Implementation order:
     - If `manifests/job.json` exists → read it and normalize output URLs/paths
@@ -541,8 +541,8 @@ Create a shared, import-safe function (do not create a parallel system; this is 
 
 Files to modify later:
 
-- `src/anime_v2/web/routes_jobs.py` (use `discover_outputs`)
-- `src/anime_v2/web/routes_ui.py` and templates (consume the API results; do not reimplement)
+- `src/dubbing_pipeline/web/routes_jobs.py` (use `discover_outputs`)
+- `src/dubbing_pipeline/web/routes_ui.py` and templates (consume the API results; do not reimplement)
 
 Exactly what duplicate code gets removed/rerouted:
 
@@ -554,7 +554,7 @@ Exactly what duplicate code gets removed/rerouted:
 
 Files to modify later:
 
-- `src/anime_v2/server.py`
+- `src/dubbing_pipeline/server.py`
 
 Plan:
 
@@ -573,14 +573,14 @@ Exactly what duplicate code gets removed/rerouted:
 
 Files to modify later:
 
-- `src/anime_v2/web/routes_ui.py` (`ui_jobs_table`)
-- `src/anime_v2/web/routes_jobs.py` (`list_jobs`)
+- `src/dubbing_pipeline/web/routes_ui.py` (`ui_jobs_table`)
+- `src/dubbing_pipeline/web/routes_jobs.py` (`list_jobs`)
 
 Plan:
 
 - UI partial should not reimplement filtering. Options (choose one):
   - **Option A (preferred)**: UI partial calls `GET /api/jobs` and passes through results to template.
-  - Option B: extract filter helper into a shared function (e.g. `anime_v2/jobs/query.py`) used by both UI and API.
+  - Option B: extract filter helper into a shared function (e.g. `dubbing_pipeline/jobs/query.py`) used by both UI and API.
 
 Exactly what duplicate code gets removed/rerouted:
 
@@ -593,12 +593,12 @@ Exactly what duplicate code gets removed/rerouted:
 When implementing, the following duplicates should be removed or rerouted to a single canonical implementation:
 
 - **Output base-dir resolver duplication**
-  - Remove `src/anime_v2/web/routes_ui.py::_job_base_dir_from_dict`
-  - Replace `src/anime_v2/web/routes_jobs.py::_job_base_dir`
-  - Canonicalize via `src/anime_v2/utils/paths.py` helpers that prefer `Output/jobs/<job_id>/target.txt`
+  - Remove `src/dubbing_pipeline/web/routes_ui.py::_job_base_dir_from_dict`
+  - Replace `src/dubbing_pipeline/web/routes_jobs.py::_job_base_dir`
+  - Canonicalize via `src/dubbing_pipeline/utils/paths.py` helpers that prefer `Output/jobs/<job_id>/target.txt`
 
 - **Library listing duplication**
-  - Deprecate `/` filesystem scan (`src/anime_v2/server.py::_iter_videos`)
+  - Deprecate `/` filesystem scan (`src/dubbing_pipeline/server.py::_iter_videos`)
   - Make `/` redirect to `/ui/dashboard` or render from JobStore
 
 - **Filtering duplication**
@@ -613,7 +613,7 @@ When implementing, the following duplicates should be removed or rerouted to a s
 ## 6) Notes on what we will *not* do (to avoid parallel systems)
 
 - No new DB/ORM for jobs (extend `JobStore` tables only).
-- No new “manifest subsystem” outside `anime_v2/jobs/manifests.py` (add job index manifest there).
+- No new “manifest subsystem” outside `dubbing_pipeline/jobs/manifests.py` (add job index manifest there).
 - No new “library service” that separately scans Output and invents IDs (JobStore remains canonical).
 - No new queueing layer (Scheduler + JobQueue + Limits remain canonical).
 

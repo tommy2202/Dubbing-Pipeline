@@ -31,7 +31,7 @@ class Settings:
             return getattr(self.secret, name)
         return getattr(self.public, name)
 
-    # Backwards-compat: preserve existing helper API from `anime_v2.config.Settings`
+    # Backwards-compat: preserve existing helper API from `dubbing_pipeline.config.Settings`
     def cors_origin_list(self) -> list[str]:
         return self.public.cors_origin_list()
 
@@ -79,7 +79,7 @@ def _validate_secrets(s: Settings) -> None:
                 + ", ".join(sorted(set(weak)))
                 + ". Set them via environment variables or `.env.secrets`."
             )
-        logging.getLogger("anime_v2").warning(
+        logging.getLogger("dubbing_pipeline").warning(
             "weak_secrets_detected",
             extra={"weak": sorted(set(weak)), "strict_secrets": False},
         )
@@ -100,7 +100,7 @@ def _validate_secrets(s: Settings) -> None:
         if mode == "cloudflare" and not bool(getattr(s.public, "trust_proxy_headers", False)):
             warnings.append("TRUST_PROXY_HEADERS=0 (may break HTTPS detection behind Cloudflare)")
         if warnings:
-            logging.getLogger("anime_v2").warning(
+            logging.getLogger("dubbing_pipeline").warning(
                 "remote_mode_hardening_warning",
                 extra={"mode": mode, "warnings": warnings},
             )

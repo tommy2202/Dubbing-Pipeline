@@ -62,7 +62,7 @@ def _verify_remote_modes() -> None:
     """
     Confirms REMOTE_ACCESS_MODE enforcement decisions (off/tailscale/cloudflare).
     """
-    from anime_v2.api.remote_access import remote_access_middleware
+    from dubbing_pipeline.api.remote_access import remote_access_middleware
 
     app = FastAPI()
 
@@ -196,8 +196,8 @@ def _verify_end_to_end() -> None:
 
         # Configure env BEFORE importing the app/settings.
         os.environ["APP_ROOT"] = str(app_root)
-        os.environ["ANIME_V2_OUTPUT_DIR"] = str(out_dir)
-        os.environ["ANIME_V2_LOG_DIR"] = str(log_dir)
+        os.environ["DUBBING_OUTPUT_DIR"] = str(out_dir)
+        os.environ["DUBBING_LOG_DIR"] = str(log_dir)
         os.environ["INPUT_DIR"] = str(in_dir)
         os.environ["INPUT_UPLOADS_DIR"] = str(uploads_dir)
         os.environ["REMOTE_ACCESS_MODE"] = "off"
@@ -224,7 +224,7 @@ def _verify_end_to_end() -> None:
         except Exception:
             pass
 
-        from anime_v2.server import app
+        from dubbing_pipeline.server import app
 
         with TestClient(app) as c:
             # 1) login via username/password (session cookie)

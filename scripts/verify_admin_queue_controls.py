@@ -89,21 +89,21 @@ def main() -> int:
         os.environ["REDIS_QUEUE_PREFIX"] = "dp_verify_admin"
         os.environ["REMOTE_ACCESS_MODE"] = "off"
 
-        from anime_v2.api.models import AuthStore, Role, User, now_ts
-        from anime_v2.api.routes_admin import router as admin_router
-        from anime_v2.api.routes_auth import router as auth_router
-        from anime_v2.jobs.queue import JobQueue
-        from anime_v2.jobs.store import JobStore
-        from anime_v2.queue.manager import AutoQueueBackend
-        from anime_v2.runtime.scheduler import Scheduler
-        from anime_v2.utils.crypto import PasswordHasher
-        from anime_v2.web.routes_jobs import router as jobs_router
+        from dubbing_pipeline.api.models import AuthStore, Role, User, now_ts
+        from dubbing_pipeline.api.routes_admin import router as admin_router
+        from dubbing_pipeline.api.routes_auth import router as auth_router
+        from dubbing_pipeline.jobs.queue import JobQueue
+        from dubbing_pipeline.jobs.store import JobStore
+        from dubbing_pipeline.queue.manager import AutoQueueBackend
+        from dubbing_pipeline.runtime.scheduler import Scheduler
+        from dubbing_pipeline.utils.crypto import PasswordHasher
+        from dubbing_pipeline.web.routes_jobs import router as jobs_router
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()
             os.environ["APP_ROOT"] = str(root)
-            os.environ["ANIME_V2_OUTPUT_DIR"] = str((root / "Output").resolve())
-            os.environ["ANIME_V2_LOG_DIR"] = str((root / "logs").resolve())
+            os.environ["DUBBING_OUTPUT_DIR"] = str((root / "Output").resolve())
+            os.environ["DUBBING_LOG_DIR"] = str((root / "logs").resolve())
 
             in_dir = root / "Input"
             in_dir.mkdir(parents=True, exist_ok=True)
@@ -111,7 +111,7 @@ def main() -> int:
             _make_dummy_mp4(src_mp4)
 
             app = FastAPI()
-            out_root = Path(os.environ["ANIME_V2_OUTPUT_DIR"]).resolve()
+            out_root = Path(os.environ["DUBBING_OUTPUT_DIR"]).resolve()
             out_root.mkdir(parents=True, exist_ok=True)
             state_root = (out_root / "_state").resolve()
             state_root.mkdir(parents=True, exist_ok=True)

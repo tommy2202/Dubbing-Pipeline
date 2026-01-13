@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from anime_v2.modes import HardwareCaps, resolve_effective_settings
+from dubbing_pipeline.modes import HardwareCaps, resolve_effective_settings
 
 
 def _repo_root() -> Path:

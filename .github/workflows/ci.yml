@@ -85,7 +85,7 @@ jobs:
       id-token: write
       attestations: write
     env:
-      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/anime-v2
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/dubbing-pipeline
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -198,7 +198,7 @@ jobs:
 
       - name: Attest build provenance (SLSA-ish)
         if: github.event_name == 'push'
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}

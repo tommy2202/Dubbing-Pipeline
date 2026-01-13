@@ -9,8 +9,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
-from anime_v2.server import _range_stream  # type: ignore
-from anime_v2.stages.export import export_mobile_hls, export_mobile_mp4
+from dubbing_pipeline.server import _range_stream  # type: ignore
+from dubbing_pipeline.stages.export import export_mobile_hls, export_mobile_mp4
 
 
 def _run(cmd: list[str]) -> str:

@@ -30,8 +30,8 @@ def main() -> int:
 
         os.environ["APP_ROOT"] = str(root)
         os.environ["INPUT_DIR"] = str(inp)
-        os.environ["ANIME_V2_OUTPUT_DIR"] = str(out)
-        os.environ["ANIME_V2_LOG_DIR"] = str(out / "logs")
+        os.environ["DUBBING_OUTPUT_DIR"] = str(out)
+        os.environ["DUBBING_LOG_DIR"] = str(out / "logs")
         os.environ["COOKIE_SECURE"] = "0"
 
         # Very small timeouts (we stub heavy stages)
@@ -43,10 +43,10 @@ def main() -> int:
         os.environ["WATCHDOG_MUX_S"] = "10"
         os.environ["WATCHDOG_EXPORT_S"] = "10"
 
-        from anime_v2.config import get_settings
-        from anime_v2.jobs.models import Job, JobState
-        from anime_v2.jobs.queue import JobQueue
-        from anime_v2.jobs.store import JobStore
+        from dubbing_pipeline.config import get_settings
+        from dubbing_pipeline.jobs.models import Job, JobState
+        from dubbing_pipeline.jobs.queue import JobQueue
+        from dubbing_pipeline.jobs.store import JobStore
 
         get_settings.cache_clear()
 
@@ -85,8 +85,8 @@ def main() -> int:
         store.put(job)
 
         # Monkeypatch heavy stages so the run is fast and deterministic.
-        import anime_v2.jobs.queue as qmod
-        import anime_v2.stages.export as exmod
+        import dubbing_pipeline.jobs.queue as qmod
+        import dubbing_pipeline.stages.export as exmod
 
         def _audio_extract_stub(*, video, out_dir, wav_out=None, **_kw):
             p = Path(wav_out or (Path(out_dir) / "audio.wav"))
