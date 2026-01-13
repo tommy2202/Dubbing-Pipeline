@@ -1,0 +1,54 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file:
+      - ../.env
+      - ../.env.secrets
+    environment:
+      # Golden-path defaults (no public exposure):
+      # - bind to 0.0.0.0 so Tailscale clients can reach it
+      # - enforce the Tailscale/LAN allowlist in the app layer
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      REMOTE_ACCESS_MODE: "tailscale"
+      # cookies must work over HTTP inside the tailnet
+      COOKIE_SECURE: "0"
+
+      # Optional Redis (internal-only; no published Redis ports)
+      REDIS_URL: "redis://redis:6379/0"
+    ports:
+      # Web UI / API only. No additional ports are exposed.
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../Output:/app/Output
+      - ../data:/app/data
+      - ../logs:/app/logs
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 2s
+      retries: 10
+    restart: unless-stopped
+    # No ports published; redis is internal-only.
+

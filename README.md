@@ -19,6 +19,7 @@ Outputs are written under:
 - **Ops**: model cache status + optional prewarm, library management (tags/archive/delete), verification gates.
 
 ### Documentation index (start here)
+- **Quickstart (Tailscale recommended)**: `docs/GOLDEN_PATH_TAILSCALE.md`
 - Overview & architecture: `docs/OVERVIEW.md`
 - Full feature list (defaults + optional + outputs): `docs/FEATURES.md`
 - Setup (local + Docker + GPU + security): `docs/SETUP.md`
@@ -27,9 +28,30 @@ Outputs are written under:
 - Troubleshooting: `docs/TROUBLESHOOTING.md`
 
 Additional focused docs:
-- Remote access: `docs/remote_access.md` and `docs/mobile_remote.md`
+- Remote access (advanced): `docs/advanced/README.md`
 - Private notifications (ntfy): `docs/notifications.md`
 - Security details: `docs/security.md`
+
+---
+
+## Quickstart (Tailscale recommended)
+
+If you want to safely access the web UI from your phone on mobile data **without** exposing your machine publicly:
+
+- Follow: `docs/GOLDEN_PATH_TAILSCALE.md`
+- Run:
+
+```bash
+./scripts/run_prod.sh
+```
+
+Windows:
+
+```powershell
+.\scripts\run_prod.ps1
+```
+
+This starts the server in **Tailscale mode** (IP allowlist enforced) and prints the exact **tailnet URL** to open.
 
 ---
 
