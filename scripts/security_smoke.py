@@ -30,7 +30,8 @@ def main() -> int:
             f.write(b"\x00" * 1024)
 
         os.environ.setdefault("APP_ROOT", root)
-        os.environ.setdefault("OUTPUT_DIR", out_dir)
+        os.environ.setdefault("ANIME_V2_OUTPUT_DIR", out_dir)
+        os.environ.setdefault("ANIME_V2_LOG_DIR", os.path.join(root, "logs"))
         os.environ.setdefault("INPUT_DIR", in_dir)
         os.environ.setdefault("REMOTE_ACCESS_MODE", "off")
         os.environ.setdefault("COOKIE_SECURE", "0")
@@ -82,7 +83,7 @@ def main() -> int:
             # video_path must be under INPUT_DIR (no arbitrary reads)
             r = c.post(
                 "/api/jobs",
-                json={"video_path": "../Output/auth.db", "mode": "low"},
+                json={"video_path": "../Output/_state/auth.db", "mode": "low"},
                 headers={"X-CSRF-Token": csrf},
             )
             assert r.status_code == 400, r.text

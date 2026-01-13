@@ -21,7 +21,9 @@ from anime_v2.api.models import AuthStore, Role, User, now_ts
 from anime_v2.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
 from anime_v2.api.routes_audit import router as audit_router
 from anime_v2.api.routes_auth import router as auth_router
+from anime_v2.api.routes_admin import router as admin_router
 from anime_v2.api.routes_keys import router as keys_router
+from anime_v2.api.routes_library import router as library_router
 from anime_v2.api.routes_runtime import router as runtime_router
 from anime_v2.api.routes_settings import UserSettingsStore
 from anime_v2.api.routes_settings import router as settings_router
@@ -35,6 +37,7 @@ from anime_v2.ops.storage import periodic_prune_tick
 from anime_v2.runtime import lifecycle
 from anime_v2.runtime.model_manager import ModelManager
 from anime_v2.runtime.scheduler import Scheduler
+from anime_v2.security.runtime_db import UnsafeRuntimeDbPath, assert_safe_runtime_db_path
 from anime_v2.utils.crypto import PasswordHasher, random_id
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import install_egress_policy
@@ -61,7 +64,53 @@ async def lifespan(app: FastAPI):
     # core pipeline stores
     s = get_settings()
     out_root = Path(s.output_dir).resolve()
-    store = JobStore(out_root / "jobs.db")
+
+    state_root = Path(getattr(s, "state_dir", None) or (out_root / "_state")).resolve()
+    jobs_db = state_root / str(getattr(s, "jobs_db_name", "jobs.db") or "jobs.db")
+    auth_db = state_root / str(getattr(s, "auth_db_name", "auth.db") or "auth.db")
+
+    # Guardrails: ensure sensitive DBs never live in unsafe/tracked locations.
+    try:
+        assert_safe_runtime_db_path(
+            jobs_db,
+            purpose="jobs",
+            repo_root=Path(getattr(s, "app_root", Path.cwd())).resolve(),
+            allowed_repo_subdirs=[state_root],
+        )
+        assert_safe_runtime_db_path(
+            auth_db,
+            purpose="auth",
+            repo_root=Path(getattr(s, "app_root", Path.cwd())).resolve(),
+            allowed_repo_subdirs=[state_root],
+        )
+    except UnsafeRuntimeDbPath as ex:
+        # Security: refuse to boot with an unsafe DB path.
+        logger.error("unsafe_runtime_db_path", error=str(ex))
+        raise
+
+    # Best-effort migration: if legacy DBs exist at <output_dir>/*.db, move to state_root.
+    def _maybe_migrate(legacy: Path, target: Path) -> None:
+        try:
+            if legacy.exists() and not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                legacy.rename(target)
+                logger.warning(
+                    "runtime_db_migrated",
+                    legacy=str(legacy),
+                    target=str(target),
+                )
+        except Exception as ex:
+            logger.warning(
+                "runtime_db_migration_failed",
+                legacy=str(legacy),
+                target=str(target),
+                error=str(ex),
+            )
+
+    _maybe_migrate(out_root / "jobs.db", jobs_db)
+    _maybe_migrate(out_root / "auth.db", auth_db)
+
+    store = JobStore(jobs_db)
     q = JobQueue(store, concurrency=int(s.jobs_concurrency))
     app.state.job_store = store
     app.state.job_queue = q
@@ -88,7 +137,7 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = sched
 
     # auth store
-    auth_store = AuthStore(out_root / "auth.db")
+    auth_store = AuthStore(auth_db)
     app.state.auth_store = auth_store
     app.state.rate_limiter = RateLimiter()
     # per-user UI/API settings (stored on disk, default under ~/.anime_v2/settings.json)
@@ -226,9 +275,11 @@ app.include_router(auth_router)
 # Also expose auth endpoints under /api/auth/* for browser-friendly UI wiring.
 app.include_router(auth_router, prefix="/api")
 app.include_router(audit_router)
+app.include_router(admin_router)
 app.include_router(keys_router)
 app.include_router(runtime_router)
 app.include_router(settings_router)
+app.include_router(library_router)
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
 app.include_router(ui_router)
@@ -448,8 +499,9 @@ async def readyz(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request, _: object = Depends(require_role(Role.viewer))):
-    videos = _iter_videos()
-    return TEMPLATES.TemplateResponse(request, "index.html", {"videos": videos})
+    # Legacy entrypoint: redirect to the grouped Library UI.
+    # Keeps "/" stable while avoiding a separate filesystem-scan library view.
+    return RedirectResponse(url="/ui/library", status_code=302)
 
 
 @app.get("/login")

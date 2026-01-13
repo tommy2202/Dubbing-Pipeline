@@ -12,7 +12,10 @@ from anime_v2.api.deps import current_identity
 from anime_v2.api.routes_settings import UserSettingsStore
 from anime_v2.api.security import issue_csrf_token
 from anime_v2.config import get_settings
+from anime_v2.jobs.models import Job
+from anime_v2.library.paths import get_job_output_root
 from anime_v2.utils.io import read_json
+from anime_v2.ops import audit
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
@@ -58,20 +61,37 @@ def _render(request: Request, template: str, ctx: dict[str, Any]) -> HTMLRespons
     return resp
 
 
+def _audit_ui_page_view(request: Request, *, user_id: str, page: str, meta: dict[str, Any] | None = None) -> None:
+    """
+    UI page view audit logging is opt-in to avoid noise.
+    """
+    s = get_settings()
+    if not bool(getattr(s, "ui_audit_page_views", False)):
+        return
+    try:
+        audit.emit(
+            "ui.page_view",
+            request_id=None,
+            user_id=str(user_id),
+            meta={"page": str(page), "path": str(request.url.path), **(meta or {})},
+        )
+    except Exception:
+        return
+
+
 def _job_base_dir_from_dict(job: dict[str, Any]) -> Path:
     """
-    Mirror routes_jobs._job_base_dir without importing it (avoid circular imports).
+    Canonical job output root resolution for UI helpers.
     """
-    out_root = Path(get_settings().output_dir).resolve()
-    out_mkv = str(job.get("output_mkv") or "").strip()
-    if out_mkv:
-        with suppress(Exception):
-            p = Path(out_mkv)
-            if p.parent.exists():
-                return p.parent.resolve()
-    vp = str(job.get("video_path") or "").strip()
-    stem = Path(vp).stem if vp else str(job.get("id") or "job")
-    return (out_root / stem).resolve()
+    try:
+        j = Job.from_dict(job)
+        return get_job_output_root(j)
+    except Exception:
+        # Last-resort fallback for malformed dicts.
+        out_root = Path(get_settings().output_dir).resolve()
+        vp = str(job.get("video_path") or "").strip()
+        stem = Path(vp).stem if vp else str(job.get("id") or "job")
+        return (out_root / stem).resolve()
 
 
 def _qa_score_for_job_dict(job: dict[str, Any]) -> float | None:
@@ -117,7 +137,75 @@ async def ui_dashboard(request: Request) -> HTMLResponse:
     user = _current_user_optional(request)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="dashboard")
     return _render(request, "dashboard.html", {})
+
+
+@router.get("/library")
+async def ui_library_series(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="library_series")
+    return _render(request, "library_series.html", {})
+
+
+@router.get("/library/{series_slug}")
+async def ui_library_seasons(request: Request, series_slug: str) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(
+            request, user_id=str(user.id), page="library_seasons", meta={"series_slug": series_slug}
+        )
+    return _render(request, "library_seasons.html", {"series_slug": series_slug})
+
+
+@router.get("/library/{series_slug}/season/{season_number}")
+async def ui_library_episodes(request: Request, series_slug: str, season_number: int) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(
+            request,
+            user_id=str(user.id),
+            page="library_episodes",
+            meta={"series_slug": series_slug, "season_number": int(season_number)},
+        )
+    return _render(
+        request,
+        "library_episodes.html",
+        {"series_slug": series_slug, "season_number": int(season_number)},
+    )
+
+
+@router.get("/library/{series_slug}/season/{season_number}/episode/{episode_number}")
+async def ui_library_episode_detail(
+    request: Request, series_slug: str, season_number: int, episode_number: int
+) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(
+            request,
+            user_id=str(user.id),
+            page="library_episode_detail",
+            meta={
+                "series_slug": series_slug,
+                "season_number": int(season_number),
+                "episode_number": int(episode_number),
+            },
+        )
+    return _render(
+        request,
+        "library_episode_detail.html",
+        {"series_slug": series_slug, "season_number": int(season_number), "episode_number": int(episode_number)},
+    )
 
 
 @router.get("/partials/jobs_table")

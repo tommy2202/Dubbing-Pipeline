@@ -3,7 +3,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [master, main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -24,6 +24,16 @@ jobs:
           python-version: "3.10"
           cache: pip
 
+      - name: Guardrails (no tracked artifacts / no secrets)
+        run: |
+          python scripts/check_no_tracked_artifacts.py
+          python scripts/check_no_secrets.py
+
+      - name: Package + verify release zip (allowlist)
+        run: |
+          python scripts/package_release.py --out dist --name ci-release.zip
+          python scripts/verify_release_zip.py dist/ci-release.zip
+
       - name: System deps (ffmpeg, espeak)
         run: |
           sudo apt-get update
@@ -43,6 +53,19 @@ jobs:
           ALLOW_EGRESS: "1"
         run: |
           make check
+
+      - name: Extra gates (repo scripts)
+        env:
+          LOG_LEVEL: INFO
+          COQUI_TOS_AGREED: "0"
+          OFFLINE_MODE: "0"
+          ALLOW_EGRESS: "1"
+        run: |
+          python scripts/verify_env.py
+          python scripts/polish_gate.py
+          python scripts/mobile_gate.py
+          python scripts/security_mobile_gate.py
+          python scripts/security_smoke.py
 
       - name: Cache Whisper models
         uses: actions/cache@v4

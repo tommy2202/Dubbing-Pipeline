@@ -29,6 +29,7 @@ from anime_v2.ops.metrics import (
 from anime_v2.runtime.scheduler import Scheduler
 from anime_v2.security.crypto import CryptoConfigError, decrypt_file, is_encrypted_path
 from anime_v2.stages import audio_extractor, mkv_export, tts
+from anime_v2.ops import audit
 from anime_v2.stages.character_store import CharacterStore
 from anime_v2.stages.diarization import DiarizeConfig
 from anime_v2.stages.diarization import diarize as diarize_v2
@@ -239,21 +240,27 @@ class JobQueue:
         except Exception:
             priv = None
 
-        # Stable naming: allow job.runtime.source_stem to control Output/<stem>/ naming (e.g. encrypted uploads).
-        stem = str(runtime.get("source_stem") or video_path.stem or str(job.id)).strip() or str(
-            job.id
-        )
-        proj_sub = ""
+        # Canonical Output/<...>/ layout (single source of truth).
         try:
-            proj = runtime.get("project")
-            if isinstance(proj, dict):
-                proj_sub = str(proj.get("output_subdir") or "").strip().strip("/")
+            from anime_v2.library.paths import get_job_output_root
+
+            base_dir = get_job_output_root(job)
         except Exception:
+            # Fallback to legacy inline behavior (should match get_job_output_root).
+            stem = str(runtime.get("source_stem") or video_path.stem or str(job.id)).strip() or str(
+                job.id
+            )
             proj_sub = ""
-        if proj_sub:
-            base_dir = (out_root / proj_sub / stem).resolve()
-        else:
-            base_dir = (out_root / stem).resolve()
+            try:
+                proj = runtime.get("project")
+                if isinstance(proj, dict):
+                    proj_sub = str(proj.get("output_subdir") or "").strip().strip("/")
+            except Exception:
+                proj_sub = ""
+            if proj_sub:
+                base_dir = (out_root / proj_sub / stem).resolve()
+            else:
+                base_dir = (out_root / stem).resolve()
         base_dir.mkdir(parents=True, exist_ok=True)
         # Stable per-job pointer (best-effort) so mobile/API users can find artifacts under Output/jobs/<job_id>/...
         # We keep the canonical base_dir at Output/<stem>/... for backwards compatibility.
@@ -290,6 +297,13 @@ class JobQueue:
         settings = get_settings()
         self.store.update(job_id, state=JobState.RUNNING, progress=0.0, message="Starting")
         self.store.append_log(job_id, f"[{now_utc()}] start job={job_id}")
+        with suppress(Exception):
+            audit.emit(
+                "job.started",
+                user_id=str(job.owner_id or "") or None,
+                job_id=str(job_id),
+                meta={"mode": str(job.mode), "device": str(job.device)},
+            )
 
         degraded_marked = False
 
@@ -2702,6 +2716,9 @@ class JobQueue:
                 output_srt=str(subs_srt_path) if subs_srt_path else "",
                 work_dir=str(base_dir),
             )
+            # Best-effort library mirror + manifest (must never affect job success).
+            with suppress(Exception):
+                self._write_library_artifacts_best_effort(job_id=job_id, base_dir=base_dir)
             # Optional: job-finish notification (best-effort, no impact on pipeline success).
             with suppress(Exception):
                 await self._notify_job_finished(job_id, state="DONE")
@@ -2714,6 +2731,13 @@ class JobQueue:
                     self.store.update(job_id, runtime=rt2)
             jobs_finished.labels(state="DONE").inc()
             self.store.append_log(job_id, f"[{now_utc()}] done in {time.perf_counter()-t0:.2f}s")
+            with suppress(Exception):
+                audit.emit(
+                    "job.finished",
+                    user_id=str(job.owner_id or "") or None,
+                    job_id=str(job_id),
+                    meta={"state": "DONE"},
+                )
             # Cleanup temp workdir (keep logs + checkpoint + final outputs in Output/<stem>/).
             with suppress(Exception):
                 shutil.rmtree(work_dir, ignore_errors=True)
@@ -2721,15 +2745,32 @@ class JobQueue:
             self.store.append_log(job_id, f"[{now_utc()}] canceled")
             self.store.update(job_id, state=JobState.CANCELED, message="Canceled", error=None)
             jobs_finished.labels(state="CANCELED").inc()
+            with suppress(Exception):
+                audit.emit(
+                    "job.canceled",
+                    user_id=str(job.owner_id or "") or None,
+                    job_id=str(job_id),
+                    meta={"state": "CANCELED"},
+                )
             # optional cleanup of in-progress outputs: leave as-is (ignored by state)
         except Exception as ex:
             self.store.append_log(job_id, f"[{now_utc()}] failed: {ex}")
             self.store.update(job_id, state=JobState.FAILED, message="Failed", error=str(ex))
+            # Best-effort library mirror + manifest on failure as well.
+            with suppress(Exception):
+                self._write_library_artifacts_best_effort(job_id=job_id, base_dir=base_dir)
             # Optional: job-finish notification (best-effort).
             with suppress(Exception):
                 await self._notify_job_finished(job_id, state="FAILED")
             jobs_finished.labels(state="FAILED").inc()
             pipeline_job_failed_total.inc()
+            with suppress(Exception):
+                audit.emit(
+                    "job.failed",
+                    user_id=str(job.owner_id or "") or None,
+                    job_id=str(job_id),
+                    meta={"state": "FAILED", "error": str(ex)},
+                )
         finally:
             dt = time.perf_counter() - t0
             logger.info(
@@ -2745,6 +2786,107 @@ class JobQueue:
             with suppress(Exception):
                 if decrypted_video is not None:
                     decrypted_video.unlink(missing_ok=True)
+
+    def _write_library_artifacts_best_effort(self, *, job_id: str, base_dir: Path) -> None:
+        """
+        Best-effort creation of the grouped Library/ mirror and its manifest.json.
+        Must never throw.
+        """
+        job = self.store.get(job_id)
+        if job is None:
+            return
+
+        # Determine output candidates from the canonical Output dir.
+        stem = Path(job.video_path).stem if job.video_path else base_dir.name
+        master = None
+        with suppress(Exception):
+            p = Path(str(job.output_mkv or "")).resolve()
+            if p.exists():
+                master = p
+        if master is None:
+            for cand in [
+                base_dir / f"{stem}.dub.mkv",
+                base_dir / "dub.mkv",
+                *list(base_dir.glob("*.dub.mkv")),
+            ]:
+                if cand.exists():
+                    master = cand.resolve()
+                    break
+
+        mobile = None
+        with suppress(Exception):
+            p = (base_dir / "mobile" / "mobile.mp4").resolve()
+            if p.exists():
+                mobile = p
+
+        hls_index = None
+        with suppress(Exception):
+            p = (base_dir / "mobile" / "hls" / "index.m3u8").resolve()
+            if p.exists():
+                hls_index = p
+            else:
+                p2 = (base_dir / "mobile" / "hls" / "master.m3u8").resolve()
+                if p2.exists():
+                    hls_index = p2
+
+        logs_dir = (base_dir / "logs").resolve()
+        qa_dir = (base_dir / "qa").resolve()
+
+        # Create library dir; fall back to writing manifest under Output/ if it fails.
+        try:
+            from anime_v2.library.paths import ensure_library_dir, mirror_outputs_best_effort
+            from anime_v2.library.manifest import write_manifest
+
+            lib_dir = ensure_library_dir(job)
+            if lib_dir is None:
+                raise RuntimeError("library_dir_unavailable")
+
+            mirror_outputs_best_effort(
+                job=job,
+                library_dir=lib_dir,
+                master=master,
+                mobile=mobile,
+                hls_index=hls_index,
+                output_dir=base_dir,
+            )
+            write_manifest(
+                job=job,
+                outputs={
+                    "library_dir": str(lib_dir),
+                    "master": str(master) if master else None,
+                    "mobile": str(mobile) if mobile else None,
+                    "hls_index": str(hls_index) if hls_index else None,
+                    "logs_dir": str(logs_dir) if logs_dir.exists() else None,
+                    "qa_dir": str(qa_dir) if qa_dir.exists() else None,
+                },
+                extra={"output_dir": str(base_dir)},
+            )
+            return
+        except Exception as ex:
+            with suppress(Exception):
+                self.store.append_log(job_id, f"[{now_utc()}] library mirror failed: {ex}")
+
+        # Fallback: write manifest under the canonical Output job dir (best-effort).
+        try:
+            from anime_v2.library.manifest import write_manifest
+
+            out_manifest_dir = base_dir
+            out_manifest_dir.mkdir(parents=True, exist_ok=True)
+            write_manifest(
+                job=job,
+                outputs={
+                    "library_dir": str(out_manifest_dir),
+                    "master": str(master) if master else None,
+                    "mobile": str(mobile) if mobile else None,
+                    "hls_index": str(hls_index) if hls_index else None,
+                    "logs_dir": str(logs_dir) if logs_dir.exists() else None,
+                    "qa_dir": str(qa_dir) if qa_dir.exists() else None,
+                },
+                extra={"fallback": True, "output_dir": str(base_dir)},
+            )
+        except Exception:
+            # Final fallback: no manifest.
+            return
 
     async def _notify_job_finished(self, job_id: str, *, state: str) -> None:
         """

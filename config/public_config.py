@@ -46,6 +46,11 @@ class PublicConfig(BaseSettings):
     log_dir: Path = Field(
         default_factory=lambda: (Path.cwd() / "logs").resolve(), alias="ANIME_V2_LOG_DIR"
     )
+    # Runtime-only state directory (DBs, internal state). Prefer a non-repo mount in production.
+    # If unset, defaults to "<ANIME_V2_OUTPUT_DIR>/_state".
+    state_dir: Path | None = Field(default=None, alias="ANIME_V2_STATE_DIR")
+    auth_db_name: str = Field(default="auth.db", alias="ANIME_V2_AUTH_DB_NAME")
+    jobs_db_name: str = Field(default="jobs.db", alias="ANIME_V2_JOBS_DB_NAME")
     cache_dir: Path | None = Field(default=None, alias="ANIME_V2_CACHE_DIR")
     models_dir: Path = Field(default=Path("/models"), alias="MODELS_DIR")
 
@@ -76,6 +81,9 @@ class PublicConfig(BaseSettings):
 
     # --- per-user settings storage ---
     user_settings_path: Path | None = Field(default=None, alias="ANIME_V2_SETTINGS_PATH")
+
+    # --- UI telemetry / audit (optional; off by default to avoid noisy logs) ---
+    ui_audit_page_views: bool = Field(default=False, alias="ANIME_V2_UI_AUDIT_PAGE_VIEWS")
 
     # --- alignment / metadata ---
     whisper_word_timestamps: bool = Field(default=False, alias="WHISPER_WORD_TIMESTAMPS")
@@ -352,7 +360,7 @@ class PublicConfig(BaseSettings):
     backpressure_q_max: int = Field(default=6, alias="BACKPRESSURE_Q_MAX")
 
     # Optional per-mode caps (0 => fall back to MAX_CONCURRENCY_GLOBAL)
-    max_jobs_high: int = Field(default=0, alias="MAX_JOBS_HIGH")
+    max_jobs_high: int = Field(default=1, alias="MAX_JOBS_HIGH")
     max_jobs_medium: int = Field(default=0, alias="MAX_JOBS_MEDIUM")
     max_jobs_low: int = Field(default=0, alias="MAX_JOBS_LOW")
 
@@ -376,8 +384,15 @@ class PublicConfig(BaseSettings):
     max_video_height: int = Field(default=0, alias="MAX_VIDEO_HEIGHT")
     max_video_pixels: int = Field(default=0, alias="MAX_VIDEO_PIXELS")
     max_upload_mb: int = Field(default=2048, alias="MAX_UPLOAD_MB")
-    max_concurrent_per_user: int = Field(default=2, alias="MAX_CONCURRENT")
+    max_concurrent_per_user: int = Field(default=1, alias="MAX_CONCURRENT")
     daily_processing_minutes: int = Field(default=240, alias="DAILY_PROCESSING_MINUTES")
+
+    # --- submission policy (v2 jobs) ---
+    # Safe defaults: allow 1 running job per user, small queue, and restrict high mode.
+    max_active_jobs_per_user: int = Field(default=1, alias="ANIME_V2_MAX_ACTIVE_JOBS_PER_USER")
+    max_queued_jobs_per_user: int = Field(default=5, alias="ANIME_V2_MAX_QUEUED_JOBS_PER_USER")
+    daily_job_cap: int = Field(default=0, alias="ANIME_V2_DAILY_JOB_CAP")  # 0 disables
+    high_mode_admin_only: bool = Field(default=True, alias="ANIME_V2_HIGH_MODE_ADMIN_ONLY")
 
     watchdog_audio_s: int = Field(default=10 * 60, alias="WATCHDOG_AUDIO_S")
     watchdog_diarize_s: int = Field(default=20 * 60, alias="WATCHDOG_DIARIZE_S")

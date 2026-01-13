@@ -13,6 +13,24 @@ from anime_v2.ops.storage import ensure_free_space, prune_stale_workdirs
 from anime_v2.server import app
 
 
+def _runtime_video_path(tmp_path: Path) -> str:
+    root = tmp_path.resolve()
+    in_dir = root / "Input"
+    out_dir = root / "Output"
+    logs_dir = root / "logs"
+    in_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    vp = in_dir / "Test.mp4"
+    if not vp.exists():
+        vp.write_bytes(b"\x00" * 1024)
+    os.environ["APP_ROOT"] = str(root)
+    os.environ["INPUT_DIR"] = str(in_dir)
+    os.environ["ANIME_V2_OUTPUT_DIR"] = str(out_dir)
+    os.environ["ANIME_V2_LOG_DIR"] = str(logs_dir)
+    return str(vp)
+
+
 def test_ensure_free_space_raises_507(tmp_path: Path) -> None:
     with pytest.raises(HTTPException) as ex:
         ensure_free_space(min_gb=10**9, path=tmp_path)
@@ -36,8 +54,7 @@ def test_prune_stale_workdirs_removes_old_dirs(tmp_path: Path) -> None:
 
 
 def test_submit_job_returns_507_when_disk_guard_trips(tmp_path: Path) -> None:
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
-    os.environ["APP_ROOT"] = "/workspace"
+    video_path = _runtime_video_path(tmp_path)
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
     os.environ["COOKIE_SECURE"] = "0"
@@ -51,6 +68,6 @@ def test_submit_job_returns_507_when_disk_guard_trips(tmp_path: Path) -> None:
         r2 = c.post(
             "/api/jobs",
             headers=headers,
-            json={"video_path": "/workspace/Input/Test.mp4", "device": "cpu", "mode": "low"},
+            json={"video_path": video_path, "device": "cpu", "mode": "low"},
         )
         assert r2.status_code == 507

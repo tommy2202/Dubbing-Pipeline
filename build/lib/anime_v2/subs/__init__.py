@@ -1,4 +1,0 @@
-"""
-Subtitle utilities (formatting, variants).
-"""
-

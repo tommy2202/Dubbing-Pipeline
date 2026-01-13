@@ -64,6 +64,10 @@ Step 1: pick a file
 - Choose a **server-local file** (restricted to `APP_ROOT/Input`)
 
 Step 2: settings
+- **Library metadata (required)**:
+  - Series name (text)
+  - Season (text; accepts `1`, `01`, `Season 1`, `S1`)
+  - Episode (text; accepts `4`, `04`, `Episode 4`, `E4`)
 - Mode (high/medium/low)
 - Project/profile (optional)
 - Retention/cache policy (full/balanced/minimal)
@@ -73,6 +77,24 @@ Step 3: voice
 - Choose voice mode/preset behavior (varies by configured TTS)
 
 The server will create a job and you’ll be redirected to its page.
+
+---
+
+## Browse the grouped Library (mobile-friendly)
+
+Open:
+- `/ui/library`
+
+Pages:
+- `/ui/library`: series list (search + My/Public toggle)
+- `/ui/library/<series_slug>`: seasons
+- `/ui/library/<series_slug>/season/<season_number>`: episodes
+- `/ui/library/<series_slug>/season/<season_number>/episode/<episode_number>`: playback + versions
+
+Notes:
+- Ordering is server-provided (numeric season/episode sorting).
+- Object-level auth is enforced server-side:
+  - you only see your private jobs, plus other users’ public jobs (admin sees all).
 
 ### Resumable chunked uploads (API)
 The server supports resumable uploads:

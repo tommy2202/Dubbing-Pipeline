@@ -22,6 +22,9 @@
     preset_id: '',
     project_id: '',
     project: '', // filesystem project profile name (projects/<name>/profile.yaml)
+    series_title: '',
+    season_text: '',
+    episode_text: '',
     mode: '{{ (user_defaults.mode if user_defaults and user_defaults.mode else "medium") | e }}',
     device: '{{ (user_defaults.device if user_defaults and user_defaults.device else "auto") | e }}',
     src_lang: '{{ (user_defaults.src_lang if user_defaults and user_defaults.src_lang else "ja") | e }}',
@@ -173,6 +176,36 @@
     <!-- Step 2 -->
     <div x-show="step===2" x-cloak>
       <div class="text-sm text-slate-300">Step 2 — Settings</div>
+      <div class="mt-3 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">Library metadata (required)</div>
+        <div class="mt-1 text-xs text-slate-500">Used for grouped browsing under <code>Library/</code>.</div>
+        <div class="mt-3 grid gap-4 sm:grid-cols-3">
+          <div class="sm:col-span-1">
+            <label class="block text-sm text-slate-300" for="seriesTitle">Series name</label>
+            <input id="seriesTitle" name="series_title"
+                   class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                   placeholder="My Show"
+                   x-model="series_title"
+                   required />
+          </div>
+          <div class="sm:col-span-1">
+            <label class="block text-sm text-slate-300" for="seasonText">Season</label>
+            <input id="seasonText" name="season_text"
+                   class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                   placeholder="S1 / Season 1 / 01"
+                   x-model="season_text"
+                   required />
+          </div>
+          <div class="sm:col-span-1">
+            <label class="block text-sm text-slate-300" for="episodeText">Episode</label>
+            <input id="episodeText" name="episode_text"
+                   class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                   placeholder="E4 / Episode 4 / 04"
+                   x-model="episode_text"
+                   required />
+          </div>
+        </div>
+      </div>
       <div class="mt-3 grid gap-4 sm:grid-cols-2">
         <div>
           <label class="block text-sm text-slate-300" for="presetSel">Preset (optional)</label>
@@ -416,6 +449,9 @@
           class="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-5 py-3 text-sm font-semibold"
           @click="
             error='';
+            if(!String(series_title||'').trim()){ error='Series name is required.'; $event.preventDefault(); return; }
+            if(!String(season_text||'').trim()){ error='Season is required.'; $event.preventDefault(); return; }
+            if(!String(episode_text||'').trim()){ error='Episode is required.'; $event.preventDefault(); return; }
             if(batch){
               if(!files.length){ error='Please choose at least one video file.'; $event.preventDefault(); return; }
             } else {
@@ -456,6 +492,9 @@
         const csrf = document.getElementById("csrf")?.value || "";
         const fd = new FormData(form);
         const cfg = {
+          series_title: String(fd.get("series_title") || ""),
+          season_text: String(fd.get("season_text") || ""),
+          episode_text: String(fd.get("episode_text") || ""),
           mode: String(fd.get("mode") || "medium"),
           device: String(fd.get("device") || "auto"),
           src_lang: String(fd.get("src_lang") || "auto"),

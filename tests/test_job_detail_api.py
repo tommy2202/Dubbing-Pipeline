@@ -10,6 +10,24 @@ from anime_v2.jobs.models import Job, JobState
 from anime_v2.server import app
 
 
+def _runtime_video_path(tmp_path: Path) -> str:
+    root = tmp_path.resolve()
+    in_dir = root / "Input"
+    out_dir = root / "Output"
+    logs_dir = root / "logs"
+    in_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    vp = in_dir / "Test.mp4"
+    if not vp.exists():
+        vp.write_bytes(b"\x00" * 1024)
+    os.environ["APP_ROOT"] = str(root)
+    os.environ["INPUT_DIR"] = str(in_dir)
+    os.environ["ANIME_V2_OUTPUT_DIR"] = str(out_dir)
+    os.environ["ANIME_V2_LOG_DIR"] = str(logs_dir)
+    return str(vp)
+
+
 def _login_admin(c: TestClient) -> dict[str, str]:
     r = c.post("/api/auth/login", json={"username": "admin", "password": "adminpass"})
     assert r.status_code == 200
@@ -18,8 +36,7 @@ def _login_admin(c: TestClient) -> dict[str, str]:
 
 
 def test_job_characters_persist(tmp_path: Path) -> None:
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
-    os.environ["APP_ROOT"] = "/workspace"
+    video_path = _runtime_video_path(tmp_path)
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
     os.environ["COOKIE_SECURE"] = "0"
@@ -33,7 +50,7 @@ def test_job_characters_persist(tmp_path: Path) -> None:
             Job(
                 id="j_char_1",
                 owner_id="u1",
-                video_path="/workspace/Input/Test.mp4",
+                video_path=video_path,
                 duration_s=10.0,
                 mode="low",
                 device="cpu",
@@ -74,8 +91,7 @@ def test_job_characters_persist(tmp_path: Path) -> None:
 
 
 def test_logs_stream_endpoint_returns_sse(tmp_path: Path) -> None:
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
-    os.environ["APP_ROOT"] = "/workspace"
+    video_path = _runtime_video_path(tmp_path)
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
     os.environ["COOKIE_SECURE"] = "0"
@@ -94,7 +110,7 @@ def test_logs_stream_endpoint_returns_sse(tmp_path: Path) -> None:
             Job(
                 id="j_log_1",
                 owner_id="u1",
-                video_path="/workspace/Input/Test.mp4",
+                video_path=video_path,
                 duration_s=10.0,
                 mode="low",
                 device="cpu",

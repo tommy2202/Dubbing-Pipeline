@@ -280,6 +280,71 @@ class Scheduler:
                 "active_phase": dict(self._active_phase),
             }
 
+    def snapshot_queue(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        """
+        Best-effort snapshot of queued JobRecords (for admin UI/API).
+        """
+        lim = max(1, min(500, int(limit)))
+        with self._cv:
+            items = list(self._heap)
+        # Heap items are tuples; sort for stable presentation.
+        items.sort(key=lambda x: (float(x[0]), int(x[1]), float(x[2]), int(x[3])))
+        out: list[dict[str, Any]] = []
+        for available_at, priority, created_at, seq, rec in items[:lim]:
+            out.append(
+                {
+                    "job_id": str(rec.job_id),
+                    "mode": str(rec.mode),
+                    "device_pref": str(rec.device_pref),
+                    "available_at": float(available_at),
+                    "priority": int(priority),
+                    "created_at": float(created_at),
+                    "seq": int(seq),
+                }
+            )
+        return out
+
+    def drop(self, *, job_id: str) -> int:
+        """
+        Remove queued records for a job (does not affect running jobs).
+        Returns number removed.
+        """
+        jid = str(job_id or "")
+        if not jid:
+            return 0
+        with self._cv:
+            before = len(self._heap)
+            self._heap = [it for it in self._heap if str(it[4].job_id) != jid]
+            heapq.heapify(self._heap)
+            removed = before - len(self._heap)
+            if removed:
+                self._cv.notify_all()
+            return int(removed)
+
+    def reprioritize(self, *, job_id: str, priority: int) -> bool:
+        """
+        Update the priority for any queued records of a job.
+        Returns True if any record was updated.
+        """
+        jid = str(job_id or "")
+        if not jid:
+            return False
+        pr = int(priority)
+        updated = False
+        with self._cv:
+            new_heap = []
+            for available_at, pr0, created_at, seq, rec in self._heap:
+                if str(rec.job_id) == jid:
+                    updated = True
+                    new_heap.append((float(available_at), int(pr), float(created_at), int(seq), rec))
+                else:
+                    new_heap.append((float(available_at), int(pr0), float(created_at), int(seq), rec))
+            if updated:
+                self._heap = new_heap
+                heapq.heapify(self._heap)
+                self._cv.notify_all()
+        return bool(updated)
+
     def _dispatch_loop(self) -> None:
         while True:
             with self._cv:
