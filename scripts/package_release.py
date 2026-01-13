@@ -116,9 +116,9 @@ def iter_included_files(root: Path, spec: PackageSpec) -> list[Path]:
             continue
         out.append(fp)
 
-    # Explicitly include placeholders (even though Input/Output are excluded).
-    for placeholder in ("Input/.gitkeep", "Output/.gitkeep"):
-        fp = (root / placeholder).resolve()
+    # Explicitly include keep markers (even though Input/Output are excluded).
+    for keep_path in ("Input/.gitkeep", "Output/.gitkeep"):
+        fp = (root / keep_path).resolve()
         if fp.exists():
             out.append(fp)
 

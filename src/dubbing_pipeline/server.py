@@ -232,6 +232,8 @@ async def lifespan(app: FastAPI):
     finally:
         if _prune_task is not None:
             _prune_task.cancel()
+            with suppress(Exception):
+                await _prune_task
         await q.stop()
 
 

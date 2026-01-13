@@ -24,7 +24,7 @@ def main() -> int:
         os.makedirs(out_dir, exist_ok=True)
         os.makedirs(in_dir, exist_ok=True)
 
-        # A small dummy mp4 placeholder file (not necessarily valid media)
+        # A small dummy MP4 test file (not necessarily valid media)
         dummy_mp4 = os.path.join(in_dir, "Test.mp4")
         with open(dummy_mp4, "wb") as f:
             f.write(b"\x00" * 1024)

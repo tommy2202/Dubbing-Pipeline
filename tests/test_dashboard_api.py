@@ -20,7 +20,7 @@ def _runtime_video_path(tmp_path: Path) -> str:
     logs_dir.mkdir(parents=True, exist_ok=True)
     vp = in_dir / "Test.mp4"
     if not vp.exists():
-        # Minimal placeholder file; tests validate path safety, not media decoding.
+        # Minimal dummy file; tests validate path safety, not media decoding.
         vp.write_bytes(b"\x00" * 1024)
     os.environ["APP_ROOT"] = str(root)
     os.environ["INPUT_DIR"] = str(in_dir)

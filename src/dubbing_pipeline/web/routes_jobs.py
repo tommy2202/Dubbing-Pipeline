@@ -667,7 +667,7 @@ async def list_server_files(
 
 
 def _app_root() -> Path:
-    # CI compatibility: many tests and docs use `/workspace` as a stable placeholder path.
+    # CI compatibility: many tests and docs use `/workspace` as a stable example path.
     # On some CI runners, the repo checkout is not actually mounted at `/workspace`.
     # If APP_ROOT is set to `/workspace` but that directory doesn't exist, treat the
     # current working directory as the effective app root.
@@ -721,7 +721,7 @@ def _sanitize_video_path(p: str) -> Path:
 
     # CI compatibility: some environments check out the repo under a non-/workspace path.
     # Tests (and some docs/scripts) historically reference absolute `/workspace/...` paths.
-    # If `/workspace` does not exist on this host, treat it as a placeholder for APP_ROOT.
+    # If `/workspace` does not exist on this host, treat it as an example for APP_ROOT.
     if raw.is_absolute() and not resolved.exists():
         try:
             if not Path("/workspace").exists() and str(raw).startswith("/workspace/"):
