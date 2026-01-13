@@ -22,6 +22,7 @@ from anime_v2.api.remote_access import log_remote_access_boot_summary, remote_ac
 from anime_v2.api.routes_audit import router as audit_router
 from anime_v2.api.routes_auth import router as auth_router
 from anime_v2.api.routes_keys import router as keys_router
+from anime_v2.api.routes_library import router as library_router
 from anime_v2.api.routes_runtime import router as runtime_router
 from anime_v2.api.routes_settings import UserSettingsStore
 from anime_v2.api.routes_settings import router as settings_router
@@ -276,6 +277,7 @@ app.include_router(audit_router)
 app.include_router(keys_router)
 app.include_router(runtime_router)
 app.include_router(settings_router)
+app.include_router(library_router)
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
 app.include_router(ui_router)
