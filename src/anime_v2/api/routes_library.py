@@ -22,10 +22,14 @@ async def library_series(
     limit: int = 50,
     offset: int = 0,
     order: str = "title",
+    q: str = "",
+    view: str = "all",
     ident: Identity = Depends(require_scope("read:job")),
 ):
     store = _store(request)
-    items, meta = queries.list_series(store=store, ident=ident, limit=limit, offset=offset, order=order)
+    items, meta = queries.list_series(
+        store=store, ident=ident, limit=limit, offset=offset, order=order, q=q, view=view
+    )
     logger.info(
         "library_series",
         user_id=str(ident.user.id),
@@ -35,6 +39,8 @@ async def library_series(
         limit=int(meta.get("limit") or limit),
         offset=int(meta.get("offset") or offset),
         order=str(meta.get("order") or order),
+        q=str(meta.get("q") or ""),
+        view=str(view or "all"),
     )
     return items
 
@@ -45,11 +51,12 @@ async def library_seasons(
     series_slug: str,
     limit: int = 200,
     offset: int = 0,
+    view: str = "all",
     ident: Identity = Depends(require_scope("read:job")),
 ):
     store = _store(request)
     items, meta = queries.list_seasons(
-        store=store, ident=ident, series_slug=series_slug, limit=limit, offset=offset
+        store=store, ident=ident, series_slug=series_slug, limit=limit, offset=offset, view=view
     )
     logger.info(
         "library_seasons",
@@ -60,6 +67,7 @@ async def library_seasons(
         visibility_filter=str(meta.get("visibility_filter")),
         limit=int(meta.get("limit") or limit),
         offset=int(meta.get("offset") or offset),
+        view=str(view or "all"),
     )
     return items
 
@@ -73,6 +81,7 @@ async def library_episodes(
     offset: int = 0,
     episode_number: int | None = None,
     include_versions: int = 0,
+    view: str = "all",
     ident: Identity = Depends(require_scope("read:job")),
 ):
     store = _store(request)
@@ -85,6 +94,7 @@ async def library_episodes(
         offset=offset,
         episode_number=episode_number,
         include_versions=bool(int(include_versions or 0)),
+        view=view,
     )
     logger.info(
         "library_episodes",
@@ -98,6 +108,7 @@ async def library_episodes(
         episode_number=meta.get("episode_number"),
         limit=int(meta.get("limit") or limit),
         offset=int(meta.get("offset") or offset),
+        view=str(view or "all"),
     )
     return items
 

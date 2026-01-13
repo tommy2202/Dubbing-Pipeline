@@ -197,6 +197,18 @@ def main() -> int:
         slugs = [x["series_slug"] for x in items]
         assert slugs == ["a-public-show", "my-show"], slugs
 
+        # View toggle: public-only excludes alice private series.
+        r_pub = c.get("/api/library/series?view=public", headers=h_alice)
+        assert r_pub.status_code == 200, r_pub.text
+        slugs_pub = [x["series_slug"] for x in r_pub.json()]
+        assert slugs_pub == ["a-public-show"], slugs_pub
+
+        # Search filters server-side but preserves ordering.
+        r_q = c.get("/api/library/series?q=public", headers=h_alice)
+        assert r_q.status_code == 200, r_q.text
+        slugs_q = [x["series_slug"] for x in r_q.json()]
+        assert slugs_q == ["a-public-show"], slugs_q
+
         # Admin sees bob-secret too.
         r2 = c.get("/api/library/series", headers=h_admin)
         assert r2.status_code == 200, r2.text

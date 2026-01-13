@@ -82,6 +82,9 @@ class PublicConfig(BaseSettings):
     # --- per-user settings storage ---
     user_settings_path: Path | None = Field(default=None, alias="ANIME_V2_SETTINGS_PATH")
 
+    # --- UI telemetry / audit (optional; off by default to avoid noisy logs) ---
+    ui_audit_page_views: bool = Field(default=False, alias="ANIME_V2_UI_AUDIT_PAGE_VIEWS")
+
     # --- alignment / metadata ---
     whisper_word_timestamps: bool = Field(default=False, alias="WHISPER_WORD_TIMESTAMPS")
 

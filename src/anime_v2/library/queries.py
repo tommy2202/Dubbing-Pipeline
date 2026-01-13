@@ -41,6 +41,25 @@ def _visibility_where(*, ident: Identity) -> tuple[str, list[Any], str]:
     return "(owner_user_id = ? OR visibility = 'public')", [str(ident.user.id)], "owner_or_public"
 
 
+def _visibility_where_with_view(*, ident: Identity, view: str | None) -> tuple[str, list[Any], str]:
+    """
+    Visibility filter with an optional 'view' selector used by UI toggles.
+
+    view:
+      - all (default): owner_or_public (or admin_all)
+      - mine: only owner's items
+      - public: only public items
+    """
+    v = str(view or "all").strip().lower()
+    if v in {"my", "mine", "owner"}:
+        if ident.user.role == Role.admin:
+            return "1=1", [], "admin_all"
+        return "owner_user_id = ?", [str(ident.user.id)], "owner_only"
+    if v in {"pub", "public"}:
+        return "visibility = 'public'", [], "public_only"
+    return _visibility_where(ident=ident)
+
+
 def list_series(
     *,
     store: JobStore,
@@ -48,6 +67,8 @@ def list_series(
     limit: int | None = None,
     offset: int | None = None,
     order: str | None = None,
+    q: str | None = None,
+    view: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
     Returns (items, meta).
@@ -57,7 +78,15 @@ def list_series(
     if order_eff not in {"title", "recent"}:
         order_eff = "title"
 
-    vis_where, vis_params, vis_label = _visibility_where(ident=ident)
+    vis_where, vis_params, vis_label = _visibility_where_with_view(ident=ident, view=view)
+
+    q_text = str(q or "").strip()
+    q_like = f"%{q_text.lower()}%" if q_text else ""
+    q_where = ""
+    q_params: list[Any] = []
+    if q_text:
+        q_where = "AND (lower(series_title) LIKE ? OR lower(series_slug) LIKE ?)"
+        q_params = [q_like, q_like]
 
     # Note: series_title may differ between versions; pick the most recently updated title.
     order_sql = (
@@ -78,6 +107,7 @@ def list_series(
       WHERE series_slug IS NOT NULL
         AND series_slug != ''
         AND {vis_where}
+        {q_where}
     ),
     latest_title AS (
       SELECT
@@ -111,7 +141,9 @@ def list_series(
 
     con = _conn(store)
     try:
-        rows = con.execute(sql, [*vis_params, page.limit, page.offset]).fetchall()
+        rows = con.execute(
+            sql, [*vis_params, *q_params, page.limit, page.offset]
+        ).fetchall()
         items = [
             {
                 "series_slug": str(r["series_slug"]),
@@ -127,6 +159,7 @@ def list_series(
             "offset": page.offset,
             "order": order_eff,
             "visibility_filter": vis_label,
+            "q": q_text,
         }
     finally:
         con.close()
@@ -139,10 +172,11 @@ def list_seasons(
     series_slug: str,
     limit: int | None = None,
     offset: int | None = None,
+    view: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     page = _page(limit, offset)
     slug = str(series_slug or "").strip()
-    vis_where, vis_params, vis_label = _visibility_where(ident=ident)
+    vis_where, vis_params, vis_label = _visibility_where_with_view(ident=ident, view=view)
 
     sql = f"""
     SELECT
@@ -187,13 +221,14 @@ def list_episodes(
     offset: int | None = None,
     episode_number: int | None = None,
     include_versions: bool = False,
+    view: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     page = _page(limit, offset)
     slug = str(series_slug or "").strip()
     season = int(season_number)
     ep_filter = int(episode_number) if episode_number is not None else None
     include_versions_b = bool(include_versions)
-    vis_where, vis_params, vis_label = _visibility_where(ident=ident)
+    vis_where, vis_params, vis_label = _visibility_where_with_view(ident=ident, view=view)
 
     where_ep = ""
     params: list[Any] = [slug, season, *vis_params]
