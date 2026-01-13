@@ -4,7 +4,7 @@ import re
 import unicodedata
 
 _WS_RE = re.compile(r"\s+")
-_INT_RE = re.compile(r"(\d+)")
+_INT_RE = re.compile(r"(-?\d+)")
 
 
 def normalize_series_title(title: str) -> str:
