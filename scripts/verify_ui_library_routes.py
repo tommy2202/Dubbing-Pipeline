@@ -37,7 +37,7 @@ def main() -> int:
 
         with TestClient(app) as c:
             # Unauthed redirects
-            r = c.get("/ui/library", allow_redirects=False)
+            r = c.get("/ui/library", follow_redirects=False)
             assert r.status_code in {302, 307}, r.text
 
             # login (cookie session)
