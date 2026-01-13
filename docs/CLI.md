@@ -24,6 +24,20 @@ anime-v2 character --help
 ### What it does
 Runs the full pipeline on a local video file (or a batch of files) and writes outputs under `Output/<stem>/`.
 
+Library grouping (optional, best-effort):
+- The CLI writes a `manifest.json` and a grouped mirror under `Output/Library/...` when possible.
+- CLI metadata is currently supplied via environment variables (until explicit CLI flags are added).
+
+Set these before running to populate library metadata:
+
+```bash
+export ANIME_V2_SERIES_TITLE="My Show"
+export ANIME_V2_SEASON_NUMBER="S1"      # accepts S1 / Season 1 / 01
+export ANIME_V2_EPISODE_NUMBER="E04"    # accepts E4 / Episode 4 / 04
+export ANIME_V2_OWNER_USER_ID="u_me"    # optional; affects manifest owner_user_id
+export ANIME_V2_VISIBILITY="private"    # public|private (optional)
+```
+
 ### Runtime folders + sample media
 
 - `Input/` and `Output/` are **runtime-only** folders and must not be committed.

@@ -9,7 +9,10 @@ Key principle: **optional features are opt-in** or degrade gracefully when depen
 ## Core pipeline (always available)
 
 - **Input**: local video files (MP4/MKV/MOV/WebM).
-- **Outputs**: written under `Output/<stem>/` (see `docs/OVERVIEW.md`).
+- **Outputs (canonical)**: written under `Output/<stem>/` (see `docs/OVERVIEW.md`).
+- **Library grouping (mirror)**: best-effort mirror under `Output/Library/<series>/season-XX/episode-YY/job-<job_id>/`.
+  - A `manifest.json` is written (best-effort) containing playback URLs/paths and metadata.
+  - If links cannot be created (Windows symlink restrictions), the Library folder still contains a manifest + pointer files.
 - **Core stages**:
   - audio extraction
   - ASR (speech-to-text)
@@ -21,6 +24,20 @@ Key principle: **optional features are opt-in** or degrade gracefully when depen
 - `Output/<stem>/<stem>.dub.mp4`
 - `Output/<stem>/job.log`
 - `Output/<stem>/.checkpoint.json` (best-effort resume metadata)
+- `Output/<stem>/manifest.json` (best-effort library manifest fallback)
+- `Output/Library/.../manifest.json` (preferred grouped library manifest)
+
+### Required metadata for web submissions
+New job submissions via the web/API require:
+- **Series name** (`series_title`)
+- **Season** (`season_text` / `season_number`)
+- **Episode** (`episode_text` / `episode_number`)
+
+These are normalized and stored as:
+- `series_title` (trimmed)
+- `series_slug` (normalized)
+- `season_number` (int)
+- `episode_number` (int)
 
 ---
 
