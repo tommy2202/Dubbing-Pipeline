@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import CancelledError as FuturesCancelledError
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -65,29 +66,34 @@ def main() -> int:
 
     get_settings.cache_clear()
 
-    with TestClient(app) as c:
-        # failed login (should audit + not leak password)
-        _ = c.post("/api/auth/login", json={"username": "admin", "password": "wrong", "session": True})
+    try:
+        with TestClient(app) as c:
+            # failed login (should audit + not leak password)
+            _ = c.post("/api/auth/login", json={"username": "admin", "password": "wrong", "session": True})
 
-        hdr = _login(c, "admin", admin_pw)
-        assert hdr
+            hdr = _login(c, "admin", admin_pw)
+            assert hdr
 
-        # create an API key (response contains key; must never show up in logs due to masking)
-        r = c.post("/keys", json={"scopes": ["read:job"]}, headers=hdr)
-        assert r.status_code == 200, r.text
-        key_plain = r.json()["key"]
+            # create an API key (response contains key; must never show up in logs due to masking)
+            r = c.post("/keys", json={"scopes": ["read:job"]}, headers=hdr)
+            assert r.status_code == 200, r.text
+            key_plain = r.json()["key"]
 
-        # Use the key in a request (should not leak in logs)
-        r2 = c.get("/api/jobs?limit=1", headers={"X-Api-Key": key_plain})
-        assert r2.status_code in (200, 403), r2.text
+            # Use the key in a request (should not leak in logs)
+            r2 = c.get("/api/jobs?limit=1", headers={"X-Api-Key": key_plain})
+            assert r2.status_code in (200, 403), r2.text
 
-        # Create a trivial upload init + ensure audit emits
-        r3 = c.post(
-            "/api/uploads/init",
-            json={"filename": "x.mp4", "total_bytes": 1024},
-            headers=hdr,
-        )
-        assert r3.status_code == 200, r3.text
+            # Create a trivial upload init + ensure audit emits
+            r3 = c.post(
+                "/api/uploads/init",
+                json={"filename": "x.mp4", "total_bytes": 1024},
+                headers=hdr,
+            )
+            assert r3.status_code == 200, r3.text
+    except FuturesCancelledError:
+        # Some Starlette/AnyIO combinations can raise CancelledError on shutdown.
+        # The assertions above already ran; treat shutdown cancellation as clean exit.
+        pass
 
     needles = [jwt, sess, csrf, api, admin_pw, key_plain]
     hits = []
