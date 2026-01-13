@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
+import os
 from contextlib import suppress
 from pathlib import Path
 
@@ -22,6 +23,10 @@ from anime_v2.utils.embeds import ecapa_embedding
 from anime_v2.utils.io import read_json
 from anime_v2.utils.log import logger
 from anime_v2.utils.net import install_egress_policy
+from anime_v2.jobs.models import Job, JobState, Visibility, now_utc
+from anime_v2.library.normalize import parse_int_strict, series_to_slug
+from anime_v2.library.paths import get_job_output_root, ensure_library_dir, mirror_outputs_best_effort
+from anime_v2.library.manifest import write_manifest
 from anime_v2.utils.paths import output_dir_for
 from anime_v2.utils.subtitles import write_vtt
 from anime_v2.utils.time import format_srt_timestamp
@@ -1352,7 +1357,48 @@ def run(
     # Output layout requirement:
     # Output/<video_stem>/{wav,srt,tts.wav,dub.mkv}
     stem = video.stem
-    out_dir = output_dir_for(video)
+    # Canonical Output/ layout for CLI runs (single source of truth).
+    # CLI uses the video stem as a stable local "job_id".
+    series_title = str(os.environ.get("ANIME_V2_SERIES_TITLE") or "").strip() or str(video.stem)
+    season_number = parse_int_strict(
+        os.environ.get("ANIME_V2_SEASON_NUMBER") or os.environ.get("ANIME_V2_SEASON") or 1,
+        "season_number",
+    )
+    episode_number = parse_int_strict(
+        os.environ.get("ANIME_V2_EPISODE_NUMBER") or os.environ.get("ANIME_V2_EPISODE") or 1,
+        "episode_number",
+    )
+    owner_user_id = str(os.environ.get("ANIME_V2_OWNER_USER_ID") or "").strip()
+    vis_s = str(os.environ.get("ANIME_V2_VISIBILITY") or "private").strip().lower()
+    vis = Visibility.public if vis_s == "public" else Visibility.private
+
+    cli_job = Job(
+        id=str(video.stem),
+        owner_id=owner_user_id,
+        video_path=str(video),
+        duration_s=0.0,
+        mode=str(mode),
+        device=str(device),
+        src_lang=str(src_lang),
+        tgt_lang=str(tgt_lang),
+        created_at=now_utc(),
+        updated_at=now_utc(),
+        state=JobState.RUNNING,
+        progress=0.0,
+        message="Running",
+        output_mkv="",
+        output_srt="",
+        work_dir="",
+        log_path="",
+        error=None,
+        series_title=str(series_title),
+        series_slug=series_to_slug(series_title),
+        season_number=int(season_number),
+        episode_number=int(episode_number),
+        visibility=vis,
+    )
+
+    out_dir = get_job_output_root(cli_job)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Per-project profile (optional): may set mix presets + QA thresholds + provenance.
@@ -3023,6 +3069,81 @@ def run(
             shutil.rmtree(out_dir / "work_privacy", ignore_errors=True)
     except Exception:
         pass
+
+    # Best-effort Library/ mirror + manifest.json for CLI runs.
+    # Must never throw or affect pipeline success.
+    with suppress(Exception):
+        cli_job.state = JobState.DONE
+        cli_job.progress = 1.0
+        cli_job.message = "Done"
+        # CLI final output is typically Output/<stem>/dub.mkv
+        master = None
+        with suppress(Exception):
+            p = (out_dir / "dub.mkv").resolve()
+            if p.exists():
+                master = p
+        if master is None:
+            with suppress(Exception):
+                for p in list(out_dir.glob("*.dub.mkv")):
+                    if p.exists():
+                        master = p.resolve()
+                        break
+
+        mobile = None
+        with suppress(Exception):
+            p = (out_dir / "mobile" / "mobile.mp4").resolve()
+            if p.exists():
+                mobile = p
+
+        hls_index = None
+        with suppress(Exception):
+            p = (out_dir / "mobile" / "hls" / "index.m3u8").resolve()
+            if p.exists():
+                hls_index = p
+            else:
+                p2 = (out_dir / "mobile" / "hls" / "master.m3u8").resolve()
+                if p2.exists():
+                    hls_index = p2
+
+        logs_dir = (out_dir / "logs").resolve()
+        qa_dir = (out_dir / "qa").resolve()
+
+        lib_dir = ensure_library_dir(cli_job)
+        if lib_dir is not None:
+            mirror_outputs_best_effort(
+                job=cli_job,
+                library_dir=lib_dir,
+                master=master,
+                mobile=mobile,
+                hls_index=hls_index,
+                output_dir=out_dir,
+            )
+            write_manifest(
+                job=cli_job,
+                outputs={
+                    "library_dir": str(lib_dir),
+                    "master": str(master) if master else None,
+                    "mobile": str(mobile) if mobile else None,
+                    "hls_index": str(hls_index) if hls_index else None,
+                    "logs_dir": str(logs_dir) if logs_dir.exists() else None,
+                    "qa_dir": str(qa_dir) if qa_dir.exists() else None,
+                },
+                extra={"output_dir": str(out_dir)},
+            )
+        else:
+            # Fallback: write manifest into Output/<stem>/ if Library is unavailable.
+            write_manifest(
+                job=cli_job,
+                outputs={
+                    "library_dir": str(out_dir),
+                    "master": str(master) if master else None,
+                    "mobile": str(mobile) if mobile else None,
+                    "hls_index": str(hls_index) if hls_index else None,
+                    "logs_dir": str(logs_dir) if logs_dir.exists() else None,
+                    "qa_dir": str(qa_dir) if qa_dir.exists() else None,
+                },
+                extra={"fallback": True, "output_dir": str(out_dir)},
+            )
 
 
 # Public entrypoint (project.scripts -> anime_v2.cli:cli)
