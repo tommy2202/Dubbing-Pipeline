@@ -10,7 +10,7 @@ import wave
 from pathlib import Path
 
 from dubbing_pipeline.stages import tts
-from dubbing_pipeline.voice_memory.ref_extraction import VoiceRefConfig, extract_speaker_refs
+from dubbing_pipeline.voice_refs.extract_refs import ExtractRefsConfig, extract_speaker_refs
 
 
 def _write_wav(path: Path, *, sr: int, samples: list[int]) -> None:
@@ -104,17 +104,26 @@ def main() -> int:
                 }
             )
 
-        # Pass 1: extract refs.
+        # Pass 1: extract refs (job-local).
         voice_store = root / "voice_store"
-        cfg = VoiceRefConfig(target_s=3.0, min_candidate_s=0.5, max_candidate_s=6.0, overlap_eps_s=0.01)
-        man = extract_speaker_refs(segments=diar_segments, voice_store_dir=voice_store, job_dir=root, cfg=cfg)
-        items = man.get("items") or {}
+        out_refs = root / "voice_refs"
+        cfg = ExtractRefsConfig(target_seconds=3.0, min_seg_seconds=0.5, max_seg_seconds=6.0, overlap_eps_s=0.01)
+        man = extract_speaker_refs(diar_segments, audio, out_refs, cfg)
+        items = man.get("items") if isinstance(man, dict) else None
+        assert isinstance(items, dict)
         assert "SPEAKER_01" in items and "SPEAKER_02" in items, items.keys()
-        # Ensure job-local refs exist.
+        # Ensure refs exist.
         for sid in ("SPEAKER_01", "SPEAKER_02"):
-            job_ref = Path(str(items[sid].get("job_ref_path") or ""))
-            assert job_ref.exists(), f"missing job_ref_path for {sid}"
-            assert 1.0 <= _dur(job_ref) <= 6.0
+            rp = Path(str(items[sid].get("ref_path") or ""))
+            assert rp.exists(), f"missing ref_path for {sid}"
+            assert 1.0 <= _dur(rp) <= 6.0
+
+        # Create TTS-compatible voice_ref_dir (expects <speaker_id>.wav).
+        ref_dir = (root / "analysis" / "voice_refs").resolve()
+        ref_dir.mkdir(parents=True, exist_ok=True)
+        for sid in ("SPEAKER_01", "SPEAKER_02"):
+            src = Path(str(items[sid].get("ref_path") or "")).resolve()
+            (ref_dir / f"{sid}.wav").write_bytes(src.read_bytes())
 
         # Minimal translated.json
         translated = root / "translated.json"
@@ -161,7 +170,6 @@ def main() -> int:
         # Pass 2 TTS (clone mode) using extracted refs.
         out2 = root / "pass2"
         wav2 = out2 / "tts.wav"
-        ref_dir = (root / "analysis" / "voice_refs").resolve()
         assert ref_dir.exists(), "expected job-local refs directory"
         tts.run(
             out_dir=out2,

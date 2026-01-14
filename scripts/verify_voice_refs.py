@@ -7,7 +7,7 @@ import tempfile
 import wave
 from pathlib import Path
 
-from dubbing_pipeline.voice_memory.ref_extraction import VoiceRefConfig, extract_speaker_refs
+from dubbing_pipeline.voice_refs.extract_refs import ExtractRefsConfig, extract_speaker_refs
 
 
 def _write_wav(path: Path, *, sr: int, samples: list[int]) -> None:
@@ -106,9 +106,9 @@ def main() -> int:
                 }
             )
 
-        voice_store = root / "voice_store"
-        cfg = VoiceRefConfig(target_s=5.0, min_candidate_s=0.5, max_candidate_s=6.0, overlap_eps_s=0.01)
-        man = extract_speaker_refs(segments=diar_segments, voice_store_dir=voice_store, job_dir=root, cfg=cfg)
+        out_dir = root / "voice_refs"
+        cfg = ExtractRefsConfig(target_seconds=5.0, min_seg_seconds=0.5, max_seg_seconds=6.0, overlap_eps_s=0.01)
+        man = extract_speaker_refs(diar_segments, audio, out_dir, cfg)
 
         items = man.get("items") or {}
         assert "SPEAKER_01" in items, items.keys()
