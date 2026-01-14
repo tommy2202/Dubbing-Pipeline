@@ -716,6 +716,7 @@ class JobQueue:
             diar_segments: list[dict] = []
             speaker_embeddings: dict[str, str] = {}
             vm_store = None
+            diar_route = None
 
             def _build_voice_refs_best_effort() -> None:
                 # Post-diarization: build per-speaker reference WAVs (best-effort, safe).
@@ -778,6 +779,24 @@ class JobQueue:
             try:
                 self.store.update(job_id, progress=0.12, message="Diarizing speakers")
                 self.store.append_log(job_id, f"[{now_utc()}] diarize")
+                try:
+                    from dubbing_pipeline.audio.routing import resolve_diarization_input
+
+                    diar_route = resolve_diarization_input(
+                        job,
+                        extracted_wav=Path(str(wav)),
+                        base_dir=base_dir,
+                        separation_enabled=bool(mix_mode == "enhanced" and sep_mode == "demucs"),
+                    )
+                except Exception:
+                    diar_route = None
+                diar_wav = diar_route.wav if diar_route is not None else Path(str(wav))
+                diar_kind = diar_route.kind if diar_route is not None else "original"
+                diar_rel = diar_route.rel_path if diar_route is not None else str(diar_wav.name)
+                self.store.append_log(
+                    job_id,
+                    f"[{now_utc()}] diarize input={diar_kind} path={diar_rel}",
+                )
                 if diar_json_work.exists() and diar_json_public.exists() and stage_is_done(
                     ckpt, "diarize"
                 ):
@@ -797,7 +816,7 @@ class JobQueue:
                     "diarize",
                     timeout_s=limits.timeout_diarize_s,
                     fn=diarize_v2,
-                    args=(str(wav),),
+                    args=(str(diar_wav),),
                     kwargs={"device": _select_device(job.device), "cfg": cfg},
                     cancel_check=_cancel_check_sync,
                     cancel_exc=JobCanceled(),
@@ -825,7 +844,7 @@ class JobQueue:
                         base_analysis_dir = base_dir / "analysis"
                         base_analysis_dir.mkdir(parents=True, exist_ok=True)
 
-                        scenes = detect_scenes_audio(Path(str(wav)))
+                        scenes = detect_scenes_audio(Path(str(diar_wav)))
                         utts2, changes = smooth_speakers_in_scenes(
                             utts,
                             scenes,
@@ -893,10 +912,14 @@ class JobQueue:
                     seg_wav = seg_dir / f"{i:04d}_{lab}.wav"
                     try:
                         extract_audio_mono_16k(
-                            src=Path(str(wav)), dst=seg_wav, start_s=s, end_s=e, timeout_s=120
+                            src=Path(str(diar_wav)),
+                            dst=seg_wav,
+                            start_s=s,
+                            end_s=e,
+                            timeout_s=120,
                         )
                     except Exception:
-                        seg_wav = Path(str(wav))
+                        seg_wav = Path(str(diar_wav))
                     by_label.setdefault(lab, []).append((s, e, seg_wav))
 
                 show = str(settings.show_id) if settings.show_id else stem
@@ -1026,7 +1049,9 @@ class JobQueue:
                 write_json(
                     diar_json_work,
                     {
-                        "audio_path": str(wav),
+                        "audio_path": str(diar_wav),
+                        "diarization_input": str(diar_kind),
+                        "diarization_input_rel": str(diar_rel),
                         "segments": diar_segments,
                         "speaker_embeddings": speaker_embeddings,
                     },
@@ -1045,7 +1070,15 @@ class JobQueue:
                         )
                     except Exception:
                         continue
-                write_json(diar_json_public, {"audio_path": str(wav), "segments": pub_segments})
+                write_json(
+                    diar_json_public,
+                    {
+                        "audio_path": str(diar_wav),
+                        "diarization_input": str(diar_kind),
+                        "diarization_input_rel": str(diar_rel),
+                        "segments": pub_segments,
+                    },
+                )
                 self.store.update(
                     job_id,
                     progress=0.25,
@@ -1061,6 +1094,25 @@ class JobQueue:
                         ckpt_path=ckpt_path,
                     )
                     ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
+
+                # Stage manifest: record diarization input routing decision (best-effort).
+                with suppress(Exception):
+                    from dubbing_pipeline.jobs.manifests import file_fingerprint, write_stage_manifest
+
+                    write_stage_manifest(
+                        job_dir=base_dir,
+                        stage="diarize",
+                        inputs={"audio_wav": file_fingerprint(Path(str(diar_wav)))},
+                        params={
+                            "diarizer": str(settings.diarizer),
+                            "diarization_input": str(diar_kind),
+                            "diarization_input_rel": str(diar_rel),
+                        },
+                        outputs={
+                            "diarization_work_json": str(diar_json_work.resolve()),
+                            "diarization_public_json": str(diar_json_public.resolve()),
+                        },
+                    )
 
                 _build_voice_refs_best_effort()
             except _DiarizeCheckpointHit:
