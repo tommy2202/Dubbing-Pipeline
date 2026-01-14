@@ -942,6 +942,63 @@ class JobQueue:
                     progress=0.25,
                     message=f"Diarized ({len(set(s.get('speaker_id') for s in diar_segments))} speakers)",
                 )
+
+                # Post-diarization: build per-speaker reference WAVs (best-effort, safe).
+                try:
+                    from dubbing_pipeline.jobs.manifests import file_fingerprint, write_stage_manifest
+                    from dubbing_pipeline.voice_memory.ref_extraction import VoiceRefConfig, extract_speaker_refs
+
+                    analysis_dir = (base_dir / "analysis" / "voice_refs").resolve()
+                    analysis_dir.mkdir(parents=True, exist_ok=True)
+
+                    cfg_ref = VoiceRefConfig(
+                        target_s=float(getattr(settings, "voice_ref_target_s", 30.0) or 30.0),
+                        overlap_eps_s=float(getattr(settings, "voice_ref_overlap_eps_s", 0.05) or 0.05),
+                        min_candidate_s=float(getattr(settings, "voice_ref_min_candidate_s", 0.7) or 0.7),
+                        max_candidate_s=float(getattr(settings, "voice_ref_max_candidate_s", 12.0) or 12.0),
+                        min_speech_ratio=float(getattr(settings, "voice_ref_min_speech_ratio", 0.60) or 0.60),
+                    )
+
+                    # If voice memory was available above, reuse it as the “DB” for ref enrollment.
+                    vm_for_refs = vm_store if "vm_store" in locals() else None  # type: ignore[name-defined]
+
+                    man = extract_speaker_refs(
+                        segments=diar_segments,
+                        voice_store_dir=Path(settings.voice_store_dir).resolve(),
+                        job_dir=base_dir,
+                        cfg=cfg_ref,
+                        voice_memory_store=vm_for_refs,
+                        voice_memory_max_refs=5,
+                    )
+
+                    # Persist a stage manifest for resume/debug (no secrets).
+                    with suppress(Exception):
+                        write_stage_manifest(
+                            job_dir=base_dir,
+                            stage="voice_refs",
+                            inputs={
+                                "audio_wav": file_fingerprint(Path(str(wav))),
+                                "diarization_work_json": file_fingerprint(diar_json_work),
+                            },
+                            params={
+                                "target_s": float(cfg_ref.target_s),
+                                "min_candidate_s": float(cfg_ref.min_candidate_s),
+                                "max_candidate_s": float(cfg_ref.max_candidate_s),
+                                "overlap_eps_s": float(cfg_ref.overlap_eps_s),
+                                "min_speech_ratio": float(cfg_ref.min_speech_ratio),
+                            },
+                            outputs={
+                                "job_manifest": str((analysis_dir / "manifest.json").resolve()),
+                                "voice_store_index": str(man.get("voice_store_index") or ""),
+                                "speakers": list(sorted((man.get("items") or {}).keys())),
+                            },
+                        )
+                    self.store.append_log(
+                        job_id,
+                        f"[{now_utc()}] voice_refs built speakers={len((man.get('items') or {}).keys())}",
+                    )
+                except Exception as ex:
+                    self.store.append_log(job_id, f"[{now_utc()}] voice_refs skipped: {ex}")
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] diarize failed: {ex}")
                 self.store.update(job_id, progress=0.25, message="Diarize skipped")

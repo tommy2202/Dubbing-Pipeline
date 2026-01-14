@@ -304,6 +304,14 @@ class PublicConfig(BaseSettings):
         alias="VOICE_STORE",
     )
 
+    # Speaker reference extraction (post-diarization; used to build per-speaker ~N second refs).
+    # This does not enable any new pipeline by itself; it just writes reference WAVs for downstream use.
+    voice_ref_target_s: float = Field(default=30.0, alias="VOICE_REF_TARGET_S")
+    voice_ref_min_candidate_s: float = Field(default=0.7, alias="VOICE_REF_MIN_CANDIDATE_S")
+    voice_ref_max_candidate_s: float = Field(default=12.0, alias="VOICE_REF_MAX_CANDIDATE_S")
+    voice_ref_overlap_eps_s: float = Field(default=0.05, alias="VOICE_REF_OVERLAP_EPS_S")
+    voice_ref_min_speech_ratio: float = Field(default=0.60, alias="VOICE_REF_MIN_SPEECH_RATIO")
+
     # Tier-2 A: Character Voice Memory (opt-in; defaults preserve current behavior)
     voice_memory: bool = Field(default=False, alias="VOICE_MEMORY")  # off by default
     voice_memory_dir: Path = Field(
