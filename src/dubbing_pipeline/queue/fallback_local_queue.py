@@ -70,7 +70,8 @@ class FallbackLocalQueue(QueueBackend):
         self._stopping = True
         if self._task is not None:
             self._task.cancel()
-            with suppress(Exception):
+            # asyncio.CancelledError inherits from BaseException in newer Python versions.
+            with suppress(asyncio.CancelledError, Exception):
                 await self._task
         self._task = None
         self._seen.clear()
@@ -200,7 +201,8 @@ class FallbackLocalQueue(QueueBackend):
                 jobs = store.list(limit=250)
                 for j in jobs:
                     try:
-                        if getattr(j, "state", None) and getattr(j.state, "value", "") == "queued":
+                        st = getattr(getattr(j, "state", None), "value", "") or ""
+                        if str(st).lower() == "queued":
                             jid = str(j.id)
                             if jid and jid not in self._seen:
                                 self._seen.add(jid)

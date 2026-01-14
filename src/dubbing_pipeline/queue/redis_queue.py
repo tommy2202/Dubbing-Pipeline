@@ -303,6 +303,13 @@ class RedisQueue(QueueBackend):
             job_id=job_id,
         )
         if not dec.ok:
+            # If this specific job is already marked RUNNING for the user, do not defer it.
+            # This can occur when another worker/process already started it (lock held elsewhere).
+            # Deferring here would incorrectly move an in-flight job back to delayed/pending.
+            if "user_running_cap" in dec.reasons and uid:
+                with suppress(Exception):
+                    if await r.sismember(self._user_running_set_key(uid), job_id):
+                        return False
             # Defer with backoff; release lock so others can attempt later.
             await self._defer(job_id, reason=",".join(dec.reasons) or "policy")
             await self._release_and_cleanup(job_id, reason="policy_denied")
@@ -379,7 +386,8 @@ class RedisQueue(QueueBackend):
         t = self._lock_refresh_task_by_job.pop(job_id, None)
         if t is not None:
             t.cancel()
-            with suppress(Exception):
+            # asyncio.CancelledError inherits from BaseException in newer Python versions.
+            with suppress(asyncio.CancelledError, Exception):
                 await t
 
         r = self._redis()
