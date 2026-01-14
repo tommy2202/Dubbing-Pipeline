@@ -864,6 +864,9 @@ def run(
         clone_attempted = False
         clone_succeeded = False
         ref_used: Path | None = None
+        if seg_voice_mode == "clone" and speaker_wav is not None and Path(speaker_wav).exists():
+            # Record which reference WAV was selected even if XTTS is unavailable and we fall back.
+            ref_used = Path(speaker_wav)
         fallback_reason: str | None = None
 
         def _retry_wrap(fn_name: str, fn):
@@ -889,7 +892,6 @@ def run(
             # 1) XTTS clone (if speaker_wav)
             if speaker_wav is not None and speaker_wav.exists():
                 clone_attempted = True
-                ref_used = Path(speaker_wav)
                 try:
                     _retry_wrap(
                         "xtts_clone",
@@ -1228,7 +1230,7 @@ def run(
         _note_segment(
             speaker_id=speaker_id,
             provider=provider_used,
-            ref_path=(ref_used if clone_attempted else None),
+            ref_path=ref_used,
             clone_attempted=clone_attempted,
             clone_succeeded=clone_succeeded,
             fallback_reason=fallback_reason,

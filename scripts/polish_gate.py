@@ -165,6 +165,7 @@ def main() -> int:
         Step("verify_style_guide", [sys.executable, str(repo_root / "scripts" / "verify_style_guide.py")]),
         Step("verify_sub_formatting", [sys.executable, str(repo_root / "scripts" / "verify_sub_formatting.py")]),
         Step("verify_voice_tools", [sys.executable, str(repo_root / "scripts" / "verify_voice_tools.py")]),
+        Step("verify_two_pass_voice_clone", [sys.executable, str(repo_root / "scripts" / "verify_two_pass_voice_clone.py")]),
         Step("verify_stream_context", [sys.executable, str(repo_root / "scripts" / "verify_stream_context.py")]),
         Step("verify_drift_reports", [sys.executable, str(repo_root / "scripts" / "verify_drift_reports.py")]),
         Step("verify_retention", [sys.executable, str(repo_root / "scripts" / "verify_retention.py")]),

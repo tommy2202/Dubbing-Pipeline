@@ -51,6 +51,14 @@ class JobCanceled(Exception):
     pass
 
 
+class _DiarizeCheckpointHit(RuntimeError):
+    """
+    Internal control-flow marker to skip re-diarization when checkpoint artifacts exist.
+    """
+
+    pass
+
+
 def _select_device(device: str) -> str:
     device = (device or "auto").lower()
     if device in {"cpu", "cuda"}:
@@ -707,9 +715,83 @@ class JobQueue:
             diar_json_public = base_dir / "diarization.json"
             diar_segments: list[dict] = []
             speaker_embeddings: dict[str, str] = {}
+            vm_store = None
+
+            def _build_voice_refs_best_effort() -> None:
+                # Post-diarization: build per-speaker reference WAVs (best-effort, safe).
+                try:
+                    from dubbing_pipeline.jobs.manifests import file_fingerprint, write_stage_manifest
+                    from dubbing_pipeline.voice_memory.ref_extraction import (
+                        VoiceRefConfig,
+                        extract_speaker_refs,
+                    )
+
+                    analysis_dir = (base_dir / "analysis" / "voice_refs").resolve()
+                    analysis_dir.mkdir(parents=True, exist_ok=True)
+
+                    cfg_ref = VoiceRefConfig(
+                        target_s=float(getattr(settings, "voice_ref_target_s", 30.0) or 30.0),
+                        overlap_eps_s=float(getattr(settings, "voice_ref_overlap_eps_s", 0.05) or 0.05),
+                        min_candidate_s=float(getattr(settings, "voice_ref_min_candidate_s", 0.7) or 0.7),
+                        max_candidate_s=float(getattr(settings, "voice_ref_max_candidate_s", 12.0) or 12.0),
+                        min_speech_ratio=float(getattr(settings, "voice_ref_min_speech_ratio", 0.60) or 0.60),
+                    )
+
+                    man = extract_speaker_refs(
+                        segments=diar_segments,
+                        voice_store_dir=Path(settings.voice_store_dir).resolve(),
+                        job_dir=base_dir,
+                        cfg=cfg_ref,
+                        voice_memory_store=vm_store,
+                        voice_memory_max_refs=5,
+                    )
+
+                    # Persist a stage manifest for resume/debug (no secrets).
+                    with suppress(Exception):
+                        write_stage_manifest(
+                            job_dir=base_dir,
+                            stage="voice_refs",
+                            inputs={
+                                "audio_wav": file_fingerprint(Path(str(wav))),
+                                "diarization_work_json": file_fingerprint(diar_json_work),
+                            },
+                            params={
+                                "target_s": float(cfg_ref.target_s),
+                                "min_candidate_s": float(cfg_ref.min_candidate_s),
+                                "max_candidate_s": float(cfg_ref.max_candidate_s),
+                                "overlap_eps_s": float(cfg_ref.overlap_eps_s),
+                                "min_speech_ratio": float(cfg_ref.min_speech_ratio),
+                            },
+                            outputs={
+                                "job_manifest": str((analysis_dir / "manifest.json").resolve()),
+                                "voice_store_index": str(man.get("voice_store_index") or ""),
+                                "speakers": list(sorted((man.get("items") or {}).keys())),
+                            },
+                        )
+                    self.store.append_log(
+                        job_id,
+                        f"[{now_utc()}] voice_refs built speakers={len((man.get('items') or {}).keys())}",
+                    )
+                except Exception as ex:
+                    self.store.append_log(job_id, f"[{now_utc()}] voice_refs skipped: {ex}")
+
             try:
                 self.store.update(job_id, progress=0.12, message="Diarizing speakers")
                 self.store.append_log(job_id, f"[{now_utc()}] diarize")
+                if diar_json_work.exists() and diar_json_public.exists() and stage_is_done(
+                    ckpt, "diarize"
+                ):
+                    try:
+                        from dubbing_pipeline.utils.io import read_json
+
+                        dj = read_json(diar_json_work, default={})
+                        segs = dj.get("segments") if isinstance(dj, dict) else None
+                        if isinstance(segs, list):
+                            diar_segments = [s for s in segs if isinstance(s, dict)]
+                    except Exception:
+                        diar_segments = []
+                    raise _DiarizeCheckpointHit()
+
                 cfg = DiarizeConfig(diarizer=str(settings.diarizer))
                 utts = run_with_timeout(
                     "diarize",
@@ -980,62 +1062,16 @@ class JobQueue:
                     )
                     ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
 
-                # Post-diarization: build per-speaker reference WAVs (best-effort, safe).
-                try:
-                    from dubbing_pipeline.jobs.manifests import file_fingerprint, write_stage_manifest
-                    from dubbing_pipeline.voice_memory.ref_extraction import VoiceRefConfig, extract_speaker_refs
-
-                    analysis_dir = (base_dir / "analysis" / "voice_refs").resolve()
-                    analysis_dir.mkdir(parents=True, exist_ok=True)
-
-                    cfg_ref = VoiceRefConfig(
-                        target_s=float(getattr(settings, "voice_ref_target_s", 30.0) or 30.0),
-                        overlap_eps_s=float(getattr(settings, "voice_ref_overlap_eps_s", 0.05) or 0.05),
-                        min_candidate_s=float(getattr(settings, "voice_ref_min_candidate_s", 0.7) or 0.7),
-                        max_candidate_s=float(getattr(settings, "voice_ref_max_candidate_s", 12.0) or 12.0),
-                        min_speech_ratio=float(getattr(settings, "voice_ref_min_speech_ratio", 0.60) or 0.60),
-                    )
-
-                    # If voice memory was available above, reuse it as the “DB” for ref enrollment.
-                    vm_for_refs = vm_store if "vm_store" in locals() else None  # type: ignore[name-defined]
-
-                    man = extract_speaker_refs(
-                        segments=diar_segments,
-                        voice_store_dir=Path(settings.voice_store_dir).resolve(),
-                        job_dir=base_dir,
-                        cfg=cfg_ref,
-                        voice_memory_store=vm_for_refs,
-                        voice_memory_max_refs=5,
-                    )
-
-                    # Persist a stage manifest for resume/debug (no secrets).
-                    with suppress(Exception):
-                        write_stage_manifest(
-                            job_dir=base_dir,
-                            stage="voice_refs",
-                            inputs={
-                                "audio_wav": file_fingerprint(Path(str(wav))),
-                                "diarization_work_json": file_fingerprint(diar_json_work),
-                            },
-                            params={
-                                "target_s": float(cfg_ref.target_s),
-                                "min_candidate_s": float(cfg_ref.min_candidate_s),
-                                "max_candidate_s": float(cfg_ref.max_candidate_s),
-                                "overlap_eps_s": float(cfg_ref.overlap_eps_s),
-                                "min_speech_ratio": float(cfg_ref.min_speech_ratio),
-                            },
-                            outputs={
-                                "job_manifest": str((analysis_dir / "manifest.json").resolve()),
-                                "voice_store_index": str(man.get("voice_store_index") or ""),
-                                "speakers": list(sorted((man.get("items") or {}).keys())),
-                            },
-                        )
-                    self.store.append_log(
-                        job_id,
-                        f"[{now_utc()}] voice_refs built speakers={len((man.get('items') or {}).keys())}",
-                    )
-                except Exception as ex:
-                    self.store.append_log(job_id, f"[{now_utc()}] voice_refs skipped: {ex}")
+                _build_voice_refs_best_effort()
+            except _DiarizeCheckpointHit:
+                # checkpoint hit: reuse diarization output as-is
+                self.store.append_log(job_id, f"[{now_utc()}] diarize (checkpoint hit)")
+                self.store.update(
+                    job_id,
+                    progress=0.25,
+                    message=f"Diarized ({len(set(s.get('speaker_id') for s in diar_segments))} speakers)",
+                )
+                _build_voice_refs_best_effort()
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] diarize failed: {ex}")
                 self.store.update(job_id, progress=0.25, message="Diarize skipped")
@@ -1713,6 +1749,17 @@ class JobQueue:
                 except Exception:
                     pass
 
+            # Checkpoint-aware skip: reuse existing translation artifacts (for pass2 reruns).
+            if (
+                do_translate
+                and translated_json.exists()
+                and translated_srt.exists()
+                and stage_is_done(ckpt, "translate")
+            ):
+                self.store.append_log(job_id, f"[{now_utc()}] translate (checkpoint hit)")
+                subs_srt_path = translated_srt
+                do_translate = False
+
             if do_translate:
                 self.store.update(job_id, progress=0.62, message="Translating subtitles")
                 self.store.append_log(
@@ -1981,6 +2028,23 @@ class JobQueue:
             else:
                 self.store.update(job_id, progress=0.75, message="Translation skipped")
 
+            # Checkpoint translation artifacts so pass-2 reruns can skip MT.
+            with suppress(Exception):
+                arts: dict[str, Path] = {}
+                if translated_json.exists():
+                    arts["translated_json"] = translated_json
+                if translated_srt.exists():
+                    arts["translated_srt"] = translated_srt
+                if arts:
+                    write_ckpt(
+                        job_id,
+                        "translate",
+                        arts,
+                        {"work_dir": str(work_dir)},
+                        ckpt_path=ckpt_path,
+                    )
+                    ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
+
             # If resynth requested, generate an edited translation JSON for TTS.
             edited_json = None
             if isinstance(resynth, dict) and str(resynth.get("type") or "") == "approved":
@@ -2031,6 +2095,21 @@ class JobQueue:
                         tts_speaker_wav = None
                         director_on = False
                         director_strength = 0.5
+                        # Two-pass voice cloning controls (resolved once per run).
+                        is_pass2 = bool(str(two_pass_phase or "") == "pass2")
+                        if is_pass2:
+                            voice_mode_eff = "clone"
+                            voice_ref_dir_eff = (base_dir / "analysis" / "voice_refs").resolve()
+                            no_clone_eff = False
+                        elif bool(two_pass_enabled):
+                            # pass1: explicitly prevent cloning
+                            voice_mode_eff = "preset"
+                            voice_ref_dir_eff = None
+                            no_clone_eff = True
+                        else:
+                            voice_mode_eff = str(settings.voice_mode)
+                            voice_ref_dir_eff = settings.voice_ref_dir
+                            no_clone_eff = False
                         try:
                             curj = self.store.get(job_id)
                             rt = dict((curj.runtime or {}) if curj else runtime)
@@ -2065,8 +2144,9 @@ class JobQueue:
                             tts_lang=tts_lang,
                             tts_speaker=tts_speaker,
                             tts_speaker_wav=tts_speaker_wav,
-                            voice_mode=str(settings.voice_mode),
-                            voice_ref_dir=settings.voice_ref_dir,
+                            voice_mode=str(voice_mode_eff),
+                            no_clone=bool(no_clone_eff),
+                            voice_ref_dir=voice_ref_dir_eff,
                             voice_store_dir=settings.voice_store_dir,
                             tts_provider=str(settings.tts_provider),
                             # expressiveness (best-effort)
@@ -2114,6 +2194,7 @@ class JobQueue:
 
                     # checkpoint-aware skip
                     tts_manifest = work_dir / "tts_manifest.json"
+                    is_pass2_outer = bool(str(two_pass_phase or "") == "pass2")
                     if (
                         tts_wav.exists()
                         and tts_manifest.exists()
@@ -2122,6 +2203,7 @@ class JobQueue:
                             isinstance(resynth, dict)
                             and str(resynth.get("type") or "") == "approved"
                         )
+                        and not is_pass2_outer
                     ):
                         self.store.append_log(job_id, f"[{now_utc()}] tts (checkpoint hit)")
                     else:
@@ -2130,6 +2212,12 @@ class JobQueue:
                             isinstance(resynth, dict)
                             and str(resynth.get("type") or "") == "approved"
                         ):
+                            with suppress(Exception):
+                                tts_wav.unlink(missing_ok=True)
+                            with suppress(Exception):
+                                tts_manifest.unlink(missing_ok=True)
+                        # Force rerun on pass2.
+                        if is_pass2_outer:
                             with suppress(Exception):
                                 tts_wav.unlink(missing_ok=True)
                             with suppress(Exception):
@@ -2231,7 +2319,23 @@ class JobQueue:
             with time_hist(pipeline_mux_seconds) as elapsed_mux:
                 try:
                     # checkpoint-aware skip (accept either our "mix" stage marker or legacy "mux")
-                    if stage_is_done(ckpt, "mix") or stage_is_done(ckpt, "mux"):
+                    is_pass2_outer = bool(str(two_pass_phase or "") == "pass2")
+                    if is_pass2_outer:
+                        # Force rerun: invalidate checkpoint artifacts by removing existing outputs (best-effort).
+                        with suppress(Exception):
+                            final_mkv.unlink(missing_ok=True)
+                        with suppress(Exception):
+                            final_mp4.unlink(missing_ok=True)
+                        with suppress(Exception):
+                            out_mkv.unlink(missing_ok=True)
+                        with suppress(Exception):
+                            out_mp4.unlink(missing_ok=True)
+                        with suppress(Exception):
+                            (base_dir / "audio" / "final_mix.wav").unlink(missing_ok=True)
+                        with suppress(Exception):
+                            shutil.rmtree(base_dir / "mobile", ignore_errors=True)
+
+                    if (stage_is_done(ckpt, "mix") or stage_is_done(ckpt, "mux")) and not is_pass2_outer:
                         self.store.append_log(job_id, f"[{now_utc()}] mix (checkpoint hit)")
                         # best-effort: reuse previous output paths if present in store state
                         existing = self.store.get(job_id)
@@ -2670,6 +2774,61 @@ class JobQueue:
             if out_mp4 and Path(out_mp4).exists():
                 _move_best_effort(Path(out_mp4), final_mp4)
 
+            # Two-pass voice cloning: after pass1 mux, enqueue pass2 and stop (avoid re-running export/lipsync twice).
+            if bool(two_pass_enabled) and str(two_pass_phase or "") != "pass2":
+                try:
+                    curj = self.store.get(job_id)
+                    rt2 = dict((curj.runtime or {}) if curj else runtime)
+                except Exception:
+                    rt2 = dict(runtime or {})
+                tp = rt2.get("two_pass") if isinstance(rt2.get("two_pass"), dict) else {}
+                tp = dict(tp) if isinstance(tp, dict) else {}
+                tp["phase"] = "pass2"
+                tp["requested_at"] = time.time()
+                tp["requested_by"] = "auto"
+                rt2["two_pass"] = tp
+                rt2["voice_clone_two_pass"] = True
+                self.store.update(
+                    job_id,
+                    runtime=rt2,
+                    state=JobState.QUEUED,
+                    progress=0.96,
+                    message="Queued (pass 2)",
+                )
+                self.store.append_log(job_id, f"[{now_utc()}] two_pass: queued pass2")
+                # Submit via Redis backend or local scheduler.
+                try:
+                    qb = getattr(self, "queue_backend", None)
+                    if qb is not None:
+                        await qb.submit_job(
+                            job_id=str(job_id),
+                            user_id=str(getattr(job, "owner_id", "") or "") or None,
+                            mode=str(job.mode),
+                            device=str(job.device),
+                            priority=120,
+                            meta={"two_pass": "pass2", "user_role": str(getattr(rt2.get("user_role"), "value", "") or "")},
+                        )
+                    else:
+                        sched2 = Scheduler.instance_optional()
+                        if sched2 is not None:
+                            from dubbing_pipeline.runtime.scheduler import JobRecord
+
+                            sched2.submit(
+                                JobRecord(
+                                    job_id=job_id,
+                                    mode=job.mode,
+                                    device_pref=job.device,
+                                    created_at=time.time(),
+                                    priority=120,
+                                )
+                            )
+                        else:
+                            await self._q.put(job_id)
+                except Exception:
+                    with suppress(Exception):
+                        await self._q.put(job_id)
+                return
+
             # Mobile-friendly playback outputs (H.264/AAC MP4 + optional HLS).
             try:
                 if bool(getattr(settings, "mobile_outputs", True)):
@@ -2880,6 +3039,16 @@ class JobQueue:
                 rt2 = dict((curj.runtime or {}) if curj else runtime)
                 if "resynth" in rt2:
                     rt2.pop("resynth", None)
+                # Clear two-pass request marker after successful completion.
+                tp = rt2.get("two_pass") if isinstance(rt2.get("two_pass"), dict) else None
+                if isinstance(tp, dict):
+                    tp2 = dict(tp)
+                    tp2.pop("request", None)
+                    # Mark completion if we just finished pass2.
+                    if str(tp2.get("phase") or "").strip().lower() == "pass2":
+                        tp2["done_at"] = time.time()
+                        tp2["phase"] = "done"
+                    rt2["two_pass"] = tp2
                     self.store.update(job_id, runtime=rt2)
             jobs_finished.labels(state="DONE").inc()
             self.store.append_log(job_id, f"[{now_utc()}] done in {time.perf_counter()-t0:.2f}s")
