@@ -309,8 +309,14 @@ class PublicConfig(BaseSettings):
     voice_ref_target_s: float = Field(
         default=30.0, validation_alias=AliasChoices("VOICE_REF_TARGET_SECONDS", "VOICE_REF_TARGET_S")
     )
-    voice_ref_min_candidate_s: float = Field(default=0.7, alias="VOICE_REF_MIN_CANDIDATE_S")
-    voice_ref_max_candidate_s: float = Field(default=12.0, alias="VOICE_REF_MAX_CANDIDATE_S")
+    voice_ref_min_candidate_s: float = Field(
+        default=0.7,
+        validation_alias=AliasChoices("VOICE_REF_MIN_SEG_SECONDS", "VOICE_REF_MIN_CANDIDATE_S"),
+    )
+    voice_ref_max_candidate_s: float = Field(
+        default=12.0,
+        validation_alias=AliasChoices("VOICE_REF_MAX_SEG_SECONDS", "VOICE_REF_MAX_CANDIDATE_S"),
+    )
     voice_ref_overlap_eps_s: float = Field(default=0.05, alias="VOICE_REF_OVERLAP_EPS_S")
     voice_ref_min_speech_ratio: float = Field(default=0.60, alias="VOICE_REF_MIN_SPEECH_RATIO")
 

@@ -722,30 +722,67 @@ class JobQueue:
                 # Post-diarization: build per-speaker reference WAVs (best-effort, safe).
                 try:
                     from dubbing_pipeline.jobs.manifests import file_fingerprint, write_stage_manifest
-                    from dubbing_pipeline.voice_memory.ref_extraction import (
-                        VoiceRefConfig,
+                    from dubbing_pipeline.voice_refs.extract_refs import (
+                        ExtractRefsConfig,
                         extract_speaker_refs,
                     )
 
+                    # Required output location: Output/<job_id>/voice_refs/...
+                    job_refs_dir = (out_root / str(job_id) / "voice_refs").resolve()
+                    job_refs_dir.mkdir(parents=True, exist_ok=True)
+                    # Also keep legacy UI location (Output/<job>/analysis/voice_refs) best-effort.
                     analysis_dir = (base_dir / "analysis" / "voice_refs").resolve()
                     analysis_dir.mkdir(parents=True, exist_ok=True)
 
-                    cfg_ref = VoiceRefConfig(
-                        target_s=float(getattr(settings, "voice_ref_target_s", 30.0) or 30.0),
+                    cfg_ref = ExtractRefsConfig(
+                        target_seconds=float(getattr(settings, "voice_ref_target_s", 30.0) or 30.0),
+                        min_seg_seconds=float(
+                            getattr(settings, "voice_ref_min_candidate_s", 2.0) or 2.0
+                        ),
+                        max_seg_seconds=float(
+                            getattr(settings, "voice_ref_max_candidate_s", 10.0) or 10.0
+                        ),
                         overlap_eps_s=float(getattr(settings, "voice_ref_overlap_eps_s", 0.05) or 0.05),
-                        min_candidate_s=float(getattr(settings, "voice_ref_min_candidate_s", 0.7) or 0.7),
-                        max_candidate_s=float(getattr(settings, "voice_ref_max_candidate_s", 12.0) or 12.0),
-                        min_speech_ratio=float(getattr(settings, "voice_ref_min_speech_ratio", 0.60) or 0.60),
+                        min_speech_ratio=float(
+                            getattr(settings, "voice_ref_min_speech_ratio", 0.60) or 0.60
+                        ),
                     )
 
+                    # Use diarization work segments when present (already includes wav_path).
                     man = extract_speaker_refs(
-                        segments=diar_segments,
-                        voice_store_dir=Path(settings.voice_store_dir).resolve(),
-                        job_dir=base_dir,
-                        cfg=cfg_ref,
-                        voice_memory_store=vm_store,
-                        voice_memory_max_refs=5,
+                        diarization_timeline=[
+                            {
+                                "start": float(s.get("start") or 0.0),
+                                "end": float(s.get("end") or 0.0),
+                                "speaker_id": str(s.get("speaker_id") or ""),
+                                "wav_path": str(s.get("wav_path") or ""),
+                            }
+                            for s in diar_segments
+                            if isinstance(s, dict)
+                        ],
+                        dialogue_wav=Path(str(diar_wav)),
+                        out_dir=job_refs_dir,
+                        config=cfg_ref,
                     )
+
+                    # Update job runtime ("DB") with per-speaker ref info (best-effort).
+                    with suppress(Exception):
+                        curj = self.store.get(job_id)
+                        rt3 = dict((curj.runtime or {}) if curj else runtime)
+                        rt3["voice_refs"] = man.get("items") if isinstance(man.get("items"), dict) else {}
+                        self.store.update(job_id, runtime=rt3)
+
+                    # Mirror into legacy analysis dir for UI playback (best-effort).
+                    with suppress(Exception):
+                        from dubbing_pipeline.utils.io import atomic_copy
+
+                        # manifest
+                        if (job_refs_dir / "manifest.json").exists():
+                            atomic_copy(job_refs_dir / "manifest.json", analysis_dir / "manifest.json")
+                        # wavs
+                        for p in job_refs_dir.glob("*_ref.wav"):
+                            if p.is_file():
+                                atomic_copy(p, analysis_dir / p.name.replace("_ref.wav", ".wav"))
 
                     # Persist a stage manifest for resume/debug (no secrets).
                     with suppress(Exception):
@@ -757,16 +794,17 @@ class JobQueue:
                                 "diarization_work_json": file_fingerprint(diar_json_work),
                             },
                             params={
-                                "target_s": float(cfg_ref.target_s),
-                                "min_candidate_s": float(cfg_ref.min_candidate_s),
-                                "max_candidate_s": float(cfg_ref.max_candidate_s),
+                                "target_seconds": float(cfg_ref.target_seconds),
+                                "min_seg_seconds": float(cfg_ref.min_seg_seconds),
+                                "max_seg_seconds": float(cfg_ref.max_seg_seconds or 0.0),
                                 "overlap_eps_s": float(cfg_ref.overlap_eps_s),
                                 "min_speech_ratio": float(cfg_ref.min_speech_ratio),
                             },
                             outputs={
-                                "job_manifest": str((analysis_dir / "manifest.json").resolve()),
-                                "voice_store_index": str(man.get("voice_store_index") or ""),
-                                "speakers": list(sorted((man.get("items") or {}).keys())),
+                                "job_manifest": str((job_refs_dir / "manifest.json").resolve()),
+                                "speakers": list(sorted((man.get("items") or {}).keys()))
+                                if isinstance(man, dict)
+                                else [],
                             },
                         )
                     self.store.append_log(
@@ -965,8 +1003,60 @@ class JobQueue:
                         vm_store = None
                         episode_key = ""
 
+                # Replace "representative wav" selection with canonical ref extractor (per diar label).
+                label_refs: dict[str, Path] = {}
+                try:
+                    from dubbing_pipeline.voice_refs.extract_refs import ExtractRefsConfig, extract_speaker_refs
+
+                    label_ref_dir = (work_dir / "voice_refs_labels").resolve()
+                    label_ref_dir.mkdir(parents=True, exist_ok=True)
+                    cfg_label = ExtractRefsConfig(
+                        target_seconds=float(getattr(settings, "voice_ref_target_s", 30.0) or 30.0),
+                        min_seg_seconds=float(
+                            getattr(settings, "voice_ref_min_candidate_s", 2.0) or 2.0
+                        ),
+                        max_seg_seconds=float(
+                            getattr(settings, "voice_ref_max_candidate_s", 10.0) or 10.0
+                        ),
+                        overlap_eps_s=float(getattr(settings, "voice_ref_overlap_eps_s", 0.05) or 0.05),
+                        min_speech_ratio=float(
+                            getattr(settings, "voice_ref_min_speech_ratio", 0.60) or 0.60
+                        ),
+                    )
+                    tl = []
+                    for lab, segs in by_label.items():
+                        for st, en, wav_p in segs:
+                            tl.append(
+                                {
+                                    "start": float(st),
+                                    "end": float(en),
+                                    "speaker_id": str(lab),
+                                    "wav_path": str(wav_p),
+                                }
+                            )
+                    man_labels = extract_speaker_refs(
+                        diarization_timeline=tl,
+                        dialogue_wav=Path(str(diar_wav)),
+                        out_dir=label_ref_dir,
+                        config=cfg_label,
+                    )
+                    items = man_labels.get("items") if isinstance(man_labels, dict) else None
+                    if isinstance(items, dict):
+                        for sid, rec in items.items():
+                            if not isinstance(rec, dict):
+                                continue
+                            rp = str(rec.get("ref_path") or "").strip()
+                            if rp:
+                                p = Path(rp).resolve()
+                                if p.exists():
+                                    label_refs[str(sid)] = p
+                except Exception:
+                    label_refs = {}
+
                 for lab, segs in by_label.items():
-                    rep_wav = sorted(segs, key=lambda t: (t[1] - t[0]), reverse=True)[0][2]
+                    rep_wav = label_refs.get(str(lab))
+                    if rep_wav is None:
+                        rep_wav = sorted(segs, key=lambda t: (t[1] - t[0]), reverse=True)[0][2]
                     if vm_store is not None:
                         # voice memory path (offline-first; falls back if embeddings unavailable)
                         try:
