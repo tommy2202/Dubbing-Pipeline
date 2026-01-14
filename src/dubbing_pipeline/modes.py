@@ -53,6 +53,7 @@ class EffectiveSettings:
     speaker_smoothing: bool
     voice_memory: bool
     voice_mode: str  # clone|preset|single
+    voice_clone_two_pass: bool
     music_detect: bool
     separation: str  # off|demucs
     mix_mode: str  # legacy|enhanced
@@ -76,6 +77,7 @@ class EffectiveSettings:
             "speaker_smoothing": self.speaker_smoothing,
             "voice_memory": self.voice_memory,
             "voice_mode": self.voice_mode,
+            "voice_clone_two_pass": bool(self.voice_clone_two_pass),
             "music_detect": self.music_detect,
             "separation": self.separation,
             "mix_mode": self.mix_mode,
@@ -132,6 +134,11 @@ def resolve_effective_settings(
     speaker_smoothing = bool(pick("speaker_smoothing", mode_default=(req == "high")))
     voice_memory = bool(pick("voice_memory", mode_default=(req == "high")))
     voice_mode = str(pick("voice_mode", mode_default=("clone" if req == "high" else "single")))
+    if req == "low":
+        voice_clone_two_pass = False
+        sources["voice_clone_two_pass"] = "mode:low"
+    else:
+        voice_clone_two_pass = bool(pick("voice_clone_two_pass", mode_default=(req == "high")))
     music_detect = bool(pick("music_detect", mode_default=False))
     separation = str(pick("separation", mode_default=("demucs" if req == "high" else "off")))
     mix_mode = str(pick("mix_mode", mode_default=("enhanced" if req == "high" else "legacy")))
@@ -205,6 +212,7 @@ def resolve_effective_settings(
         speaker_smoothing=bool(speaker_smoothing),
         voice_memory=bool(voice_memory),
         voice_mode=str(voice_mode).lower(),
+        voice_clone_two_pass=bool(voice_clone_two_pass),
         music_detect=bool(music_detect),
         separation=str(separation).lower(),
         mix_mode=str(mix_mode).lower(),

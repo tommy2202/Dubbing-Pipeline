@@ -350,6 +350,33 @@ class JobQueue:
 
         t0 = time.perf_counter()
         settings = get_settings()
+        # Two-pass voice cloning orchestration (pass1: no-clone; pass2: rerun TTS+mix using extracted refs).
+        mode_req = str(job.mode or "medium").strip().lower()
+        two_pass_enabled = False
+        two_pass_phase = "pass1"
+        two_pass_request = ""
+        try:
+            rt0 = dict(runtime or {})
+            # Explicit per-job override wins. Otherwise: HIGH on, LOW off, MEDIUM follows config default.
+            if "voice_clone_two_pass" in rt0:
+                two_pass_enabled = bool(rt0.get("voice_clone_two_pass"))
+            else:
+                if mode_req == "high":
+                    two_pass_enabled = True
+                elif mode_req == "low":
+                    two_pass_enabled = False
+                else:
+                    two_pass_enabled = bool(getattr(settings, "voice_clone_two_pass", False))
+            tp = rt0.get("two_pass") if isinstance(rt0.get("two_pass"), dict) else {}
+            two_pass_phase = str((tp or {}).get("phase") or "").strip().lower() or "pass1"
+            two_pass_request = str((tp or {}).get("request") or "").strip().lower()
+            if two_pass_request in {"rerun_pass2", "rerun", "pass2"}:
+                two_pass_phase = "pass2"
+                two_pass_enabled = True
+        except Exception:
+            two_pass_enabled = False
+            two_pass_phase = "pass1"
+            two_pass_request = ""
         self.store.update(job_id, state=JobState.RUNNING, progress=0.0, message="Starting")
         self.store.append_log(job_id, f"[{now_utc()}] start job={job_id}")
         with suppress(Exception):
@@ -942,6 +969,16 @@ class JobQueue:
                     progress=0.25,
                     message=f"Diarized ({len(set(s.get('speaker_id') for s in diar_segments))} speakers)",
                 )
+                # Checkpoint diarization artifacts (enables pass-2 reruns without re-diarization).
+                with suppress(Exception):
+                    write_ckpt(
+                        job_id,
+                        "diarize",
+                        {"diar_work": diar_json_work, "diar_public": diar_json_public},
+                        {"work_dir": str(work_dir)},
+                        ckpt_path=ckpt_path,
+                    )
+                    ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
 
                 # Post-diarization: build per-speaker reference WAVs (best-effort, safe).
                 try:
@@ -1014,6 +1051,9 @@ class JobQueue:
                     "speaker_smoothing": bool(getattr(settings, "speaker_smoothing", False)),
                     "voice_memory": bool(getattr(settings, "voice_memory", False)),
                     "voice_mode": str(getattr(settings, "voice_mode", "clone")),
+                    "voice_clone_two_pass": bool(
+                        getattr(settings, "voice_clone_two_pass", False)
+                    ),
                     "music_detect": bool(getattr(settings, "music_detect", False)),
                     "separation": str(getattr(settings, "separation", "off")),
                     "mix_mode": str(getattr(settings, "mix_mode", "legacy")),

@@ -417,9 +417,19 @@ def extract_speaker_refs(
             warnings.append(f"insufficient_audio:{dur_out:.2f}s")
         tmp_ref.replace(out_ref)
 
+        # Also write a job-local ref wav for reproducibility / UI playback / pass-2 reruns.
+        job_ref = None
+        if job_manifest_dir is not None:
+            try:
+                job_ref = (job_manifest_dir / f"{sid}.wav").resolve()
+                atomic_copy(out_ref, job_ref)
+            except Exception:
+                job_ref = None
+
         # Update index + job manifest record
         rec = {
             "ref_path": str(out_ref),
+            "job_ref_path": str(job_ref) if job_ref is not None else None,
             "duration_s": float(dur_out),
             "target_s": float(cfg.target_s),
             "warnings": warnings,

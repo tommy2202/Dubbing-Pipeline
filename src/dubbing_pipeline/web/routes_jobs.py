@@ -1397,6 +1397,7 @@ async def create_job(
             "speaker_smoothing": bool(getattr(s, "speaker_smoothing", False)),
             "voice_memory": bool(getattr(s, "voice_memory", False)),
             "voice_mode": str(getattr(s, "voice_mode", "clone")),
+            "voice_clone_two_pass": bool(getattr(s, "voice_clone_two_pass", False)),
             "music_detect": bool(getattr(s, "music_detect", False)),
             "separation": str(getattr(s, "separation", "off")),
             "mix_mode": str(getattr(s, "mix_mode", "legacy")),
@@ -2354,6 +2355,67 @@ async def resume_job(
     return j2.to_dict()
 
 
+@router.post("/api/jobs/{id}/two_pass/rerun")
+async def rerun_two_pass_admin(
+    request: Request, id: str, _: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
+    """
+    Admin-only: request a pass-2 rerun (TTS + mix only) using extracted/overridden voice refs.
+    This does not create a new job; it re-queues the existing job with a runtime marker.
+    """
+    store = _get_store(request)
+    scheduler = _get_scheduler(request)
+    qb = getattr(request.app.state, "queue_backend", None)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Mark runtime so the worker can detect this is a pass-2-only rerun.
+    rt = dict(job.runtime or {})
+    rt.setdefault("two_pass", {})
+    if isinstance(rt.get("two_pass"), dict):
+        rt["two_pass"]["request"] = "rerun_pass2"
+        rt["two_pass"]["requested_at"] = time.time()
+        rt["two_pass"]["requested_by"] = str(_.user.id)
+    else:
+        rt["two_pass"] = {"request": "rerun_pass2", "requested_at": time.time(), "requested_by": str(_.user.id)}
+    # Ensure enabled for this job.
+    rt["voice_clone_two_pass"] = True
+
+    store.update(
+        id,
+        runtime=rt,
+        state=JobState.QUEUED,
+        progress=0.0,
+        message="Queued (pass 2 rerun)",
+    )
+
+    # Submit via canonical backend (best-effort).
+    with suppress(Exception):
+        if qb is not None:
+            await qb.submit_job(
+                job_id=str(id),
+                user_id=str(getattr(job, "owner_id", "") or ""),
+                mode=str(job.mode),
+                device=str(job.device),
+                priority=110,
+                meta={"user_role": str(getattr(_.user.role, "value", "") or ""), "two_pass": "rerun_pass2"},
+            )
+        else:
+            scheduler.submit(
+                JobRecord(
+                    job_id=id,
+                    mode=job.mode,
+                    device_pref=job.device,
+                    created_at=time.time(),
+                    priority=110,
+                )
+            )
+    audit_event("two_pass.rerun", request=request, user_id=_.user.id, meta={"job_id": id})
+    job2 = store.get(id)
+    return (job2.to_dict() if job2 is not None else {"ok": True})
+
+
 @router.get("/api/jobs/events")
 async def jobs_events(request: Request, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
@@ -3218,6 +3280,287 @@ async def get_job_review_audio(
     if p is None:
         raise HTTPException(status_code=404, detail="audio not found")
     return _file_range_response(request, p, media_type="audio/wav")
+
+
+def _voice_refs_manifest_path(base_dir: Path) -> Path:
+    return (base_dir / "analysis" / "voice_refs" / "manifest.json").resolve()
+
+
+def _voice_ref_override_path(base_dir: Path, speaker_id: str) -> Path:
+    # Keep overrides job-local (do not mutate global voice store by default).
+    safe = Path(str(speaker_id or "")).name.strip()
+    return (base_dir / "analysis" / "voice_refs" / f"{safe}.wav").resolve()
+
+
+def _voice_ref_allowed_roots(base_dir: Path) -> list[Path]:
+    s = get_settings()
+    roots = [Path(base_dir).resolve()]
+    with suppress(Exception):
+        roots.append(Path(s.voice_store_dir).resolve())
+    return roots
+
+
+def _voice_ref_audio_path_from_manifest(
+    *,
+    base_dir: Path,
+    speaker_id: str,
+    manifest: dict[str, Any],
+) -> Path | None:
+    sid = Path(str(speaker_id or "")).name.strip()
+    if not sid:
+        return None
+    # Prefer per-job override if present.
+    ov = _voice_ref_override_path(base_dir, sid)
+    if ov.exists() and ov.is_file():
+        return ov
+    items = manifest.get("items") if isinstance(manifest, dict) else None
+    if not isinstance(items, dict):
+        return None
+    rec = items.get(sid)
+    if not isinstance(rec, dict):
+        return None
+    # Prefer job-local exported ref when present.
+    p0 = str(rec.get("job_ref_path") or "").strip()
+    if p0:
+        p = Path(p0).resolve()
+    else:
+        p = Path(str(rec.get("ref_path") or "")).resolve()
+    if not p.exists() or not p.is_file():
+        return None
+    # Prevent arbitrary file reads: ref must be under allowed roots.
+    for root in _voice_ref_allowed_roots(base_dir):
+        try:
+            p.relative_to(root)
+            return p
+        except Exception:
+            continue
+    return None
+
+
+def _privacy_blocks_voice_refs(job: Job) -> bool:
+    try:
+        rt = dict(job.runtime or {})
+    except Exception:
+        rt = {}
+    # Conservative: if privacy/minimal artifacts, do not serve extracted reference audio.
+    pm = rt.get("privacy_mode")
+    if pm in {"on", "1", True}:
+        return True
+    if bool(rt.get("minimal_artifacts") or False):
+        return True
+    return False
+
+
+@router.get("/api/jobs/{id}/voice_refs")
+async def get_job_voice_refs(
+    request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    man_path = _voice_refs_manifest_path(base_dir)
+    if not man_path.exists():
+        return {"ok": True, "available": False, "items": {}, "note": "voice refs not built yet"}
+    from dubbing_pipeline.utils.io import read_json
+
+    data = read_json(man_path, default={})
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="Invalid voice refs manifest")
+
+    # Best-effort: load latest TTS speaker report for cloned-vs-fallback display.
+    tts_report: dict[str, Any] = {}
+    with suppress(Exception):
+        tts_path = (base_dir / "work" / str(id) / "tts_manifest.json").resolve()
+        if tts_path.exists():
+            tj = read_json(tts_path, default={})
+            if isinstance(tj, dict) and isinstance(tj.get("speaker_report"), dict):
+                tts_report = tj.get("speaker_report")  # type: ignore[assignment]
+
+    allow_audio = not _privacy_blocks_voice_refs(job)
+    items_out: dict[str, Any] = {}
+    items = data.get("items") if isinstance(data.get("items"), dict) else {}
+    for sid, rec in items.items():
+        if not isinstance(rec, dict):
+            continue
+        safe_sid = Path(str(sid or "")).name.strip()
+        if not safe_sid:
+            continue
+        ov = _voice_ref_override_path(base_dir, safe_sid)
+        if ov.exists() and ov.is_file():
+            eff = str(ov)
+        else:
+            eff = str(rec.get("job_ref_path") or rec.get("ref_path") or "")
+
+        clone_status = "unknown"
+        fallback_reason = None
+        rep = tts_report.get(safe_sid) if isinstance(tts_report, dict) else None
+        if isinstance(rep, dict):
+            if bool(rep.get("clone_succeeded") or False):
+                clone_status = "cloned"
+            else:
+                # If clone wasn't successful, treat as fallback (covers pass1 preset/basic and pass2 failures).
+                clone_status = "fallback"
+                frs = rep.get("fallback_reasons")
+                if isinstance(frs, list) and frs:
+                    fallback_reason = str(frs[0])
+        items_out[safe_sid] = {
+            "speaker_id": safe_sid,
+            "duration_s": float(rec.get("duration_s") or 0.0),
+            "target_s": float(rec.get("target_s") or 0.0),
+            "warnings": rec.get("warnings") if isinstance(rec.get("warnings"), list) else [],
+            "override": bool(ov.exists() and ov.is_file()),
+            "effective_ref_path": eff,
+            "allow_audio": bool(allow_audio),
+            "audio_url": (
+                f"/api/jobs/{id}/voice_refs/{safe_sid}/audio" if allow_audio else None
+            ),
+            "download_url": (
+                f"/api/jobs/{id}/voice_refs/{safe_sid}/audio?download=1" if allow_audio else None
+            ),
+            "clone_status": clone_status,
+            "fallback_reason": fallback_reason,
+        }
+    return {
+        "ok": True,
+        "available": True,
+        "allow_audio": bool(allow_audio),
+        "items": items_out,
+    }
+
+
+@router.get("/api/jobs/{id}/voice_refs/{speaker_id}/audio")
+async def get_job_voice_ref_audio(
+    request: Request,
+    id: str,
+    speaker_id: str,
+    download: int | None = None,
+    _: Identity = Depends(require_scope("read:job")),
+) -> Response:
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if _privacy_blocks_voice_refs(job):
+        raise HTTPException(status_code=403, detail="Voice refs not available in privacy/minimal mode")
+    base_dir = _job_base_dir(job)
+    man_path = _voice_refs_manifest_path(base_dir)
+    if not man_path.exists():
+        raise HTTPException(status_code=404, detail="voice refs not found")
+    from dubbing_pipeline.utils.io import read_json
+
+    man = read_json(man_path, default={})
+    if not isinstance(man, dict):
+        raise HTTPException(status_code=500, detail="invalid voice refs manifest")
+    p = _voice_ref_audio_path_from_manifest(base_dir=base_dir, speaker_id=speaker_id, manifest=man)
+    if p is None:
+        raise HTTPException(status_code=404, detail="voice ref not found")
+    resp = _file_range_response(request, p, media_type="audio/wav")
+    if download:
+        # best-effort attachment name
+        name = f"{Path(str(speaker_id)).name.strip() or 'speaker'}.wav"
+        resp.headers["content-disposition"] = f'attachment; filename="{name}"'
+    return resp
+
+
+@router.post("/api/jobs/{id}/voice_refs/{speaker_id}/override")
+async def post_job_voice_ref_override(
+    request: Request,
+    id: str,
+    speaker_id: str,
+    _: Identity = Depends(require_role(Role.admin)),
+) -> dict[str, Any]:
+    """
+    Admin-only: upload a per-job speaker ref WAV override.
+    Stored under Output/<job>/analysis/voice_refs/<speaker_id>.wav (job-local).
+    """
+    store = _get_store(request)
+    job = store.get(id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    base_dir = _job_base_dir(job)
+    if _privacy_blocks_voice_refs(job):
+        raise HTTPException(status_code=403, detail="Voice refs not available in privacy/minimal mode")
+
+    sid = Path(str(speaker_id or "")).name.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="Invalid speaker_id")
+
+    _enforce_rate_limit(
+        request,
+        key=f"voice_ref:override:user:{_.user.id}",
+        limit=60,
+        per_seconds=60,
+    )
+
+    raw = await request.body()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty body")
+    if len(raw) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (>20MB)")
+
+    outp = _voice_ref_override_path(base_dir, sid)
+    outp.parent.mkdir(parents=True, exist_ok=True)
+    tmp = outp.with_suffix(".upload.tmp")
+    tmp.write_bytes(raw)
+
+    # Normalize to 16kHz mono PCM wav (best-effort) for downstream clone engines.
+    try:
+        from dubbing_pipeline.utils.ffmpeg_safe import run_ffmpeg
+
+        s = get_settings()
+        norm = outp.with_suffix(".norm.wav")
+        run_ffmpeg(
+            [
+                str(s.ffmpeg_bin),
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(tmp),
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                str(norm),
+            ],
+            timeout_s=120,
+            retries=0,
+            capture=True,
+        )
+        norm.replace(outp)
+        tmp.unlink(missing_ok=True)
+    except Exception:
+        # Fall back to the raw upload if ffmpeg is unavailable.
+        tmp.replace(outp)
+
+    # Annotate manifest (best-effort): keep original ref_path but add override_path.
+    with suppress(Exception):
+        from dubbing_pipeline.utils.io import read_json, write_json
+
+        man_path = _voice_refs_manifest_path(base_dir)
+        if man_path.exists():
+            man = read_json(man_path, default={})
+            if isinstance(man, dict) and isinstance(man.get("items"), dict):
+                it = man["items"].get(sid)
+                if isinstance(it, dict):
+                    it["override_path"] = str(outp)
+                    it["override_uploaded_at"] = time.time()
+                    it["override_uploaded_by"] = str(_.user.id)
+                    man["items"][sid] = it
+                    write_json(man_path, man, indent=2)
+
+    audit_event(
+        "voice_ref.override",
+        request=request,
+        user_id=_.user.id,
+        meta={"job_id": id, "speaker_id": sid},
+    )
+    return {"ok": True, "speaker_id": sid, "path": str(outp)}
 
 
 @router.get("/api/jobs/{id}/files")

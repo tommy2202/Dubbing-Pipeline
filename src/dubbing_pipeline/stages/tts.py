@@ -183,6 +183,7 @@ def run(
     tts_speaker: str | None = None,
     tts_speaker_wav: Path | None = None,
     voice_mode: str | None = None,
+    no_clone: bool | None = None,
     voice_ref_dir: Path | None = None,
     voice_store_dir: Path | None = None,
     voice_memory: bool | None = None,
@@ -230,6 +231,7 @@ def run(
         Path(settings.voice_map_json) if settings.voice_map_json else None
     )
     eff_voice_mode = (voice_mode or settings.voice_mode or "clone").strip().lower()
+    eff_no_clone = bool(no_clone) if no_clone is not None else False
     if eff_voice_mode not in {"clone", "preset", "single"}:
         eff_voice_mode = "clone"
     eff_voice_ref_dir = voice_ref_dir or settings.voice_ref_dir
@@ -463,8 +465,61 @@ def run(
     clip_paths: list[Path] = []
     music_suppressed = 0
     _director_plans = []
+    speaker_report: dict[str, dict[str, Any]] = {}
 
     voice_db_embeddings_dir = (settings.voice_db_path.parent / "embeddings").resolve()
+
+    def _rep(speaker_id: str) -> dict[str, Any]:
+        sid = str(speaker_id or "default")
+        rec = speaker_report.get(sid)
+        if rec is None:
+            rec = {
+                "speaker_id": sid,
+                "segments": 0,
+                "clone_attempted": False,
+                "clone_succeeded": False,
+                "refs_used": [],
+                "providers": {},
+                "fallback_reasons": [],
+            }
+            speaker_report[sid] = rec
+        return rec
+
+    def _note_segment(
+        *,
+        speaker_id: str,
+        provider: str,
+        ref_path: Path | None,
+        clone_attempted: bool,
+        clone_succeeded: bool,
+        fallback_reason: str | None,
+    ) -> None:
+        r = _rep(speaker_id)
+        r["segments"] = int(r.get("segments") or 0) + 1
+        r["clone_attempted"] = bool(r.get("clone_attempted") or False) or bool(clone_attempted)
+        r["clone_succeeded"] = bool(r.get("clone_succeeded") or False) or bool(clone_succeeded)
+        prov = str(provider or "unknown")
+        provs = r.get("providers")
+        if not isinstance(provs, dict):
+            provs = {}
+            r["providers"] = provs
+        provs[prov] = int(provs.get(prov) or 0) + 1
+        if ref_path is not None:
+            sref = str(Path(ref_path).resolve())
+            refs = r.get("refs_used")
+            if not isinstance(refs, list):
+                refs = []
+                r["refs_used"] = refs
+            if sref not in refs:
+                refs.append(sref)
+        if fallback_reason:
+            fr = str(fallback_reason)
+            frs = r.get("fallback_reasons")
+            if not isinstance(frs, list):
+                frs = []
+                r["fallback_reasons"] = frs
+            if fr not in frs:
+                frs.append(fr)
 
     # Feature D: per-job overrides (speaker override; optional)
     speaker_overrides: dict[str, str] = {}
@@ -664,6 +719,14 @@ def run(
             clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
             _write_silence_wav(clip, duration_s=max(0.0, float(line["end"]) - float(line["start"])))
             _ffmpeg_to_pcm16k(clip, clip)
+            _note_segment(
+                speaker_id=speaker_id,
+                provider="silence",
+                ref_path=None,
+                clone_attempted=False,
+                clone_succeeded=False,
+                fallback_reason="empty_text",
+            )
             clip_paths.append(clip)
             if progress_cb is not None:
                 with suppress(Exception):
@@ -680,6 +743,14 @@ def run(
                 _ffmpeg_to_pcm16k(clip, clip)
                 clip_paths.append(clip)
                 music_suppressed += 1
+                _note_segment(
+                    speaker_id=speaker_id,
+                    provider="silence",
+                    ref_path=None,
+                    clone_attempted=False,
+                    clone_succeeded=False,
+                    fallback_reason="music_suppressed",
+                )
                 logger.info("music_suppress_segment", idx=i + 1, start_s=seg_start, end_s=seg_end)
                 if progress_cb is not None:
                     with suppress(Exception):
@@ -704,6 +775,14 @@ def run(
                     atomic_copy(p0, tmp_locked)
                     _ffmpeg_to_pcm16k(tmp_locked, clip)
                     clip_paths.append(clip)
+                    _note_segment(
+                        speaker_id=speaker_id,
+                        provider="locked",
+                        ref_path=None,
+                        clone_attempted=False,
+                        clone_succeeded=False,
+                        fallback_reason=None,
+                    )
                     if progress_cb is not None:
                         with suppress(Exception):
                             progress_cb(i + 1, total)
@@ -713,17 +792,15 @@ def run(
                     pass
 
         # Choose clone speaker wav:
-        speaker_wav = (
-            per_speaker_wav_override.get(speaker_id)
-            or eff_tts_speaker_wav
-            or speaker_rep_wav.get(speaker_id)
-        )
+        speaker_wav = per_speaker_wav_override.get(speaker_id) or eff_tts_speaker_wav
         # Per-segment voice mode (Feature K + Tier-2A): do not mutate job-level defaults.
         seg_voice_mode = (
             str(line.get("preferred_voice_mode") or eff_voice_mode or "clone").strip().lower()
         )
         if seg_voice_mode not in {"clone", "preset", "single"}:
             seg_voice_mode = "clone"
+        if eff_no_clone and seg_voice_mode == "clone":
+            seg_voice_mode = "preset"
 
         # Tier-2A: prefer voice-memory refs for stable cross-episode identity.
         if vm_store is not None:
@@ -749,8 +826,9 @@ def run(
                     break
             except Exception:
                 pass
-        # Optional voice reference directory: prefer stable refs (e.g. <ref_dir>/<speaker_id>.wav)
-        if speaker_wav is None and eff_voice_ref_dir:
+        # Optional voice reference directory: prefer stable refs (e.g. <ref_dir>/<speaker_id>.wav).
+        # For cloning, prefer refs over short representative segments.
+        if speaker_wav is None and eff_voice_ref_dir and seg_voice_mode == "clone":
             with suppress(Exception):
                 base = Path(eff_voice_ref_dir).expanduser()
                 cand1 = base / f"{speaker_id}.wav"
@@ -759,6 +837,9 @@ def run(
                     if c.exists() and c.is_file():
                         speaker_wav = c
                         break
+        # Fall back to representative per-speaker segment wav (from diarization work artifacts).
+        if speaker_wav is None:
+            speaker_wav = speaker_rep_wav.get(speaker_id)
         if speaker_wav is None and store is not None:
             with suppress(Exception):
                 c = store.characters.get(speaker_id)
@@ -779,6 +860,11 @@ def run(
                     dest.write_bytes(Path(speaker_wav).read_bytes())
 
         synthesized = False
+        provider_used = "silence"
+        clone_attempted = False
+        clone_succeeded = False
+        ref_used: Path | None = None
+        fallback_reason: str | None = None
 
         def _retry_wrap(fn_name: str, fn):
             def _on_retry(n, delay, ex):
@@ -802,6 +888,8 @@ def run(
         ):
             # 1) XTTS clone (if speaker_wav)
             if speaker_wav is not None and speaker_wav.exists():
+                clone_attempted = True
+                ref_used = Path(speaker_wav)
                 try:
                     _retry_wrap(
                         "xtts_clone",
@@ -814,12 +902,15 @@ def run(
                     )
                     cb.mark_success()
                     synthesized = True
+                    provider_used = "xtts_clone"
+                    clone_succeeded = True
                 except Exception as ex:
                     cb.mark_failure()
                     logger.warning(
                         "tts_xtts_clone_failed", error=str(ex), breaker=cb.snapshot().state
                     )
                     synthesized = False
+                    fallback_reason = f"xtts_clone_failed:{ex}"
 
             # 2) XTTS preset
             if (
@@ -855,18 +946,23 @@ def run(
                     )
                     cb.mark_success()
                     synthesized = True
+                    provider_used = "xtts_preset"
                 except Exception as ex:
                     cb.mark_failure()
                     logger.warning(
                         "tts_xtts_preset_failed", error=str(ex), breaker=cb.snapshot().state
                     )
                     synthesized = False
+                    if fallback_reason is None:
+                        fallback_reason = f"xtts_preset_failed:{ex}"
         else:
             logger.info(
                 "tts_breaker_open_or_engine_missing",
                 breaker=cb.snapshot().state,
                 engine=bool(engine),
             )
+            if seg_voice_mode == "clone" and eff_tts_provider in {"auto", "xtts"}:
+                fallback_reason = fallback_reason or "xtts_unavailable"
 
         # 3) Basic English single-speaker (Coqui) (still requires COQUI_TOS_AGREED)
         # Use a common Coqui model as fallback.
@@ -889,8 +985,11 @@ def run(
 
                 _retry_wrap("basic_tts", _basic)
                 synthesized = True
+                provider_used = "basic_tts"
             except Exception as ex:
                 logger.warning("tts_basic_failed", error=str(ex))
+                if fallback_reason is None:
+                    fallback_reason = f"basic_tts_failed:{ex}"
 
         # 4) espeak-ng last resort
         if not synthesized and eff_tts_provider in {"auto", "xtts", "basic", "espeak"}:
@@ -899,14 +998,18 @@ def run(
                     "espeak", lambda text=text, raw_clip=raw_clip: _espeak_fallback(text, raw_clip)
                 )
                 synthesized = True
+                provider_used = "espeak"
             except Exception as ex:
                 logger.warning("tts_espeak_failed", error=str(ex))
                 synthesized = False
+                if fallback_reason is None:
+                    fallback_reason = f"espeak_failed:{ex}"
 
         if not synthesized:
             _write_silence_wav(
                 raw_clip, duration_s=max(0.0, float(line["end"]) - float(line["start"]))
             )
+            provider_used = "silence"
 
         # Normalize to 16kHz mono PCM for alignment
         try:
@@ -1122,6 +1225,14 @@ def run(
                     clip, target_duration_s=target_dur, max_stretch=float(max_stretch)
                 )
         clip_paths.append(clip)
+        _note_segment(
+            speaker_id=speaker_id,
+            provider=provider_used,
+            ref_path=(ref_used if clone_attempted else None),
+            clone_attempted=clone_attempted,
+            clone_succeeded=clone_succeeded,
+            fallback_reason=fallback_reason,
+        )
         if progress_cb is not None:
             with suppress(Exception):
                 progress_cb(i + 1, total)
@@ -1188,7 +1299,17 @@ def run(
     with suppress(Exception):
         write_json(
             out_dir / "tts_manifest.json",
-            {"clips": [str(p) for p in clip_paths], "wav_out": str(wav_out), "lines": lines},
+            {
+                "clips": [str(p) for p in clip_paths],
+                "wav_out": str(wav_out),
+                "lines": lines,
+                "speaker_report": speaker_report,
+                "voice_mode": str(eff_voice_mode),
+                "no_clone": bool(eff_no_clone),
+                "voice_ref_dir": (str(eff_voice_ref_dir) if eff_voice_ref_dir else None),
+                "voice_store_dir": str(eff_voice_store_dir),
+                "tts_provider": str(eff_tts_provider),
+            },
         )
 
     if job_id:

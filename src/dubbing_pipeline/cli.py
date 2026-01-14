@@ -563,6 +563,14 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
     default=str(get_settings().voice_mode),
     show_default=True,
 )
+@click.option(
+    "--two-pass",
+    "two_pass",
+    type=click.Choice(["off", "on"], case_sensitive=False),
+    default=("on" if bool(getattr(get_settings(), "voice_clone_two_pass", False)) else "off"),
+    show_default=True,
+    help="Two-pass voice cloning: pass1 runs without cloning to build speaker refs; pass2 reruns TTS+mix using refs (HIGH default on).",
+)
 @click.option("--voice-ref-dir", type=click.Path(path_type=Path), default=None)
 @click.option("--voice-store", "voice_store_dir", type=click.Path(path_type=Path), default=None)
 @click.option(
@@ -845,6 +853,7 @@ def run(
     multitrack: str,
     container: str,
     voice_mode: str,
+    two_pass: str,
     voice_ref_dir: Path | None,
     voice_store_dir: Path | None,
     voice_memory: str,
@@ -1291,6 +1300,8 @@ def run(
         overrides["voice_memory"] = str(voice_memory).lower() == "on"
     if _is_explicit("voice_mode"):
         overrides["voice_mode"] = str(voice_mode).lower()
+    if _is_explicit("two_pass"):
+        overrides["voice_clone_two_pass"] = str(two_pass).lower() == "on"
     if _is_explicit("music_detect"):
         overrides["music_detect"] = str(music_detect).lower() == "on"
     if _is_explicit("separation"):
@@ -1320,6 +1331,7 @@ def run(
         "speaker_smoothing": (str(speaker_smoothing).lower() == "on"),
         "voice_memory": (str(voice_memory).lower() == "on"),
         "voice_mode": str(voice_mode).lower(),
+        "voice_clone_two_pass": (str(two_pass).lower() == "on"),
         "music_detect": (str(music_detect).lower() == "on"),
         "separation": str(separation).lower(),
         "mix_mode": str(mix_mode).lower(),

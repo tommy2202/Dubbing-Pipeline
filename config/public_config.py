@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -306,11 +306,16 @@ class PublicConfig(BaseSettings):
 
     # Speaker reference extraction (post-diarization; used to build per-speaker ~N second refs).
     # This does not enable any new pipeline by itself; it just writes reference WAVs for downstream use.
-    voice_ref_target_s: float = Field(default=30.0, alias="VOICE_REF_TARGET_S")
+    voice_ref_target_s: float = Field(
+        default=30.0, validation_alias=AliasChoices("VOICE_REF_TARGET_SECONDS", "VOICE_REF_TARGET_S")
+    )
     voice_ref_min_candidate_s: float = Field(default=0.7, alias="VOICE_REF_MIN_CANDIDATE_S")
     voice_ref_max_candidate_s: float = Field(default=12.0, alias="VOICE_REF_MAX_CANDIDATE_S")
     voice_ref_overlap_eps_s: float = Field(default=0.05, alias="VOICE_REF_OVERLAP_EPS_S")
     voice_ref_min_speech_ratio: float = Field(default=0.60, alias="VOICE_REF_MIN_SPEECH_RATIO")
+
+    # Two-pass voice cloning: pass1 runs without cloning to build speaker refs; pass2 reruns TTS+mix using refs.
+    voice_clone_two_pass: bool = Field(default=False, alias="VOICE_CLONE_TWO_PASS")
 
     # Tier-2 A: Character Voice Memory (opt-in; defaults preserve current behavior)
     voice_memory: bool = Field(default=False, alias="VOICE_MEMORY")  # off by default
