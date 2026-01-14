@@ -6,7 +6,7 @@ import wave
 from pathlib import Path
 
 from dubbing_pipeline.audio.routing import resolve_diarization_input
-from dubbing_pipeline.jobs.models import Job, JobState
+from dubbing_pipeline.jobs.models import Job, JobState, now_utc
 
 
 def _write_tiny_wav(path: Path, *, sr: int = 16000, seconds: float = 0.2) -> None:
@@ -22,10 +22,12 @@ def _write_tiny_wav(path: Path, *, sr: int = 16000, seconds: float = 0.2) -> Non
 
 def _mk_job(*, job_id: str, base_dir: Path) -> Job:
     # Minimal Job instance for routing tests; only id/work_dir are required for base_dir resolution.
+    ts = now_utc()
     return Job(
         id=str(job_id),
         owner_id="u",
         video_path=str(base_dir / "Input" / "x.mp4"),
+        duration_s=1.0,
         src_lang="en",
         tgt_lang="en",
         mode="medium",
@@ -34,8 +36,8 @@ def _mk_job(*, job_id: str, base_dir: Path) -> Job:
         progress=0.0,
         message="",
         error=None,
-        created_at="",
-        updated_at="",
+        created_at=ts,
+        updated_at=ts,
         runtime={},
         output_mkv="",
         output_srt="",
