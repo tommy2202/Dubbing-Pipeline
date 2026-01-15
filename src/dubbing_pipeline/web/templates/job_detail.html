@@ -350,171 +350,185 @@
         </template>
       </div>
 
-      <div class="mt-6">
-        <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div class="text-sm text-slate-300">Speaker refs & cloning</div>
-              <div class="mt-1 text-xs text-slate-500">Extracted per-speaker reference WAVs and TTS clone status.</div>
-            </div>
-            <div class="flex flex-wrap items-center gap-2">
-              <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
-                      @click="loadVoiceRefs()">Refresh</button>
-              {% if user and user.role and user.role.value == "admin" %}
-              <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
-                      @click="rerunPass2()">
-                Rerun pass 2
-              </button>
-              {% endif %}
-            </div>
+    </div>
+  </div>
+
+  <!-- Voices -->
+  <div class="mt-4" x-show="activeTab==='voices'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-sm text-slate-300">Voices</div>
+          <div class="mt-1 text-xs text-slate-500">Map episode speakers to series characters and manage refs.</div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+                  @click="loadVoices()">Refresh</button>
+          {% if user and user.role and user.role.value == "admin" %}
+          <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
+                  @click="rerunPass2()">
+            Rerun pass 2
+          </button>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="voicesError" x-cloak x-text="voicesError"></div>
+
+      <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+        <div class="text-sm text-slate-300">Speaker refs & character mapping</div>
+        <div class="mt-1 text-xs text-slate-500">Select a character and save mapping. Promote writes to the series voice store.</div>
+
+        <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="voiceRefsError" x-cloak x-text="voiceRefsError"></div>
+
+        <template x-if="voiceRefsLoaded && (!voiceRefs || !voiceRefs.available)">
+          <div class="mt-3 text-sm text-slate-500">
+            No speaker refs yet for this job.
+            <span class="text-xs" x-text="voiceRefs && voiceRefs.note ? ('(' + voiceRefs.note + ')') : ''"></span>
           </div>
+        </template>
 
-          <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="voiceRefsError" x-cloak x-text="voiceRefsError"></div>
-
-          <template x-if="voiceRefsLoaded && (!voiceRefs || !voiceRefs.available)">
-            <div class="mt-3 text-sm text-slate-500">
-              No speaker refs yet for this job.
-              <span class="text-xs" x-text="voiceRefs && voiceRefs.note ? ('(' + voiceRefs.note + ')') : ''"></span>
-            </div>
-          </template>
-
-          <template x-if="voiceRefsLoaded && voiceRefs && voiceRefs.available">
-            <div class="mt-4 space-y-3">
-              <template x-for="sid in Object.keys(voiceRefs.items || {}).sort()" :key="sid">
-                <div class="rounded border border-slate-800 bg-slate-950/20 p-3">
-                  <div class="flex flex-wrap items-center justify-between gap-2">
-                    <div class="text-sm text-slate-200">
-                      <span class="font-mono" x-text="sid"></span>
-                      <span class="text-slate-500">·</span>
-                      <span class="text-xs text-slate-400"
-                            x-text="'ref ' + Number((voiceRefs.items[sid]||{}).duration_s||0).toFixed(1) + 's'"></span>
-                      <template x-if="(voiceRefs.items[sid]||{}).override">
-                        <span class="ml-2 rounded bg-amber-700/30 border border-amber-700/60 px-2 py-0.5 text-xs text-amber-200">override</span>
-                      </template>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-2 text-xs">
-                      <span class="rounded bg-slate-900/60 border border-slate-800 px-2 py-1 text-slate-200"
-                            x-text="String((voiceRefs.items[sid]||{}).clone_status || 'unknown')"></span>
-                    </div>
+        <template x-if="voiceRefsLoaded && voiceRefs && voiceRefs.available">
+          <div class="mt-4 space-y-3">
+            <template x-for="sid in Object.keys(voiceRefs.items || {}).sort()" :key="sid">
+              <div class="rounded border border-slate-800 bg-slate-950/20 p-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="text-sm text-slate-200">
+                    <span class="font-mono" x-text="sid"></span>
+                    <span class="text-slate-500">·</span>
+                    <span class="text-xs text-slate-400"
+                          x-text="'used=' + String((voiceRefs.items[sid]||{}).used_ref_kind || 'unknown')"></span>
                   </div>
+                  <div class="flex flex-wrap items-center gap-2 text-xs">
+                    <span class="rounded bg-slate-900/60 border border-slate-800 px-2 py-1 text-slate-200"
+                          x-text="String((voiceRefs.items[sid]||{}).clone_status || 'unknown')"></span>
+                  </div>
+                </div>
 
-                  <template x-if="Array.isArray((voiceRefs.items[sid]||{}).warnings) && (voiceRefs.items[sid]||{}).warnings.length">
-                    <div class="mt-2 text-xs text-amber-200">
-                      <span class="text-amber-300">Warnings:</span>
-                      <span x-text="(voiceRefs.items[sid].warnings || []).join(', ')"></span>
-                    </div>
-                  </template>
-
-                  <template x-if="(voiceRefs.items[sid]||{}).allow_audio">
-                    <div class="mt-3 grid gap-3 sm:grid-cols-2">
-                      <div>
-                        <div class="text-xs text-slate-500">Preview</div>
-                        <audio class="mt-2 w-full" controls preload="none"
-                               :src="(voiceRefs.items[sid]||{}).audio_url"></audio>
-                      </div>
-                      <div>
-                        <div class="text-xs text-slate-500">Links</div>
-                        <div class="mt-2 text-sm">
-                          <a class="underline" :href="(voiceRefs.items[sid]||{}).download_url" target="_blank" rel="noreferrer">download</a>
-                        </div>
-                        <div class="mt-2 text-xs text-slate-500 break-all" x-text="(voiceRefs.items[sid]||{}).effective_ref_path || ''"></div>
-                      </div>
-                    </div>
-                  </template>
-
-                  <template x-if="!(voiceRefs.items[sid]||{}).allow_audio">
-                    <div class="mt-3 text-sm text-slate-500">
-                      Audio preview/download disabled (privacy/minimal mode).
-                    </div>
-                  </template>
-
-                  {% if user and user.role and user.role.value == "admin" %}
+                <template x-if="(voiceRefs.items[sid]||{}).allow_audio">
                   <div class="mt-3">
-                    <div class="text-xs text-slate-500">Admin: override ref WAV</div>
-                    <div class="mt-2 flex flex-wrap items-center gap-2">
-                      <input type="file" accept="audio/wav,audio/*" :id="'refFile_' + sid"
-                             class="block text-xs text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-200 hover:file:bg-slate-700" />
-                      <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
-                              @click="uploadRefOverride(sid)">
-                        Upload override
+                    <div class="text-xs text-slate-500">Extracted ref preview</div>
+                    <audio class="mt-2 w-full" controls preload="none"
+                           :src="(voiceRefs.items[sid]||{}).audio_url"></audio>
+                    <div class="mt-2 text-xs text-slate-500 break-all" x-text="(voiceRefs.items[sid]||{}).effective_ref_path || ''"></div>
+                  </div>
+                </template>
+
+                <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <div class="text-xs text-slate-500">Character (series)</div>
+                    <select class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm text-slate-100"
+                            x-model="speakerToCharacter[sid]">
+                      <option value="">(none)</option>
+                      <template x-for="c in seriesCharacters" :key="c.character_slug">
+                        <option :value="c.character_slug" x-text="(c.display_name || c.character_slug)"></option>
+                      </template>
+                    </select>
+                    <div class="mt-2 text-xs text-slate-500 break-all"
+                         x-text="(voiceRefs.items[sid]||{}).character_ref_path ? ('character ref: ' + (voiceRefs.items[sid]||{}).character_ref_path) : ''"></div>
+                  </div>
+                  <div>
+                    <div class="text-xs text-slate-500">Actions</div>
+                    <div class="mt-1 grid gap-2">
+                      <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium disabled:opacity-50"
+                              :disabled="!canEditVoices"
+                              @click="saveSpeakerMapping(sid)">
+                        Save mapping
+                      </button>
+                      <button type="button" class="rounded bg-emerald-700/30 hover:bg-emerald-700/40 border border-emerald-700/50 px-4 py-3 text-sm text-emerald-100 disabled:opacity-50"
+                              :disabled="!canEditVoices"
+                              @click="promoteToSeriesVoice(sid)">
+                        Promote to series voice
                       </button>
                     </div>
                   </div>
-                  {% endif %}
                 </div>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+        <div class="text-sm text-slate-300">Create new character</div>
+        <div class="mt-2 grid gap-2 sm:grid-cols-3">
+          <input class="sm:col-span-2 rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm text-slate-100"
+                 x-model="newCharacterName" placeholder="Display name (e.g., Rimuru)" />
+          <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm disabled:opacity-50"
+                  :disabled="!canEditVoices"
+                  @click="createCharacter()">
+            Create
+          </button>
+        </div>
+      </div>
+
+      <details class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <summary class="cursor-pointer text-sm text-slate-200">Advanced: voice map (legacy)</summary>
+        <div class="mt-3 text-xs text-slate-500">Used for speaker labels and legacy overrides (best-effort).</div>
+        <div class="mt-4 overflow-x-auto">
+          <table class="min-w-full text-sm">
+            <thead class="text-xs text-slate-500">
+              <tr>
+                <th class="text-left py-2 pr-3">character_id</th>
+                <th class="text-left py-2 pr-3">label</th>
+                <th class="text-left py-2 pr-3">strategy</th>
+                <th class="text-left py-2 pr-3">tts_speaker</th>
+                <th class="text-left py-2 pr-3">tts_speaker_wav</th>
+                <th class="text-left py-2 pr-3">language</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="(row, idx) in voiceItems" :key="idx">
+                <tr class="border-t border-slate-900">
+                  <td class="py-2 pr-3">
+                    <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                           x-model="row.character_id" placeholder="SPEAKER_01" />
+                  </td>
+                  <td class="py-2 pr-3">
+                    <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                           x-model="row.label" placeholder="Alice" />
+                  </td>
+                  <td class="py-2 pr-3">
+                    <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                            x-model="row.speaker_strategy">
+                      <option value="zero-shot">zero-shot</option>
+                      <option value="preset">preset</option>
+                    </select>
+                  </td>
+                  <td class="py-2 pr-3">
+                    <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                           x-model="row.tts_speaker" :disabled="row.speaker_strategy!=='preset'" placeholder="default" />
+                  </td>
+                  <td class="py-2 pr-3">
+                    <div class="text-xs text-slate-400" x-text="row.tts_speaker_wav || ''"></div>
+                  </td>
+                  <td class="py-2 pr-3">
+                    <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                            x-model="row.language">
+                      <option value="en">en</option>
+                      <option value="ja">ja</option>
+                      <option value="auto">auto</option>
+                    </select>
+                  </td>
+                </tr>
               </template>
-            </div>
-          </template>
+            </tbody>
+          </table>
         </div>
 
-        <details class="rounded-lg border border-slate-800 bg-slate-950/30 p-4">
-          <summary class="cursor-pointer text-sm text-slate-200">Advanced: voice map</summary>
-          <div class="mt-3 text-xs text-slate-500">Used for speaker dropdown labels + future synth (best-effort).</div>
-          <div class="mt-4 overflow-x-auto">
-            <table class="min-w-full text-sm">
-              <thead class="text-xs text-slate-500">
-                <tr>
-                  <th class="text-left py-2 pr-3">character_id</th>
-                  <th class="text-left py-2 pr-3">label</th>
-                  <th class="text-left py-2 pr-3">strategy</th>
-                  <th class="text-left py-2 pr-3">tts_speaker</th>
-                  <th class="text-left py-2 pr-3">tts_speaker_wav</th>
-                  <th class="text-left py-2 pr-3">language</th>
-                </tr>
-              </thead>
-              <tbody>
-                <template x-for="(row, idx) in voiceItems" :key="idx">
-                  <tr class="border-t border-slate-900">
-                    <td class="py-2 pr-3">
-                      <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
-                             x-model="row.character_id" placeholder="SPEAKER_01" />
-                    </td>
-                    <td class="py-2 pr-3">
-                      <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
-                             x-model="row.label" placeholder="Alice" />
-                    </td>
-                    <td class="py-2 pr-3">
-                      <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
-                              x-model="row.speaker_strategy">
-                        <option value="zero-shot">zero-shot</option>
-                        <option value="preset">preset</option>
-                      </select>
-                    </td>
-                    <td class="py-2 pr-3">
-                      <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
-                             x-model="row.tts_speaker" :disabled="row.speaker_strategy!=='preset'" placeholder="default" />
-                    </td>
-                    <td class="py-2 pr-3">
-                      <div class="text-xs text-slate-400" x-text="row.tts_speaker_wav || ''"></div>
-                    </td>
-                    <td class="py-2 pr-3">
-                      <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
-                              x-model="row.language">
-                        <option value="en">en</option>
-                        <option value="ja">ja</option>
-                        <option value="auto">auto</option>
-                      </select>
-                    </td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-          </div>
-
-          <div class="mt-4 flex flex-wrap items-center gap-2">
-            <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
-                    @click="voiceItems.push({character_id:'', label:'', speaker_strategy:'preset', tts_speaker:'default', tts_speaker_wav:'', language:'en'})">
-              Add row
-            </button>
-            <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
-                    @click="saveVoiceMap()" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
-              Save mapping
-            </button>
-          </div>
-          <div class="mt-3 text-sm text-emerald-200" x-show="voiceSaved" x-cloak>Saved.</div>
-          <div class="mt-3 text-sm text-red-200" x-show="voiceError" x-cloak x-text="voiceError"></div>
-        </details>
-      </div>
+        <div class="mt-4 flex flex-wrap items-center gap-2">
+          <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+                  @click="voiceItems.push({character_id:'', label:'', speaker_strategy:'preset', tts_speaker:'default', tts_speaker_wav:'', language:'en'})">
+            Add row
+          </button>
+          <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                  @click="saveVoiceMap()" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+            Save mapping
+          </button>
+        </div>
+        <div class="mt-3 text-sm text-emerald-200" x-show="voiceSaved" x-cloak>Saved.</div>
+        <div class="mt-3 text-sm text-red-200" x-show="voiceError" x-cloak x-text="voiceError"></div>
+      </details>
     </div>
   </div>
 
@@ -651,6 +665,8 @@
     return {
       jobId,
       job: null,
+      currentUserId: {% if user %}"{{ user.id }}"{% else %}""{% endif %},
+      currentUserRole: {% if user and user.role and user.role.value %}"{{ user.role.value }}"{% else %}""{% endif %},
       activeTab: "artifacts",
       tabs: [
         { key: "artifacts", label: "Playback" },
@@ -658,6 +674,7 @@
         { key: "quality", label: "QA" },
         { key: "review", label: "Review/Edit" },
         { key: "overrides", label: "Overrides" },
+        { key: "voices", label: "Voices" },
       ],
       setActive(tab) {
         this.activeTab = tab;
@@ -674,7 +691,11 @@
         }
         if (tab === "overrides") {
           if (!this.overridesLoaded) this.loadOverrides();
+        }
+        if (tab === "voices") {
           if (!this.voiceRefsLoaded) this.loadVoiceRefs();
+          if (!this.seriesCharsLoaded) this.loadSeriesCharacters();
+          if (!this.speakerMappingsLoaded) this.loadSpeakerMappings();
         }
       },
       voiceItems: [],
@@ -684,6 +705,17 @@
       voiceRefsLoaded: false,
       voiceRefs: null,
       voiceRefsError: "",
+      voicesError: "",
+      seriesCharsLoaded: false,
+      seriesCharacters: [],
+      speakerMappingsLoaded: false,
+      speakerToCharacter: {},
+      newCharacterName: "",
+      get canEditVoices() {
+        if (!this.job) return false;
+        if (String(this.currentUserRole||"") === "admin") return true;
+        return String(this.job.owner_id||"") === String(this.currentUserId||"");
+      },
       files: null,
       qaLoaded: false,
       qaSummary: null,
@@ -732,7 +764,109 @@
         }
         if (this.activeTab === "overrides") {
           await this.loadOverrides();
+        }
+        if (this.activeTab === "voices") {
+          await this.loadVoices();
+        }
+      },
+
+      async loadVoices() {
+        this.voicesError = "";
+        await Promise.all([this.loadVoiceRefs(), this.loadSeriesCharacters(), this.loadSpeakerMappings()]);
+      },
+
+      async loadSeriesCharacters() {
+        this.seriesCharsLoaded = true;
+        try {
+          const seriesSlug = String(this.job?.series_slug || "");
+          if (!seriesSlug) { this.seriesCharacters = []; return; }
+          const r = await fetch("/api/series/" + encodeURIComponent(seriesSlug) + "/characters", { credentials: "include" });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          this.seriesCharacters = Array.isArray(data.items) ? data.items : [];
+        } catch (e) {
+          this.seriesCharacters = [];
+        }
+      },
+
+      async loadSpeakerMappings() {
+        this.speakerMappingsLoaded = true;
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/speaker-mapping", { credentials: "include" });
+          if (!r.ok) return;
+          const data = await r.json();
+          const items = Array.isArray(data.items) ? data.items : [];
+          const m = {};
+          for (const it of items) {
+            if (!it) continue;
+            const sid = String(it.speaker_id||"").trim();
+            const cslug = String(it.character_slug||"").trim();
+            if (sid && cslug) m[sid] = cslug;
+          }
+          this.speakerToCharacter = { ...this.speakerToCharacter, ...m };
+        } catch (e) {}
+      },
+
+      async createCharacter() {
+        try {
+          const name = String(this.newCharacterName||"").trim();
+          if (!name) return;
+          const seriesSlug = String(this.job?.series_slug || "");
+          if (!seriesSlug) return;
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/series/" + encodeURIComponent(seriesSlug) + "/characters", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "x-csrf-token": csrf },
+            body: JSON.stringify({ display_name: name })
+          });
+          if (!r.ok) throw new Error(await r.text());
+          this.newCharacterName = "";
+          await this.loadSeriesCharacters();
+          window.showToast("Character created", "success");
+        } catch (e) {
+          window.showToast("Failed to create character", "error");
+        }
+      },
+
+      async saveSpeakerMapping(speakerId) {
+        try {
+          const cslug = String(this.speakerToCharacter[speakerId] || "").trim();
+          if (!cslug) return;
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/speaker-mapping", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "x-csrf-token": csrf },
+            body: JSON.stringify({ speaker_id: speakerId, character_slug: cslug, locked: true })
+          });
+          if (!r.ok) throw new Error(await r.text());
+          await this.loadSpeakerMappings();
           await this.loadVoiceRefs();
+          window.showToast("Mapping saved", "success");
+        } catch (e) {
+          window.showToast("Failed to save mapping", "error");
+        }
+      },
+
+      async promoteToSeriesVoice(speakerId) {
+        try {
+          const seriesSlug = String(this.job?.series_slug || "");
+          const cslug = String(this.speakerToCharacter[speakerId] || "").trim();
+          if (!seriesSlug || !cslug) return;
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/series/" + encodeURIComponent(seriesSlug) + "/characters/" + encodeURIComponent(cslug) + "/promote-ref", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "x-csrf-token": csrf },
+            body: JSON.stringify({ job_id: this.jobId, speaker_id: speakerId })
+          });
+          if (!r.ok) throw new Error(await r.text());
+          await this.loadSeriesCharacters();
+          await this.loadVoiceRefs();
+          window.showToast("Promoted to series voice", "success");
+        } catch (e) {
+          window.showToast("Failed to promote", "error");
         }
       },
       async refresh() {

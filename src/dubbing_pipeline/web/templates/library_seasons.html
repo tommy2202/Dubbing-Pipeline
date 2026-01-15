@@ -52,6 +52,85 @@
   </div>
 </div>
 
+<!-- Characters / Voices -->
+<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4"
+     x-data="seriesCharacters('{{ series_slug }}')"
+     x-init="init()">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <div class="text-sm text-slate-300">Characters / Voices</div>
+      <div class="mt-1 text-xs text-slate-500">Series-scoped voice refs (opt-in).</div>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+              @click="reload()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="error" x-cloak x-text="error"></div>
+
+  <div class="mt-4 grid gap-3 sm:grid-cols-2" x-show="!loading" x-cloak>
+    <template x-for="c in items" :key="c.character_slug">
+      <div class="rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+        <div class="flex flex-wrap items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="text-base font-semibold text-slate-200 truncate"
+                 x-text="c.display_name || c.character_slug"></div>
+            <div class="mt-1 text-xs text-slate-500 break-all" x-text="c.character_slug"></div>
+            <div class="mt-1 text-xs text-slate-500" x-text="c.updated_at ? ('updated ' + c.updated_at) : ''"></div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2 text-xs">
+            <template x-if="c.has_ref">
+              <span class="rounded bg-emerald-700/20 border border-emerald-700/40 px-2 py-1 text-emerald-200">ref</span>
+            </template>
+            <template x-if="!c.has_ref">
+              <span class="rounded bg-slate-800/50 border border-slate-800 px-2 py-1 text-slate-300">no ref</span>
+            </template>
+          </div>
+        </div>
+
+        <template x-if="c.audio_url">
+          <div class="mt-3">
+            <audio class="w-full" controls preload="none" :src="c.audio_url"></audio>
+            <div class="mt-2 text-xs text-slate-500 break-all" x-text="c.ref_path || ''"></div>
+          </div>
+        </template>
+
+        <div class="mt-3 grid gap-2">
+          <div>
+            <label class="block text-xs text-slate-500">Upload override ref.wav</label>
+            <input type="file" accept="audio/wav" class="mt-1 block w-full text-sm"
+                   @change="uploadRef(c.character_slug, $event)" />
+          </div>
+          <button class="rounded bg-red-900/40 hover:bg-red-900/60 border border-red-900/40 px-4 py-3 text-sm text-red-100"
+                  @click="deleteCharacter(c.character_slug)">
+            Delete / reset
+          </button>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <div class="mt-4 text-sm text-slate-500" x-show="!loading && items.length===0" x-cloak>
+    No characters yet.
+  </div>
+
+  <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+    <div class="text-sm text-slate-300">Create new character</div>
+    <div class="mt-2 grid gap-2 sm:grid-cols-3">
+      <input class="sm:col-span-2 rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm text-slate-100"
+             x-model="newName" placeholder="Display name (e.g., Rimuru)" />
+      <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
+              @click="createCharacter()">
+        Create
+      </button>
+    </div>
+    <div class="mt-2 text-xs text-slate-500" x-show="createdSlug" x-cloak>
+      Created: <span class="text-slate-300" x-text="createdSlug"></span>
+    </div>
+  </div>
+</div>
+
 <script>
   function librarySeasons(seriesSlug) {
     return {
@@ -86,6 +165,91 @@
           this.items = [];
         } finally {
           this.loading = false;
+        }
+      }
+    };
+  }
+
+  function seriesCharacters(seriesSlug) {
+    return {
+      seriesSlug: seriesSlug,
+      items: [],
+      loading: true,
+      error: "",
+      newName: "",
+      createdSlug: "",
+      async init() { await this.reload(); },
+      async reload() {
+        this.loading = true;
+        this.error = "";
+        try {
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/characters", { credentials: "include" });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          this.items = Array.isArray(data.items) ? data.items : [];
+        } catch (e) {
+          this.items = [];
+          this.error = "Failed to load characters";
+        } finally {
+          this.loading = false;
+        }
+      },
+      async createCharacter() {
+        const name = String(this.newName || "").trim();
+        if (!name) return;
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/characters", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "x-csrf-token": csrf },
+            body: JSON.stringify({ display_name: name })
+          });
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          this.createdSlug = String(data.character?.character_slug || "");
+          this.newName = "";
+          await this.reload();
+          window.showToast("Character created", "success");
+        } catch (e) {
+          window.showToast("Failed to create character", "error");
+        }
+      },
+      async deleteCharacter(characterSlug) {
+        if (!confirm("Delete this character voice?")) return;
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/characters/" + encodeURIComponent(characterSlug), {
+            method: "DELETE",
+            credentials: "include",
+            headers: { "x-csrf-token": csrf }
+          });
+          if (!r.ok) throw new Error(await r.text());
+          await this.reload();
+          window.showToast("Character deleted", "success");
+        } catch (e) {
+          window.showToast("Failed to delete character", "error");
+        }
+      },
+      async uploadRef(characterSlug, ev) {
+        try {
+          const f = ev?.target?.files?.[0];
+          if (!f) return;
+          const csrf = document.getElementById("csrf")?.value || "";
+          const buf = await f.arrayBuffer();
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/characters/" + encodeURIComponent(characterSlug) + "/ref", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/octet-stream", "x-csrf-token": csrf },
+            body: buf
+          });
+          if (!r.ok) throw new Error(await r.text());
+          await this.reload();
+          window.showToast("Ref uploaded", "success");
+        } catch (e) {
+          window.showToast("Failed to upload ref", "error");
+        } finally {
+          try { ev.target.value = ""; } catch(e) {}
         }
       }
     };
