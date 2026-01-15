@@ -38,6 +38,9 @@ async def _run_pass2_once(tmp_root: Path) -> None:
     inp_dir = (tmp_root / "Input").resolve()
     inp_dir.mkdir(parents=True, exist_ok=True)
 
+    # Prevent verifiers from writing artifacts into the repo (e.g., drift reports under ./data/).
+    os.chdir(tmp_root)
+
     os.environ["DUBBING_OUTPUT_DIR"] = str(out_dir)
     os.environ["DUBBING_STATE_DIR"] = str(state_dir)
     # Ensure pass2 does NOT execute any earlier stage functions.
