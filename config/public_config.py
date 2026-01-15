@@ -324,7 +324,9 @@ class PublicConfig(BaseSettings):
     voice_clone_two_pass: bool = Field(default=False, alias="VOICE_CLONE_TWO_PASS")
 
     # Tier-2 A: Character Voice Memory (opt-in; defaults preserve current behavior)
-    voice_memory: bool = Field(default=False, alias="VOICE_MEMORY")  # off by default
+    voice_memory: bool = Field(
+        default=False, validation_alias=AliasChoices("VOICE_MEMORY_ENABLED", "VOICE_MEMORY")
+    )
     voice_memory_dir: Path = Field(
         default_factory=lambda: (Path.cwd() / "data" / "voice_memory").resolve(),
         alias="VOICE_MEMORY_DIR",

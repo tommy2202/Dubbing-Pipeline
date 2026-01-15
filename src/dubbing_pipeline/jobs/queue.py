@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shutil
 import time
@@ -294,6 +295,8 @@ class JobQueue:
         out_root = Path(get_settings().output_dir).resolve()
         # Optional project output subdir (stored on job.runtime by batch/project submission).
         runtime = dict(job.runtime or {})
+        # Base stem used for Output/<stem>/... and artifact naming.
+        stem = str(runtime.get("source_stem") or video_path.stem or str(job.id)).strip() or str(job.id)
         # Privacy/data minimization (opt-in; default off). Also triggers minimal retention.
         try:
             from dubbing_pipeline.security.privacy import resolve_privacy
@@ -310,9 +313,6 @@ class JobQueue:
             base_dir = get_job_output_root(job)
         except Exception:
             # Fallback to legacy inline behavior (should match get_job_output_root).
-            stem = str(runtime.get("source_stem") or video_path.stem or str(job.id)).strip() or str(
-                job.id
-            )
             proj_sub = ""
             try:
                 proj = runtime.get("project")
@@ -324,6 +324,10 @@ class JobQueue:
                 base_dir = (out_root / proj_sub / stem).resolve()
             else:
                 base_dir = (out_root / stem).resolve()
+        else:
+            # Ensure downstream naming uses the resolved output root leaf.
+            with suppress(Exception):
+                stem = str(base_dir.name or stem).strip() or stem
         base_dir.mkdir(parents=True, exist_ok=True)
         # Stable per-job pointer (best-effort) so mobile/API users can find artifacts under Output/jobs/<job_id>/...
         # We keep the canonical base_dir at Output/<stem>/... for backwards compatibility.
@@ -385,8 +389,36 @@ class JobQueue:
             two_pass_enabled = False
             two_pass_phase = "pass1"
             two_pass_request = ""
+        is_pass2_outer = bool(str(two_pass_phase or "") == "pass2")
+        # Persist two-pass state into runtime for UI/debugging (best-effort).
+        with suppress(Exception):
+            curj0 = self.store.get(job_id)
+            rt0b = dict((curj0.runtime or {}) if curj0 else runtime)
+            tp0 = rt0b.get("two_pass") if isinstance(rt0b.get("two_pass"), dict) else {}
+            tp0 = dict(tp0 or {})
+            tp0["enabled"] = bool(two_pass_enabled)
+            tp0["phase"] = str(two_pass_phase or "pass1")
+            tp0.setdefault("markers", [])
+            tp0.setdefault("skipped_in_pass2", [])
+            rt0b["two_pass"] = tp0
+            rt0b["two_pass_clone"] = bool(two_pass_enabled)
+            self.store.update(job_id, runtime=rt0b)
         self.store.update(job_id, state=JobState.RUNNING, progress=0.0, message="Starting")
         self.store.append_log(job_id, f"[{now_utc()}] start job={job_id}")
+        if is_pass2_outer:
+            self.store.append_log(job_id, f"[{now_utc()}] passB_cloning_started")
+            with suppress(Exception):
+                curj0 = self.store.get(job_id)
+                rt0b = dict((curj0.runtime or {}) if curj0 else runtime)
+                tp0 = rt0b.get("two_pass") if isinstance(rt0b.get("two_pass"), dict) else {}
+                tp0 = dict(tp0 or {})
+                mk = tp0.get("markers")
+                if not isinstance(mk, list):
+                    mk = []
+                mk.append("passB_cloning_started")
+                tp0["markers"] = mk
+                rt0b["two_pass"] = tp0
+                self.store.update(job_id, runtime=rt0b)
         with suppress(Exception):
             audit.emit(
                 "job.started",
@@ -418,6 +450,23 @@ class JobQueue:
             except Exception:
                 pass
 
+        class _Pass2Skip(Exception):
+            """Internal control-flow for pass2 skip-only blocks."""
+
+        def _fail_if_forbidden_stage(stage: str) -> None:
+            """
+            Test-only guard used by scripts/verify_two_pass_orchestration.py.
+            If DUBBING_PIPELINE_FORBID_STAGES contains this stage name, raise.
+            """
+            raw = str(os.environ.get("DUBBING_PIPELINE_FORBID_STAGES", "") or "").strip()
+            if not raw:
+                raw = str(os.environ.get("DP_FORBID_STAGES", "") or "").strip()
+            if not raw:
+                return
+            forbidden = {s.strip().lower() for s in raw.split(",") if s.strip()}
+            if str(stage or "").strip().lower() in forbidden:
+                raise RuntimeError(f"forbidden_stage:{stage}")
+
         decrypted_video: Path | None = None
         try:
             await self._check_canceled(job_id)
@@ -432,6 +481,27 @@ class JobQueue:
                     return cur is not None and cur.state == JobState.CANCELED
                 except Exception:
                     return False
+
+            def _note_pass2_skip(stage: str, reason: str = "") -> None:
+                if not is_pass2_outer:
+                    return
+                with suppress(Exception):
+                    curj = self.store.get(job_id)
+                    rt = dict((curj.runtime or {}) if curj else runtime)
+                    tp = rt.get("two_pass") if isinstance(rt.get("two_pass"), dict) else {}
+                    tp = dict(tp or {})
+                    lst = tp.get("skipped_in_pass2")
+                    if not isinstance(lst, list):
+                        lst = []
+                    lst.append({"stage": str(stage), "reason": str(reason or "")})
+                    tp["skipped_in_pass2"] = lst
+                    rt["two_pass"] = tp
+                    self.store.update(job_id, runtime=rt)
+                with suppress(Exception):
+                    msg = f"[{now_utc()}] pass2_skip stage={stage}"
+                    if reason:
+                        msg += f" reason={reason}"
+                    self.store.append_log(job_id, msg)
 
             # If input video is encrypted-at-rest, decrypt once into the work dir for the duration of the job.
             # Fail-safe: if encryption is enabled but misconfigured, the job must fail.
@@ -470,10 +540,27 @@ class JobQueue:
             self.store.append_log(job_id, f"[{now_utc()}] audio_extractor")
             try:
                 wav_guess = work_dir / "audio.wav"
+                if is_pass2_outer and not (wav_guess.exists() and stage_is_done(ckpt, "audio")):
+                    # Pass B must not run audio extraction; fail-safe: skip pass B.
+                    self.store.append_log(
+                        job_id,
+                        f"[{now_utc()}] pass2 skipped: missing audio checkpoint",
+                    )
+                    self.store.update(
+                        job_id,
+                        state=JobState.DONE,
+                        progress=1.0,
+                        message="Done (pass2 skipped: missing audio checkpoint)",
+                    )
+                    self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
+                    return
                 if wav_guess.exists() and stage_is_done(ckpt, "audio"):
                     wav = wav_guess
                     self.store.append_log(job_id, f"[{now_utc()}] audio_extractor (checkpoint hit)")
+                    if is_pass2_outer:
+                        _note_pass2_skip("audio_extractor", "checkpoint_hit")
                 else:
+                    _fail_if_forbidden_stage("audio_extractor")
                     if sched is None:
                         wav = run_with_timeout(
                             "audio_extract",
@@ -523,6 +610,8 @@ class JobQueue:
             await self._check_canceled(job_id)
             # Stage manifest (resume-safe metadata; best-effort)
             try:
+                if is_pass2_outer:
+                    raise _Pass2Skip()
                 from dubbing_pipeline.jobs.manifests import file_fingerprint, write_stage_manifest
 
                 # Project profile provenance (best-effort; affects resume params hash)
@@ -567,6 +656,8 @@ class JobQueue:
                     },
                     outputs={"audio_wav": str(Path(str(wav)).resolve())},
                 )
+            except _Pass2Skip:
+                pass
             except Exception:
                 pass
 
@@ -577,6 +668,16 @@ class JobQueue:
             base_analysis_dir.mkdir(parents=True, exist_ok=True)
             music_regions_path_work: Path | None = None
             try:
+                if is_pass2_outer:
+                    # Pass B must not redo analysis; prefer existing effective regions if present.
+                    eff = base_analysis_dir / "music_regions.effective.json"
+                    raw = base_analysis_dir / "music_regions.json"
+                    if eff.exists():
+                        music_regions_path_work = eff
+                    elif raw.exists():
+                        music_regions_path_work = raw
+                    _note_pass2_skip("music_detect", "reuse_existing")
+                    raise _Pass2Skip()
                 if bool(getattr(settings, "music_detect", False)):
                     from dubbing_pipeline.audio.music_detect import (
                         analyze_audio_for_music_regions,
@@ -612,10 +713,15 @@ class JobQueue:
                         write_oped_json(oped, oped_path)
                         with suppress(Exception):
                             atomic_copy(oped_path, base_analysis_dir / "op_ed.json")
+            except _Pass2Skip:
+                pass
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] music_detect failed: {ex}")
             # Feature D: per-job overrides can provide effective music regions even if detection is off.
             try:
+                if is_pass2_outer:
+                    _note_pass2_skip("overrides", "pass2_no_recompute")
+                    raise _Pass2Skip()
                 from dubbing_pipeline.review.overrides import apply_overrides, overrides_path
 
                 if overrides_path(base_dir).exists() or music_regions_path_work is not None:
@@ -627,6 +733,8 @@ class JobQueue:
                         job_id,
                         f"[{now_utc()}] overrides applied hash={rep.overrides_hash} music_regions={str(music_regions_path_work or '')}",
                     )
+            except _Pass2Skip:
+                pass
             except Exception:
                 pass
 
@@ -643,6 +751,9 @@ class JobQueue:
 
             # Per-project profile: can provide mix presets + QA thresholds + provenance (best-effort).
             try:
+                if is_pass2_outer:
+                    _note_pass2_skip("project_profile", "pass2_no_recompute")
+                    raise _Pass2Skip()
                 curj = self.store.get(job_id)
                 rt2 = dict((curj.runtime or {}) if curj else runtime)
                 proj_name = str(rt2.get("project_name") or "").strip()
@@ -672,6 +783,8 @@ class JobQueue:
                         log_profile_applied(
                             project=prof.name, profile_hash=prof.profile_hash, applied_keys=applied
                         )
+            except _Pass2Skip:
+                pass
             except Exception:
                 pass
 
@@ -683,8 +796,13 @@ class JobQueue:
             ).lower()
             background_wav: Path | None = None
             if mix_mode == "enhanced":
-                if sep_mode == "demucs":
+                if is_pass2_outer:
+                    bg = (base_stems_dir / "background.wav").resolve()
+                    background_wav = bg if bg.exists() else Path(str(wav))
+                    _note_pass2_skip("separation", "reuse_existing")
+                elif sep_mode == "demucs":
                     try:
+                        _fail_if_forbidden_stage("separation")
                         from dubbing_pipeline.audio.separation import separate_dialogue
                         from dubbing_pipeline.utils.io import atomic_copy
 
@@ -811,10 +929,37 @@ class JobQueue:
                         job_id,
                         f"[{now_utc()}] voice_refs built speakers={len((man.get('items') or {}).keys())}",
                     )
+                    self.store.append_log(job_id, f"[{now_utc()}] refs_extracted")
+                    with suppress(Exception):
+                        curj = self.store.get(job_id)
+                        rt3 = dict((curj.runtime or {}) if curj else runtime)
+                        tp3 = rt3.get("two_pass") if isinstance(rt3.get("two_pass"), dict) else {}
+                        tp3 = dict(tp3 or {})
+                        mk = tp3.get("markers")
+                        if not isinstance(mk, list):
+                            mk = []
+                        mk.append("refs_extracted")
+                        tp3["markers"] = mk
+                        rt3["two_pass"] = tp3
+                        self.store.update(job_id, runtime=rt3)
                 except Exception as ex:
                     self.store.append_log(job_id, f"[{now_utc()}] voice_refs skipped: {ex}")
 
             try:
+                if is_pass2_outer:
+                    # Pass B must NOT redo diarization or ref extraction.
+                    diar_wav = Path(str(wav))
+                    _note_pass2_skip("diarize", "pass2_no_rerun")
+                    _note_pass2_skip("voice_refs", "pass2_no_rerun")
+                    if diar_json_work.exists():
+                        with suppress(Exception):
+                            from dubbing_pipeline.utils.io import read_json
+
+                            dj = read_json(diar_json_work, default={})
+                            segs = dj.get("segments") if isinstance(dj, dict) else None
+                            if isinstance(segs, list):
+                                diar_segments = [s for s in segs if isinstance(s, dict)]
+                    raise _DiarizeCheckpointHit()
                 self.store.update(job_id, progress=0.12, message="Diarizing speakers")
                 self.store.append_log(job_id, f"[{now_utc()}] diarize")
                 try:
@@ -850,6 +995,7 @@ class JobQueue:
                     raise _DiarizeCheckpointHit()
 
                 cfg = DiarizeConfig(diarizer=str(settings.diarizer))
+                _fail_if_forbidden_stage("diarize")
                 utts = run_with_timeout(
                     "diarize",
                     timeout_s=limits.timeout_diarize_s,
@@ -1213,7 +1359,8 @@ class JobQueue:
                     progress=0.25,
                     message=f"Diarized ({len(set(s.get('speaker_id') for s in diar_segments))} speakers)",
                 )
-                _build_voice_refs_best_effort()
+                if not is_pass2_outer:
+                    _build_voice_refs_best_effort()
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] diarize failed: {ex}")
                 self.store.update(job_id, progress=0.25, message="Diarize skipped")
@@ -1268,8 +1415,26 @@ class JobQueue:
                 with time_hist(pipeline_transcribe_seconds) as elapsed:
                     t_wh0 = time.perf_counter()
                     srt_meta = srt_out.with_suffix(".json")
+                    if is_pass2_outer and not (
+                        srt_out.exists() and srt_meta.exists() and stage_is_done(ckpt, "transcribe")
+                    ):
+                        # Pass B must not run ASR; fail-safe: skip pass B.
+                        self.store.append_log(
+                            job_id,
+                            f"[{now_utc()}] pass2 skipped: missing transcribe checkpoint",
+                        )
+                        self.store.update(
+                            job_id,
+                            state=JobState.DONE,
+                            progress=1.0,
+                            message="Done (pass2 skipped: missing transcribe checkpoint)",
+                        )
+                        self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
+                        return
                     if srt_out.exists() and srt_meta.exists() and stage_is_done(ckpt, "transcribe"):
                         self.store.append_log(job_id, f"[{now_utc()}] transcribe (checkpoint hit)")
+                        if is_pass2_outer:
+                            _note_pass2_skip("transcribe", "checkpoint_hit")
                     else:
                         # Import path: if a source SRT/transcript was provided at submit time, skip ASR.
                         try:
@@ -1349,6 +1514,7 @@ class JobQueue:
                                 job_id, f"[{now_utc()}] transcribe skipped (import)"
                             )
                         else:
+                            _fail_if_forbidden_stage("transcribe")
                             if sched is None:
                                 run_with_timeout(
                                     "transcribe",
@@ -1901,6 +2067,25 @@ class JobQueue:
                 self.store.append_log(job_id, f"[{now_utc()}] translate (checkpoint hit)")
                 subs_srt_path = translated_srt
                 do_translate = False
+                if is_pass2_outer:
+                    _note_pass2_skip("translate", "checkpoint_hit")
+
+            if is_pass2_outer and do_translate:
+                # Pass B must not run MT; fail-safe: skip pass B.
+                self.store.append_log(
+                    job_id,
+                    f"[{now_utc()}] pass2 skipped: missing translate checkpoint",
+                )
+                self.store.update(
+                    job_id,
+                    state=JobState.DONE,
+                    progress=1.0,
+                    message="Done (pass2 skipped: missing translate checkpoint)",
+                )
+                self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
+                return
+            if is_pass2_outer and not do_translate:
+                _note_pass2_skip("translate", "not_needed_or_already_done")
 
             if do_translate:
                 self.store.update(job_id, progress=0.62, message="Translating subtitles")
@@ -1920,6 +2105,7 @@ class JobQueue:
                         audio_path=str(wav),
                         device=device,
                     )
+                    _fail_if_forbidden_stage("translate")
                     translated_segments = run_with_timeout(
                         "translate",
                         timeout_s=limits.timeout_translate_s,
@@ -2288,6 +2474,8 @@ class JobQueue:
                             tts_speaker_wav=tts_speaker_wav,
                             voice_mode=str(voice_mode_eff),
                             no_clone=bool(no_clone_eff),
+                            two_pass_enabled=bool(two_pass_enabled),
+                            two_pass_phase=str(two_pass_phase or ""),
                             voice_ref_dir=voice_ref_dir_eff,
                             voice_store_dir=settings.voice_store_dir,
                             tts_provider=str(settings.tts_provider),
@@ -2427,6 +2615,15 @@ class JobQueue:
                     # best-effort duration from diarization-timed segments
                     dur = max((float(s["end"]) for s in segments_for_mt), default=0.0)
                     _write_silence_wav(tts_wav, duration_s=dur)
+
+            # Persist TTS manifest outside ephemeral work dir (best-effort).
+            with suppress(Exception):
+                from dubbing_pipeline.utils.io import atomic_copy
+
+                analysis_dir = (base_dir / "analysis").resolve()
+                analysis_dir.mkdir(parents=True, exist_ok=True)
+                if (work_dir / "tts_manifest.json").exists():
+                    atomic_copy(work_dir / "tts_manifest.json", analysis_dir / "tts_manifest.json")
 
             self.store.update(job_id, progress=0.95, message="TTS done")
 
@@ -2937,6 +3134,19 @@ class JobQueue:
                     progress=0.96,
                     message="Queued (pass 2)",
                 )
+                self.store.append_log(job_id, f"[{now_utc()}] passA_complete")
+                with suppress(Exception):
+                    curj2 = self.store.get(job_id)
+                    rt3 = dict((curj2.runtime or {}) if curj2 else rt2)
+                    tp3 = rt3.get("two_pass") if isinstance(rt3.get("two_pass"), dict) else {}
+                    tp3 = dict(tp3 or {})
+                    mk = tp3.get("markers")
+                    if not isinstance(mk, list):
+                        mk = []
+                    mk.append("passA_complete")
+                    tp3["markers"] = mk
+                    rt3["two_pass"] = tp3
+                    self.store.update(job_id, runtime=rt3)
                 self.store.append_log(job_id, f"[{now_utc()}] two_pass: queued pass2")
                 # Submit via Redis backend or local scheduler.
                 try:
@@ -2973,6 +3183,9 @@ class JobQueue:
 
             # Mobile-friendly playback outputs (H.264/AAC MP4 + optional HLS).
             try:
+                if is_pass2_outer:
+                    _note_pass2_skip("mobile_outputs", "pass2_skip")
+                    raise _Pass2Skip()
                 if bool(getattr(settings, "mobile_outputs", True)):
                     from dubbing_pipeline.stages.export import export_mobile_hls, export_mobile_mp4
 
@@ -3025,12 +3238,20 @@ class JobQueue:
                             cancel_check=_cancel_check_sync,
                             cancel_exc=JobCanceled(),
                         )
+            except _Pass2Skip:
+                pass
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] mobile outputs skipped: {ex}")
 
             # Tier-3A: optional lip-sync plugin (default off).
             try:
-                mode = str(getattr(settings, "lipsync", "off") or "off").strip().lower()
+                if is_pass2_outer:
+                    _note_pass2_skip("lipsync", "pass2_skip")
+                mode = (
+                    "off"
+                    if is_pass2_outer
+                    else str(getattr(settings, "lipsync", "off") or "off").strip().lower()
+                )
                 if mode != "off":
                     from dubbing_pipeline.plugins.lipsync.base import LipSyncRequest
                     from dubbing_pipeline.plugins.lipsync.registry import resolve_lipsync_plugin
@@ -3169,6 +3390,20 @@ class JobQueue:
                 output_srt=str(subs_srt_path) if subs_srt_path else "",
                 work_dir=str(base_dir),
             )
+            if is_pass2_outer:
+                self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
+                with suppress(Exception):
+                    curj2 = self.store.get(job_id)
+                    rt2 = dict((curj2.runtime or {}) if curj2 else runtime)
+                    tp2 = rt2.get("two_pass") if isinstance(rt2.get("two_pass"), dict) else {}
+                    tp2 = dict(tp2 or {})
+                    mk = tp2.get("markers")
+                    if not isinstance(mk, list):
+                        mk = []
+                    mk.append("passB_complete")
+                    tp2["markers"] = mk
+                    rt2["two_pass"] = tp2
+                    self.store.update(job_id, runtime=rt2)
             # Best-effort library mirror + manifest (must never affect job success).
             with suppress(Exception):
                 self._write_library_artifacts_best_effort(job_id=job_id, base_dir=base_dir)

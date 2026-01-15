@@ -184,6 +184,8 @@ def run(
     tts_speaker_wav: Path | None = None,
     voice_mode: str | None = None,
     no_clone: bool | None = None,
+    two_pass_enabled: bool | None = None,
+    two_pass_phase: str | None = None,
     voice_ref_dir: Path | None = None,
     voice_store_dir: Path | None = None,
     voice_memory: bool | None = None,
@@ -791,8 +793,13 @@ def run(
                     # fall through to normal synthesis
                     pass
 
-        # Choose clone speaker wav:
-        speaker_wav = per_speaker_wav_override.get(speaker_id) or eff_tts_speaker_wav
+        # Choose clone speaker wav priority:
+        # 1) explicit per-character/speaker override (job map / UI override)
+        # 2) per-speaker extracted ref (this job; voice_ref_dir)
+        # 3) persistent voice-memory ref (if enabled; future prompts)
+        # 4) global TTS_SPEAKER_WAV
+        # 5) default voice preset (handled later via preset selection)
+        speaker_wav = per_speaker_wav_override.get(speaker_id)
         # Per-segment voice mode (Feature K + Tier-2A): do not mutate job-level defaults.
         seg_voice_mode = (
             str(line.get("preferred_voice_mode") or eff_voice_mode or "clone").strip().lower()
@@ -802,14 +809,26 @@ def run(
         if eff_no_clone and seg_voice_mode == "clone":
             seg_voice_mode = "preset"
 
-        # Tier-2A: prefer voice-memory refs for stable cross-episode identity.
+        # Optional voice reference directory: prefer stable refs (e.g. <ref_dir>/<speaker_id>.wav).
+        # For cloning, prefer refs over short representative segments.
+        if speaker_wav is None and eff_voice_ref_dir and seg_voice_mode == "clone":
+            with suppress(Exception):
+                base = Path(eff_voice_ref_dir).expanduser()
+                cand1 = base / f"{speaker_id}.wav"
+                cand2 = base / speaker_id / "ref.wav"
+                for c in (cand1, cand2):
+                    if c.exists() and c.is_file():
+                        speaker_wav = c
+                        break
+        # Tier-2A: voice-memory refs (optional) for stable cross-episode identity.
         if vm_store is not None:
             try:
                 # allow optional manual speaker_id -> character_id mapping
                 cid = vm_manual.get(speaker_id, speaker_id)
-                ref = vm_store.best_ref(cid)
-                if ref is not None and ref.exists():
-                    speaker_wav = ref
+                if speaker_wav is None:
+                    ref = vm_store.best_ref(cid)
+                    if ref is not None and ref.exists():
+                        speaker_wav = ref
                 # Allow per-character preferences to override effective voice_mode/preset.
                 for c in vm_store.list_characters():
                     if str(c.get("character_id") or "") != str(cid):
@@ -826,17 +845,9 @@ def run(
                     break
             except Exception:
                 pass
-        # Optional voice reference directory: prefer stable refs (e.g. <ref_dir>/<speaker_id>.wav).
-        # For cloning, prefer refs over short representative segments.
-        if speaker_wav is None and eff_voice_ref_dir and seg_voice_mode == "clone":
-            with suppress(Exception):
-                base = Path(eff_voice_ref_dir).expanduser()
-                cand1 = base / f"{speaker_id}.wav"
-                cand2 = base / speaker_id / "ref.wav"
-                for c in (cand1, cand2):
-                    if c.exists() and c.is_file():
-                        speaker_wav = c
-                        break
+        # Global default clone speaker wav (lowest priority among ref sources).
+        if speaker_wav is None:
+            speaker_wav = eff_tts_speaker_wav
         # Fall back to representative per-speaker segment wav (from diarization work artifacts).
         if speaker_wav is None:
             speaker_wav = speaker_rep_wav.get(speaker_id)
@@ -1306,6 +1317,8 @@ def run(
                 "wav_out": str(wav_out),
                 "lines": lines,
                 "speaker_report": speaker_report,
+                "two_pass_clone": bool(two_pass_enabled),
+                "two_pass_phase": (str(two_pass_phase) if two_pass_phase is not None else None),
                 "voice_mode": str(eff_voice_mode),
                 "no_clone": bool(eff_no_clone),
                 "voice_ref_dir": (str(eff_voice_ref_dir) if eff_voice_ref_dir else None),
