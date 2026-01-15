@@ -186,6 +186,8 @@ def run(
     no_clone: bool | None = None,
     two_pass_enabled: bool | None = None,
     two_pass_phase: str | None = None,
+    series_slug: str | None = None,
+    speaker_character_map: dict[str, str] | None = None,
     voice_ref_dir: Path | None = None,
     voice_store_dir: Path | None = None,
     voice_memory: bool | None = None,
@@ -468,6 +470,7 @@ def run(
     music_suppressed = 0
     _director_plans = []
     speaker_report: dict[str, dict[str, Any]] = {}
+    _saved_character_refs: set[tuple[str, str]] = set()
 
     voice_db_embeddings_dir = (settings.voice_db_path.parent / "embeddings").resolve()
 
@@ -794,11 +797,12 @@ def run(
                     pass
 
         # Choose clone speaker wav priority:
-        # 1) explicit per-character/speaker override (job map / UI override)
-        # 2) per-speaker extracted ref (this job; voice_ref_dir)
-        # 3) persistent voice-memory ref (if enabled; future prompts)
+        # 1) explicit per-speaker override (job map / UI override)
+        # 2) persistent character ref (series-scoped) when speaker->character mapping exists
+        # 3) per-speaker extracted ref (this job; voice_ref_dir)
         # 4) global TTS_SPEAKER_WAV
-        # 5) default voice preset (handled later via preset selection)
+        # 5) representative speaker segment wav (diarization artifacts)
+        # 6) default voice preset (handled later via preset selection)
         speaker_wav = per_speaker_wav_override.get(speaker_id)
         # Per-segment voice mode (Feature K + Tier-2A): do not mutate job-level defaults.
         seg_voice_mode = (
@@ -809,8 +813,36 @@ def run(
         if eff_no_clone and seg_voice_mode == "clone":
             seg_voice_mode = "preset"
 
-        # Optional voice reference directory: prefer stable refs (e.g. <ref_dir>/<speaker_id>.wav).
-        # For cloning, prefer refs over short representative segments.
+        # 2) Persistent character ref (series-scoped), if mapped.
+        if (
+            speaker_wav is None
+            and seg_voice_mode == "clone"
+            and str(series_slug or "").strip()
+            and isinstance(speaker_character_map, dict)
+        ):
+            try:
+                from dubbing_pipeline.voice_store.store import get_character_ref
+
+                cslug = str(speaker_character_map.get(str(speaker_id)) or "").strip()
+                if cslug:
+                    cref = get_character_ref(
+                        str(series_slug),
+                        cslug,
+                        voice_store_dir=eff_voice_store_dir,
+                    )
+                    if cref is not None and cref.exists():
+                        speaker_wav = cref
+                        logger.info(
+                            "character_ref_used",
+                            series=str(series_slug),
+                            character=str(cslug),
+                            path=str(cref),
+                            speaker_id=str(speaker_id),
+                        )
+            except Exception:
+                pass
+
+        # 3) Per-job voice reference directory: prefer extracted refs for this job.
         if speaker_wav is None and eff_voice_ref_dir and seg_voice_mode == "clone":
             with suppress(Exception):
                 base = Path(eff_voice_ref_dir).expanduser()
@@ -819,21 +851,16 @@ def run(
                 for c in (cand1, cand2):
                     if c.exists() and c.is_file():
                         speaker_wav = c
+                        logger.info("speaker_ref_used", speaker_id=str(speaker_id), path=str(c))
                         break
-        # Tier-2A: voice-memory refs (optional) for stable cross-episode identity.
+
+        # Optional: legacy voice-memory delivery preferences only (do NOT use it as a ref store).
         if vm_store is not None:
             try:
-                # allow optional manual speaker_id -> character_id mapping
                 cid = vm_manual.get(speaker_id, speaker_id)
-                if speaker_wav is None:
-                    ref = vm_store.best_ref(cid)
-                    if ref is not None and ref.exists():
-                        speaker_wav = ref
-                # Allow per-character preferences to override effective voice_mode/preset.
                 for c in vm_store.list_characters():
                     if str(c.get("character_id") or "") != str(cid):
                         continue
-                    # Only apply legacy per-character voice_mode if no explicit delivery-profile preferred_voice_mode exists.
                     pref_mode = ""
                     if not str(line.get("preferred_voice_mode") or "").strip():
                         pref_mode = str(c.get("voice_mode") or "").strip().lower()
@@ -861,14 +888,7 @@ def run(
                             speaker_wav = pp
                             break
 
-        # Persist reference wavs to a stable store (best-effort, no-op on failure).
-        if speaker_wav is not None and speaker_wav.exists():
-            with suppress(Exception):
-                dest_dir = (eff_voice_store_dir / speaker_id).resolve()
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                dest = dest_dir / "ref.wav"
-                if not dest.exists():
-                    dest.write_bytes(Path(speaker_wav).read_bytes())
+        # NOTE: persistent refs are stored via `dubbing_pipeline.voice_store` (series/character scoped).
 
         synthesized = False
         provider_used = "silence"
@@ -879,6 +899,37 @@ def run(
             # Record which reference WAV was selected even if XTTS is unavailable and we fall back.
             ref_used = Path(speaker_wav)
         fallback_reason: str | None = None
+
+        # Best-effort auto-enroll: if mapping exists but no persistent ref exists yet, save the job ref.
+        # Opt-in via `voice_memory` (privacy-safe default: off).
+        if (
+            eff_voice_memory
+            and seg_voice_mode == "clone"
+            and ref_used is not None
+            and str(series_slug or "").strip()
+            and isinstance(speaker_character_map, dict)
+        ):
+            try:
+                from dubbing_pipeline.voice_store.store import get_character_ref, save_character_ref
+
+                cslug = str(speaker_character_map.get(str(speaker_id)) or "").strip()
+                if cslug and (str(series_slug), cslug) not in _saved_character_refs:
+                    if get_character_ref(str(series_slug), cslug, voice_store_dir=eff_voice_store_dir) is None:
+                        save_character_ref(
+                            str(series_slug),
+                            cslug,
+                            ref_used,
+                            job_id=str(job_id or ""),
+                            metadata={
+                                "display_name": "",
+                                "created_by": "",
+                                "source": "auto_enroll",
+                            },
+                            voice_store_dir=eff_voice_store_dir,
+                        )
+                        _saved_character_refs.add((str(series_slug), cslug))
+            except Exception:
+                pass
 
         def _retry_wrap(fn_name: str, fn):
             def _on_retry(n, delay, ex):
@@ -1319,6 +1370,7 @@ def run(
                 "speaker_report": speaker_report,
                 "two_pass_clone": bool(two_pass_enabled),
                 "two_pass_phase": (str(two_pass_phase) if two_pass_phase is not None else None),
+                "series_slug": (str(series_slug) if series_slug is not None else None),
                 "voice_mode": str(eff_voice_mode),
                 "no_clone": bool(eff_no_clone),
                 "voice_ref_dir": (str(eff_voice_ref_dir) if eff_voice_ref_dir else None),

@@ -23,6 +23,9 @@ class JobStore:
         # Schema for grouped library browsing (indexed SQL table inside jobs.db).
         with suppress(Exception):
             self._init_library_schema()
+        # Schema for persistent character voice + per-job speaker mapping.
+        with suppress(Exception):
+            self._init_voice_schema()
 
     def _jobs(self) -> SqliteDict:
         # Open/close per operation (safe + avoids cross-thread SQLite handle issues)
@@ -125,6 +128,246 @@ class JobStore:
                 "CREATE INDEX IF NOT EXISTS idx_job_library_owner_user_id ON job_library(owner_user_id);"
             )
             con.commit()
+        finally:
+            con.close()
+
+    def _init_voice_schema(self) -> None:
+        """
+        Create/migrate tables for persistent character voices and per-job speaker mapping.
+
+        Tables:
+        - character_voice: series_slug, character_slug, display_name, ref_path, updated_at, created_by
+        - speaker_mapping: job_id, speaker_id, character_slug, confidence, locked
+        """
+        con = self._conn()
+        try:
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_voice (
+                  series_slug TEXT NOT NULL,
+                  character_slug TEXT NOT NULL,
+                  display_name TEXT,
+                  ref_path TEXT,
+                  updated_at TEXT,
+                  created_by TEXT,
+                  PRIMARY KEY(series_slug, character_slug)
+                );
+                """
+            )
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS speaker_mapping (
+                  job_id TEXT NOT NULL,
+                  speaker_id TEXT NOT NULL,
+                  character_slug TEXT NOT NULL,
+                  confidence REAL NOT NULL DEFAULT 1.0,
+                  locked INTEGER NOT NULL DEFAULT 1,
+                  updated_at TEXT,
+                  created_by TEXT,
+                  PRIMARY KEY(job_id, speaker_id)
+                );
+                """
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_character_voice_series_slug ON character_voice(series_slug);"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_speaker_mapping_job_id ON speaker_mapping(job_id);"
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    # --- persistent character voices ---
+    def upsert_character(
+        self,
+        *,
+        series_slug: str,
+        character_slug: str,
+        display_name: str = "",
+        ref_path: str = "",
+        created_by: str = "",
+    ) -> dict[str, Any]:
+        series_slug = str(series_slug or "").strip()
+        character_slug = str(character_slug or "").strip()
+        if not series_slug or not character_slug:
+            raise ValueError("series_slug and character_slug required")
+        now = now_utc()
+        con = self._conn()
+        try:
+            con.execute(
+                """
+                INSERT INTO character_voice(
+                  series_slug, character_slug, display_name, ref_path, updated_at, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(series_slug, character_slug) DO UPDATE SET
+                  display_name=excluded.display_name,
+                  ref_path=excluded.ref_path,
+                  updated_at=excluded.updated_at,
+                  created_by=COALESCE(NULLIF(excluded.created_by,''), character_voice.created_by)
+                ;
+                """,
+                (
+                    series_slug,
+                    character_slug,
+                    str(display_name or ""),
+                    str(ref_path or ""),
+                    now,
+                    str(created_by or ""),
+                ),
+            )
+            con.commit()
+        finally:
+            con.close()
+        return {
+            "series_slug": series_slug,
+            "character_slug": character_slug,
+            "display_name": str(display_name or ""),
+            "ref_path": str(ref_path or ""),
+            "updated_at": now,
+            "created_by": str(created_by or ""),
+        }
+
+    def list_characters_for_series(self, series_slug: str) -> list[dict[str, Any]]:
+        series_slug = str(series_slug or "").strip()
+        if not series_slug:
+            return []
+        con = self._conn()
+        try:
+            rows = con.execute(
+                """
+                SELECT series_slug, character_slug, display_name, ref_path, updated_at, created_by
+                FROM character_voice
+                WHERE series_slug = ?
+                ORDER BY character_slug ASC
+                ;
+                """,
+                (series_slug,),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                out.append({k: r[k] for k in r.keys()})
+            return out
+        finally:
+            con.close()
+
+    def get_character(self, *, series_slug: str, character_slug: str) -> dict[str, Any] | None:
+        series_slug = str(series_slug or "").strip()
+        character_slug = str(character_slug or "").strip()
+        if not series_slug or not character_slug:
+            return None
+        con = self._conn()
+        try:
+            row = con.execute(
+                """
+                SELECT series_slug, character_slug, display_name, ref_path, updated_at, created_by
+                FROM character_voice
+                WHERE series_slug = ? AND character_slug = ?
+                LIMIT 1
+                ;
+                """,
+                (series_slug, character_slug),
+            ).fetchone()
+            return {k: row[k] for k in row.keys()} if row is not None else None
+        finally:
+            con.close()
+
+    def delete_character(self, *, series_slug: str, character_slug: str) -> bool:
+        series_slug = str(series_slug or "").strip()
+        character_slug = str(character_slug or "").strip()
+        if not series_slug or not character_slug:
+            return False
+        con = self._conn()
+        try:
+            cur = con.execute(
+                "DELETE FROM character_voice WHERE series_slug = ? AND character_slug = ?;",
+                (series_slug, character_slug),
+            )
+            con.commit()
+            return bool(cur.rowcount and int(cur.rowcount) > 0)
+        finally:
+            con.close()
+
+    # --- per-job speaker mappings ---
+    def upsert_speaker_mapping(
+        self,
+        *,
+        job_id: str,
+        speaker_id: str,
+        character_slug: str,
+        confidence: float = 1.0,
+        locked: bool = True,
+        created_by: str = "",
+    ) -> dict[str, Any]:
+        job_id = str(job_id or "").strip()
+        speaker_id = str(speaker_id or "").strip()
+        character_slug = str(character_slug or "").strip()
+        if not job_id or not speaker_id or not character_slug:
+            raise ValueError("job_id, speaker_id, character_slug required")
+        now = now_utc()
+        con = self._conn()
+        try:
+            con.execute(
+                """
+                INSERT INTO speaker_mapping(
+                  job_id, speaker_id, character_slug, confidence, locked, updated_at, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id, speaker_id) DO UPDATE SET
+                  character_slug=excluded.character_slug,
+                  confidence=excluded.confidence,
+                  locked=excluded.locked,
+                  updated_at=excluded.updated_at,
+                  created_by=COALESCE(NULLIF(excluded.created_by,''), speaker_mapping.created_by)
+                ;
+                """,
+                (
+                    job_id,
+                    speaker_id,
+                    character_slug,
+                    float(confidence),
+                    1 if bool(locked) else 0,
+                    now,
+                    str(created_by or ""),
+                ),
+            )
+            con.commit()
+        finally:
+            con.close()
+        return {
+            "job_id": job_id,
+            "speaker_id": speaker_id,
+            "character_slug": character_slug,
+            "confidence": float(confidence),
+            "locked": bool(locked),
+            "updated_at": now,
+            "created_by": str(created_by or ""),
+        }
+
+    def list_speaker_mappings(self, job_id: str) -> list[dict[str, Any]]:
+        job_id = str(job_id or "").strip()
+        if not job_id:
+            return []
+        con = self._conn()
+        try:
+            rows = con.execute(
+                """
+                SELECT job_id, speaker_id, character_slug, confidence, locked, updated_at, created_by
+                FROM speaker_mapping
+                WHERE job_id = ?
+                ORDER BY speaker_id ASC
+                ;
+                """,
+                (job_id,),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                d = {k: r[k] for k in r.keys()}
+                with suppress(Exception):
+                    d["locked"] = bool(int(d.get("locked") or 0))
+                with suppress(Exception):
+                    d["confidence"] = float(d.get("confidence") or 0.0)
+                out.append(d)
+            return out
         finally:
             con.close()
 

@@ -2402,6 +2402,8 @@ class JobQueue:
 
                     # Per-job voice mapping for TTS (persisted via /api/jobs/{id}/characters).
                     voice_map_json = None
+                    # Persistent character voice mapping: speaker_id -> character_slug (stored in DB).
+                    speaker_character_map: dict[str, str] = {}
                     try:
                         curj = self.store.get(job_id)
                         rt = dict((curj.runtime or {}) if curj else runtime)
@@ -2411,6 +2413,42 @@ class JobQueue:
                             from dubbing_pipeline.utils.io import write_json
 
                             write_json(voice_map_json, {"items": items})
+
+                        # Best-effort: harvest manual mappings from voice_map items if provided.
+                        # Expected fields (non-breaking): speaker_id (or legacy character_id), character_slug, label.
+                        series_slug = str(getattr(job, "series_slug", "") or rt.get("series_slug") or "").strip()
+                        if series_slug:
+                            for it in items if isinstance(items, list) else []:
+                                if not isinstance(it, dict):
+                                    continue
+                                speaker_id = str(it.get("speaker_id") or it.get("character_id") or "").strip()
+                                cslug = str(it.get("character_slug") or "").strip()
+                                if speaker_id and cslug:
+                                    with suppress(Exception):
+                                        self.store.upsert_speaker_mapping(
+                                            job_id=str(job_id),
+                                            speaker_id=speaker_id,
+                                            character_slug=cslug,
+                                            confidence=1.0,
+                                            locked=True,
+                                            created_by=str(getattr(job, "owner_id", "") or ""),
+                                        )
+                                    with suppress(Exception):
+                                        self.store.upsert_character(
+                                            series_slug=series_slug,
+                                            character_slug=cslug,
+                                            display_name=str(it.get("label") or "").strip(),
+                                            ref_path="",
+                                            created_by=str(getattr(job, "owner_id", "") or ""),
+                                        )
+
+                            # Load DB mappings for this job (manual/auto).
+                            with suppress(Exception):
+                                for rec in self.store.list_speaker_mappings(str(job_id)):
+                                    sid = str(rec.get("speaker_id") or "").strip()
+                                    cslug = str(rec.get("character_slug") or "").strip()
+                                    if sid and cslug:
+                                        speaker_character_map[sid] = cslug
                     except Exception:
                         voice_map_json = None
 
@@ -2476,6 +2514,8 @@ class JobQueue:
                             no_clone=bool(no_clone_eff),
                             two_pass_enabled=bool(two_pass_enabled),
                             two_pass_phase=str(two_pass_phase or ""),
+                            series_slug=str(getattr(job, "series_slug", "") or ""),
+                            speaker_character_map=speaker_character_map,
                             voice_ref_dir=voice_ref_dir_eff,
                             voice_store_dir=settings.voice_store_dir,
                             tts_provider=str(settings.tts_provider),
