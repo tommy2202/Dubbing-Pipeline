@@ -97,15 +97,19 @@
         </template>
 
         <div class="mt-3 grid gap-2">
-          <div>
-            <label class="block text-xs text-slate-500">Upload override ref.wav</label>
-            <input type="file" accept="audio/wav" class="mt-1 block w-full text-sm"
-                   @change="uploadRef(c.character_slug, $event)" />
-          </div>
-          <button class="rounded bg-red-900/40 hover:bg-red-900/60 border border-red-900/40 px-4 py-3 text-sm text-red-100"
-                  @click="deleteCharacter(c.character_slug)">
-            Delete / reset
-          </button>
+          <template x-if="canEdit">
+            <div>
+              <label class="block text-xs text-slate-500">Upload override ref.wav</label>
+              <input type="file" accept="audio/wav" class="mt-1 block w-full text-sm"
+                     @change="uploadRef(c.character_slug, $event)" />
+            </div>
+          </template>
+          <template x-if="canEdit">
+            <button class="rounded bg-red-900/40 hover:bg-red-900/60 border border-red-900/40 px-4 py-3 text-sm text-red-100"
+                    @click="deleteCharacter(c.character_slug)">
+              Delete / reset
+            </button>
+          </template>
         </div>
       </div>
     </template>
@@ -120,7 +124,8 @@
     <div class="mt-2 grid gap-2 sm:grid-cols-3">
       <input class="sm:col-span-2 rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm text-slate-100"
              x-model="newName" placeholder="Display name (e.g., Rimuru)" />
-      <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
+      <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium disabled:opacity-50"
+              :disabled="!canEdit"
               @click="createCharacter()">
         Create
       </button>
@@ -174,6 +179,7 @@
     return {
       seriesSlug: seriesSlug,
       items: [],
+      canEdit: false,
       loading: true,
       error: "",
       newName: "",
@@ -187,6 +193,7 @@
           if (!r.ok) throw new Error("failed (" + r.status + ")");
           const data = await r.json();
           this.items = Array.isArray(data.items) ? data.items : [];
+          this.canEdit = !!data.can_edit;
         } catch (e) {
           this.items = [];
           this.error = "Failed to load characters";
@@ -195,6 +202,7 @@
         }
       },
       async createCharacter() {
+        if (!this.canEdit) return;
         const name = String(this.newName || "").trim();
         if (!name) return;
         try {
@@ -216,6 +224,7 @@
         }
       },
       async deleteCharacter(characterSlug) {
+        if (!this.canEdit) return;
         if (!confirm("Delete this character voice?")) return;
         try {
           const csrf = document.getElementById("csrf")?.value || "";
@@ -232,6 +241,7 @@
         }
       },
       async uploadRef(characterSlug, ev) {
+        if (!this.canEdit) return;
         try {
           const f = ev?.target?.files?.[0];
           if (!f) return;

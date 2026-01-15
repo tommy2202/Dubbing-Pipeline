@@ -3501,6 +3501,7 @@ async def get_job_voice_refs(
                 cref = get_character_ref(series_slug, character_slug)
                 if cref is not None:
                     character_ref_path = str(cref)
+                    used_ref_kind = "character"
         with suppress(Exception):
             # If TTS report indicates a voice_store path, flag it as character ref used.
             if isinstance(rep, dict):
@@ -3788,7 +3789,7 @@ async def get_series_character_audio(
 async def create_series_character(
     request: Request,
     series_slug: str,
-    ident: Identity = Depends(require_scope("edit:job")),
+    ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
     slug = str(series_slug or "").strip()
@@ -3874,7 +3875,7 @@ async def upload_series_character_ref(
     request: Request,
     series_slug: str,
     character_slug: str,
-    ident: Identity = Depends(require_scope("edit:job")),
+    ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     """
     Upload/override a series character ref.wav directly (optional UI flow).
@@ -3929,7 +3930,7 @@ async def upload_series_character_ref(
 async def post_job_speaker_mapping(
     request: Request,
     job_id: str,
-    ident: Identity = Depends(require_scope("edit:job")),
+    ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
     job = store.get(str(job_id))
@@ -3986,7 +3987,7 @@ async def promote_series_character_ref_from_job(
     request: Request,
     series_slug: str,
     character_slug: str,
-    ident: Identity = Depends(require_scope("edit:job")),
+    ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
     slug = str(series_slug or "").strip()
@@ -4054,7 +4055,7 @@ async def delete_series_character(
     request: Request,
     series_slug: str,
     character_slug: str,
-    ident: Identity = Depends(require_scope("edit:job")),
+    ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
     slug = str(series_slug or "").strip()
