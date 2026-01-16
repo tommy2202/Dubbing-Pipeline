@@ -33,10 +33,12 @@
     "stream_context_seconds": "mode:medium",
     "timing_fit": "base",
     "voice_memory": "base",
-    "voice_mode": "base"
+    "voice_mode": "base",
+    "voice_clone_two_pass": "base"
   },
   "speaker_smoothing": false,
   "timing_fit": false,
   "voice_memory": false,
-  "voice_mode": "clone"
+  "voice_mode": "clone",
+  "voice_clone_two_pass": false
 }
