@@ -552,6 +552,7 @@ class JobQueue:
                         progress=1.0,
                         message="Done (pass2 skipped: missing audio checkpoint)",
                     )
+                    _auto_match_speakers_best_effort()
                     self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
                     return
                 if wav_guess.exists() and stage_is_done(ckpt, "audio"):
@@ -944,6 +945,94 @@ class JobQueue:
                         self.store.update(job_id, runtime=rt3)
                 except Exception as ex:
                     self.store.append_log(job_id, f"[{now_utc()}] voice_refs skipped: {ex}")
+
+            def _auto_match_speakers_best_effort() -> None:
+                try:
+                    settings = get_settings()
+                    if not bool(getattr(settings, "voice_auto_match", False)):
+                        return
+                    series_slug = str(getattr(job, "series_slug", "") or "").strip()
+                    if not series_slug:
+                        return
+                    man_path = (base_dir / "analysis" / "voice_refs" / "manifest.json").resolve()
+                    if not man_path.exists():
+                        return
+                    from dubbing_pipeline.utils.io import read_json
+
+                    man = read_json(man_path, default={})
+                    items = man.get("items") if isinstance(man, dict) else None
+                    if not isinstance(items, dict) or not items:
+                        return
+                    speaker_refs: dict[str, Path] = {}
+                    for sid, rec in items.items():
+                        if not isinstance(rec, dict):
+                            continue
+                        safe_sid = Path(str(sid or "")).name.strip()
+                        if not safe_sid:
+                            continue
+                        ref_raw = str(rec.get("job_ref_path") or rec.get("ref_path") or "").strip()
+                        if not ref_raw:
+                            continue
+                        ref_path = Path(ref_raw).resolve()
+                        if not ref_path.exists() or not ref_path.is_file():
+                            continue
+                        speaker_refs[safe_sid] = ref_path
+                    if not speaker_refs:
+                        return
+                    from dubbing_pipeline.voice_store.embeddings import suggest_matches
+
+                    matches = suggest_matches(
+                        series_slug=series_slug,
+                        speaker_refs=speaker_refs,
+                        threshold=float(
+                            getattr(settings, "voice_match_threshold", 0.75) or 0.75
+                        ),
+                        device=_select_device(job.device),
+                    )
+                    if not matches:
+                        return
+                    existing = {
+                        str(rec.get("speaker_id") or ""): rec
+                        for rec in self.store.list_speaker_mappings(str(job_id))
+                        if isinstance(rec, dict)
+                    }
+                    suggested = 0
+                    for rec in matches:
+                        sid = str(rec.get("speaker_id") or "").strip()
+                        cslug = str(rec.get("character_slug") or "").strip()
+                        if not sid or not cslug:
+                            continue
+                        prev = existing.get(sid)
+                        if prev is not None and bool(prev.get("locked")):
+                            continue
+                        try:
+                            conf = float(rec.get("similarity") or 0.0)
+                        except Exception:
+                            conf = 0.0
+                        if prev is not None:
+                            try:
+                                prev_conf = float(prev.get("confidence") or 0.0)
+                            except Exception:
+                                prev_conf = 0.0
+                            if str(prev.get("character_slug") or "") == cslug and prev_conf >= conf:
+                                continue
+                        self.store.upsert_speaker_mapping(
+                            job_id=str(job_id),
+                            speaker_id=sid,
+                            character_slug=cslug,
+                            confidence=float(conf),
+                            locked=False,
+                            created_by="auto_match",
+                        )
+                        suggested += 1
+                    if suggested:
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] voice_auto_match suggested={suggested}"
+                        )
+                except Exception as ex:
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] voice_auto_match skipped: {ex}"
+                    )
 
             try:
                 if is_pass2_outer:
@@ -1429,6 +1518,7 @@ class JobQueue:
                             progress=1.0,
                             message="Done (pass2 skipped: missing transcribe checkpoint)",
                         )
+                        _auto_match_speakers_best_effort()
                         self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
                         return
                     if srt_out.exists() and srt_meta.exists() and stage_is_done(ckpt, "transcribe"):
@@ -2082,6 +2172,7 @@ class JobQueue:
                     progress=1.0,
                     message="Done (pass2 skipped: missing translate checkpoint)",
                 )
+                _auto_match_speakers_best_effort()
                 self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
                 return
             if is_pass2_outer and not do_translate:
@@ -3430,6 +3521,7 @@ class JobQueue:
                 output_srt=str(subs_srt_path) if subs_srt_path else "",
                 work_dir=str(base_dir),
             )
+            _auto_match_speakers_best_effort()
             if is_pass2_outer:
                 self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
                 with suppress(Exception):
