@@ -31,14 +31,12 @@ from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.security.crypto import CryptoConfigError, decrypt_file, is_encrypted_path
 from dubbing_pipeline.stages import audio_extractor, mkv_export, tts
 from dubbing_pipeline.ops import audit
-from dubbing_pipeline.stages.character_store import CharacterStore
 from dubbing_pipeline.stages.diarization import DiarizeConfig
 from dubbing_pipeline.stages.diarization import diarize as diarize_v2
 from dubbing_pipeline.stages.mixing import MixConfig, mix
 from dubbing_pipeline.stages.transcription import transcribe
 from dubbing_pipeline.stages.translation import TranslationConfig, translate_segments
 from dubbing_pipeline.utils.circuit import Circuit
-from dubbing_pipeline.utils.embeds import ecapa_embedding
 from dubbing_pipeline.utils.ffmpeg_safe import extract_audio_mono_16k
 from dubbing_pipeline.utils.hashio import hash_audio_from_video
 from dubbing_pipeline.utils.log import logger
@@ -1196,8 +1194,6 @@ class JobQueue:
                     by_label.setdefault(lab, []).append((s, e, seg_wav))
 
                 show = str(settings.show_id) if settings.show_id else stem
-                sim = float(settings.char_sim_thresh)
-                thresholds = {"sim": sim}
                 lab_to_char: dict[str, str] = {}
                 # Tier-2A voice memory (optional, opt-in)
                 vm_store = None
@@ -1238,7 +1234,7 @@ class JobQueue:
                         vm_store = None
                         episode_key = ""
 
-                # Replace "representative wav" selection with canonical ref extractor (per diar label).
+                # Canonical speaker refs: use the ref extractor output per diar label.
                 label_refs: dict[str, Path] = {}
                 try:
                     from dubbing_pipeline.voice_refs.extract_refs import ExtractRefsConfig, extract_speaker_refs
@@ -1288,10 +1284,14 @@ class JobQueue:
                 except Exception:
                     label_refs = {}
 
-                for lab, segs in by_label.items():
+                for lab, _segs in by_label.items():
                     rep_wav = label_refs.get(str(lab))
                     if rep_wav is None:
-                        rep_wav = sorted(segs, key=lambda t: (t[1] - t[0]), reverse=True)[0][2]
+                        lab_to_char[lab] = lab
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] voice_ref missing for diar_label={lab}"
+                        )
+                        continue
                     if vm_store is not None:
                         # voice memory path (offline-first; falls back if embeddings unavailable)
                         try:
@@ -1322,25 +1322,7 @@ class JobQueue:
                             )
                             lab_to_char[lab] = lab
                     else:
-                        # legacy path (CharacterStore)
-                        store_chars = None
-                        try:
-                            store_chars = CharacterStore.default()
-                            store_chars.load()
-                        except Exception:
-                            store_chars = None
-                        if store_chars is None:
-                            lab_to_char[lab] = lab
-                            continue
-                        emb = ecapa_embedding(rep_wav, device=_select_device(job.device))
-                        if emb is None:
-                            lab_to_char[lab] = lab
-                            continue
-                        cid = store_chars.match_or_create(emb, show_id=show, thresholds=thresholds)
-                        store_chars.link_speaker_wav(cid, str(rep_wav))
-                        lab_to_char[lab] = cid
-                        with suppress(Exception):
-                            store_chars.save()
+                        lab_to_char[lab] = lab
 
                 # Persist episode mapping (best-effort)
                 if vm_store is not None and episode_key:
@@ -2566,6 +2548,10 @@ class JobQueue:
                         else:
                             voice_mode_eff = str(settings.voice_mode)
                             voice_ref_dir_eff = settings.voice_ref_dir
+                            if not voice_ref_dir_eff:
+                                refs_dir = (base_dir / "analysis" / "voice_refs").resolve()
+                                if refs_dir.exists():
+                                    voice_ref_dir_eff = refs_dir
                             no_clone_eff = False
                         try:
                             curj = self.store.get(job_id)

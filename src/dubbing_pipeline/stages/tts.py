@@ -10,7 +10,6 @@ from typing import Any
 from dubbing_pipeline.cache.store import cache_get, cache_put, make_key
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
-from dubbing_pipeline.stages.character_store import CharacterStore
 from dubbing_pipeline.stages.tts_engine import CoquiXTTS, choose_similar_voice
 from dubbing_pipeline.utils.circuit import Circuit
 from dubbing_pipeline.utils.ffmpeg_safe import run_ffmpeg
@@ -223,7 +222,7 @@ def run(
     """
     TTS stage:
       - reads translated lines (preferred) or falls back to SRT cues
-      - tries cloning via speaker wav (from diarization segments or env TTS_SPEAKER_WAV)
+      - tries cloning via speaker wav (from extracted speaker refs or env TTS_SPEAKER_WAV)
       - on failure, falls back to preset voice ID (default or best match)
       - writes per-line clips and a combined aligned track: <stem>.tts.wav
     """
@@ -401,42 +400,16 @@ def run(
     except Exception:
         locked = {}
 
-    # Speaker -> representative wav from diarization segments (longest segment)
-    speaker_rep_wav: dict[str, Path] = {}
+    # Speaker embeddings from diarization artifacts (optional; used for preset matching).
     speaker_embeddings: dict[str, Path] = {}
     if diarization_json and diarization_json.exists():
         diar = read_json(diarization_json, default={})
         if isinstance(diar, dict):
-            segs = diar.get("segments", [])
             emb_map = diar.get("speaker_embeddings", {})
             if isinstance(emb_map, dict):
                 for sid, p in emb_map.items():
                     with suppress(Exception):
                         speaker_embeddings[str(sid)] = Path(str(p))
-            if isinstance(segs, list):
-                best: dict[str, tuple[float, Path]] = {}
-                for s in segs:
-                    try:
-                        sid = str(s.get("speaker_id") or "Speaker1")
-                        dur = float(s["end"]) - float(s["start"])
-                        p = Path(str(s["wav_path"]))
-                        if sid not in best or dur > best[sid][0]:
-                            best[sid] = (dur, p)
-                    except Exception:
-                        continue
-                speaker_rep_wav = {sid: p for sid, (_, p) in best.items()}
-
-    # CharacterStore speaker_wavs (legacy cross-episode persistence).
-    # Tier-2A voice-memory is the canonical cross-episode identity store, so avoid
-    # loading CharacterStore when voice-memory is enabled (prevents key/crypto coupling).
-    store = None
-    if not eff_voice_memory:
-        try:
-            store = CharacterStore.default()
-            with suppress(Exception):
-                store.load()
-        except Exception:
-            store = None
 
     # Tier-2A voice memory store (optional)
     vm_store = None
@@ -801,8 +774,7 @@ def run(
         # 2) persistent character ref (series-scoped) when speaker->character mapping exists
         # 3) per-speaker extracted ref (this job; voice_ref_dir)
         # 4) global TTS_SPEAKER_WAV
-        # 5) representative speaker segment wav (diarization artifacts)
-        # 6) default voice preset (handled later via preset selection)
+        # 5) default voice preset (handled later via preset selection)
         speaker_wav = per_speaker_wav_override.get(speaker_id)
         # Per-segment voice mode (Feature K + Tier-2A): do not mutate job-level defaults.
         seg_voice_mode = (
@@ -875,18 +847,6 @@ def run(
         # Global default clone speaker wav (lowest priority among ref sources).
         if speaker_wav is None:
             speaker_wav = eff_tts_speaker_wav
-        # Fall back to representative per-speaker segment wav (from diarization work artifacts).
-        if speaker_wav is None:
-            speaker_wav = speaker_rep_wav.get(speaker_id)
-        if speaker_wav is None and store is not None:
-            with suppress(Exception):
-                c = store.characters.get(speaker_id)
-                if c and c.speaker_wavs:
-                    for p in c.speaker_wavs:
-                        pp = Path(str(p))
-                        if pp.exists():
-                            speaker_wav = pp
-                            break
 
         # NOTE: persistent refs are stored via `dubbing_pipeline.voice_store` (series/character scoped).
 
