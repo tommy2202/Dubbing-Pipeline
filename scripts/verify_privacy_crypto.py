@@ -17,11 +17,11 @@ def main() -> int:
     os.environ["ENCRYPT_AT_REST_CLASSES"] = "review"
     os.environ["ARTIFACTS_KEY"] = key_b64
 
-    from anime_v2.config import get_settings
+    from dubbing_pipeline.config import get_settings
 
     get_settings.cache_clear()
 
-    from anime_v2.security.crypto import (
+    from dubbing_pipeline.security.crypto import (
         CryptoConfigError,
         decrypt_bytes,
         decrypt_file,
@@ -54,7 +54,7 @@ def main() -> int:
         pass
 
     # 3) Privacy mode resolution
-    from anime_v2.security.privacy import resolve_privacy
+    from dubbing_pipeline.security.privacy import resolve_privacy
 
     p0 = resolve_privacy({})
     assert p0.privacy_on is False

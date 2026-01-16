@@ -27,7 +27,7 @@ def _write_wav(path: Path, *, seconds: float, sr: int = 16000) -> None:
 
 def main() -> int:
     print("safe_config_report:", get_safe_config_report())
-    from anime_v2.diarization.smoothing import (
+    from dubbing_pipeline.diarization.smoothing import (
         detect_scenes_audio,
         smooth_speakers_in_scenes,
         write_speaker_smoothing_report,

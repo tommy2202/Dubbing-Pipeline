@@ -24,4 +24,4 @@ WORKDIR /app
 COPY . /app
 RUN python -m pip install --no-cache-dir -e .
 
-ENTRYPOINT ["anime-v1"]
+ENTRYPOINT ["dub-legacy"]

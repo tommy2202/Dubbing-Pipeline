@@ -5,9 +5,9 @@ import shutil
 import sys
 from pathlib import Path
 
-from anime_v2.qa.scoring import score_job
-from anime_v2.streaming.context import StreamContextBuffer
-from anime_v2.utils.io import write_json
+from dubbing_pipeline.qa.scoring import score_job
+from dubbing_pipeline.streaming.context import StreamContextBuffer
+from dubbing_pipeline.utils.io import write_json
 
 
 def _tmp_dir() -> Path:

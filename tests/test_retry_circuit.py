@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from anime_v2.utils.circuit import Circuit
-from anime_v2.utils.retry import retry_call
+from dubbing_pipeline.utils.circuit import Circuit
+from dubbing_pipeline.utils.retry import retry_call
 
 
 def test_retry_call_retries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -24,7 +24,7 @@ def test_retry_call_retries(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_circuit_opens_and_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
-    from anime_v2.config import get_settings
+    from dubbing_pipeline.config import get_settings
 
     monkeypatch.setenv("CB_FAIL_THRESHOLD", "2")
     monkeypatch.setenv("CB_COOLDOWN_SEC", "1")

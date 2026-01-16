@@ -29,7 +29,7 @@ python3 -m pip install -e "${ROOT}" >/dev/null
 rm -rf "${ROOT}/Output/sample"
 
 cp "${SAMPLE_MP4}" "${ROOT}/Input/Test.mp4"
-python3 -m anime_v2.cli "${ROOT}/Input/Test.mp4" --mode low --device cpu --no-translate
+python3 -m dubbing_pipeline.cli "${ROOT}/Input/Test.mp4" --mode low --device cpu --no-translate
 rm -f "${ROOT}/Input/Test.mp4"
 
 test -f "${ROOT}/Output/sample/sample.dub.mkv"

@@ -1,0 +1,1411 @@
+{% extends "_base.html" %}
+
+{% block title %}Job {{ job_id }} • dubbing_pipeline{% endblock %}
+
+{% block content %}
+{% if created %}
+<div class="mb-4 rounded-lg border border-emerald-900/50 bg-emerald-900/20 px-4 py-3 text-sm text-emerald-100">
+  Job created.
+</div>
+{% endif %}
+
+<div
+  x-data="jobDetail('{{ job_id }}')"
+  x-init="init()"
+>
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold">Job</h1>
+      <p class="mt-1 text-sm text-slate-400 break-all">{{ job_id }}</p>
+      <p class="mt-2 text-sm text-slate-300" x-text="job ? (job.state + ': ' + (job.message || '')) : 'Loading…'"></p>
+      <p class="mt-1 text-xs text-slate-500" x-text="job ? ('Progress: ' + Math.round((job.progress||0)*100) + '%') : ''"></p>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-sm text-red-100"
+              @click="doAction('cancel')" :disabled="!job || !['QUEUED','RUNNING','PAUSED'].includes(job.state) {% if user and user.role and user.role.value == 'viewer' %} || true {% endif %}">
+        Cancel
+      </button>
+      {% if user and user.role and user.role.value in ["operator","admin"] %}
+      <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+              @click="doAction(job && job.runtime && job.runtime.archived ? 'unarchive' : 'archive')">
+        <span x-text="(job && job.runtime && job.runtime.archived) ? 'Unarchive' : 'Archive'"></span>
+      </button>
+      {% endif %}
+      {% if user and user.role and user.role.value == "admin" %}
+      <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-sm text-red-100"
+              @click="doDelete()">
+        Delete
+      </button>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="mt-6 border-b border-slate-800">
+    <nav class="flex flex-wrap gap-2 text-sm" aria-label="Job sections">
+      <template x-for="t in tabs" :key="t.key">
+        <button
+          type="button"
+          class="rounded-t-lg px-4 py-3"
+          :class="activeTab===t.key ? 'bg-slate-900/60 text-white' : 'text-slate-400 hover:text-slate-200'"
+          @click="setActive(t.key)"
+        >
+          <span x-text="t.label"></span>
+        </button>
+      </template>
+    </nav>
+  </div>
+
+  <!-- Overview -->
+  <div class="mt-4" x-show="activeTab==='overview'">
+    <div class="grid gap-4 lg:grid-cols-2">
+      <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div class="text-sm text-slate-300">Summary</div>
+        <div class="mt-3 text-sm text-slate-200 space-y-1">
+          <div><span class="text-slate-500">State:</span> <span x-text="job?.state || ''"></span></div>
+          <div><span class="text-slate-500">Mode:</span> <span x-text="job?.mode || ''"></span></div>
+          <div x-show="job && job.runtime && job.runtime.effective_settings">
+            <span class="text-slate-500">Effective:</span>
+            <span class="break-all" x-text="job.runtime.effective_settings.effective_mode || ''"></span>
+          </div>
+          <div><span class="text-slate-500">Device:</span> <span x-text="job?.device || ''"></span></div>
+          <div><span class="text-slate-500">Lang:</span> <span x-text="(job?.src_lang||'') + ' → ' + (job?.tgt_lang||'')"></span></div>
+          <div><span class="text-slate-500">PG:</span> <span x-text="(job && job.runtime && job.runtime.pg) ? job.runtime.pg : 'off'"></span></div>
+          <div><span class="text-slate-500">Cache policy:</span> <span x-text="(job && job.runtime && job.runtime.cache_policy) ? job.runtime.cache_policy : 'full'"></span></div>
+          <div><span class="text-slate-500">Created:</span> <span x-text="job?.created_at || ''"></span></div>
+          <div><span class="text-slate-500">Updated:</span> <span x-text="job?.updated_at || ''"></span></div>
+        </div>
+        <div class="mt-3" x-show="job && job.runtime && job.runtime.effective_settings" x-cloak>
+          <div class="text-sm text-slate-300">Effective settings (summary)</div>
+          <pre class="mt-2 whitespace-pre-wrap text-xs text-slate-300"
+               x-text="JSON.stringify(job.runtime.effective_settings, null, 2)"></pre>
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div class="text-sm text-slate-300">Stage breakdown</div>
+        <template x-if="!job || !job.checkpoint || !job.checkpoint.stages">
+          <div class="mt-3 text-sm text-slate-500">No checkpoint yet.</div>
+        </template>
+        <template x-if="job && job.checkpoint && job.checkpoint.stages">
+          <div class="mt-3 overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="text-xs text-slate-500">
+                <tr>
+                  <th class="text-left py-1 pr-3">Stage</th>
+                  <th class="text-left py-1 pr-3">Done</th>
+                  <th class="text-left py-1 pr-3">Done at</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="(v, k) in job.checkpoint.stages" :key="k">
+                  <tr class="border-t border-slate-900">
+                    <td class="py-1 pr-3 text-slate-200" x-text="k"></td>
+                    <td class="py-1 pr-3 text-slate-200" x-text="v && v.done ? 'yes' : 'no'"></td>
+                    <td class="py-1 pr-3 text-slate-500" x-text="v && v.done_at ? new Date(v.done_at * 1000).toISOString() : ''"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quality -->
+  <div class="mt-4" x-show="activeTab==='quality'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-300">Quality</div>
+      <template x-if="!qaSummary">
+        <div class="mt-3 text-sm text-slate-500">
+          No QA report yet. Enable it on submit (QA checkbox) or run:
+          <code class="text-slate-300">dubbing-pipeline qa run &lt;job&gt;</code>
+        </div>
+      </template>
+      <template x-if="qaSummary">
+        <div class="mt-3 text-sm text-slate-200 space-y-2">
+          <div>
+            <span class="text-slate-500">Score:</span>
+            <span class="font-semibold" x-text="(qaSummary.score || 0).toFixed(1) + '/100'"></span>
+          </div>
+          <div class="text-xs text-slate-500">
+            <span x-text="'fail=' + (qaSummary.counts?.fail || 0) + ' warn=' + (qaSummary.counts?.warn || 0) + ' info=' + (qaSummary.counts?.info || 0)"></span>
+          </div>
+          <div class="mt-3">
+            <div class="text-sm text-slate-300">Top issues</div>
+            <template x-if="Array.isArray(qaSummary.top_issues) && qaSummary.top_issues.length">
+              <div class="mt-2 space-y-2">
+                <template x-for="it in qaSummary.top_issues" :key="(it.segment_id||'') + ':' + (it.check_id||'')">
+                  <div class="rounded border border-slate-800 bg-slate-950/30 p-3 text-sm">
+                    <div class="text-slate-200 flex flex-wrap items-center gap-2">
+                      <span class="text-slate-500">seg</span>
+                      <span x-text="it.segment_id"></span>
+                      <span class="text-slate-500">·</span>
+                      <span class="rounded border px-2 py-0.5 text-xs"
+                            :class="qaBadgeClass(it.severity)"
+                            x-text="String(it.severity || '').toUpperCase()"></span>
+                      <span class="text-slate-500">·</span>
+                      <code class="text-slate-300" x-text="it.check_id"></code>
+                    </div>
+                    <div class="mt-1 text-slate-200" x-text="it.message || ''"></div>
+                    <div class="mt-1 text-xs text-slate-500" x-text="'Suggested: ' + (it.suggested_action || '')"></div>
+                    <div class="mt-2">
+                      <a class="inline-flex items-center rounded bg-emerald-700/30 hover:bg-emerald-700/40 border border-emerald-700/60 px-3 py-2 text-xs text-emerald-200"
+                         :href="('/ui/jobs/' + encodeURIComponent(jobId) + '?tab=review&seg=' + encodeURIComponent(it.segment_id))">
+                        Fix
+                      </a>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+            <template x-if="(!qaSummary.top_issues || !qaSummary.top_issues.length) && qaTopMd">
+              <pre class="mt-2 whitespace-pre-wrap text-xs text-slate-300" x-text="qaTopMd"></pre>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Review/Edit -->
+  <div class="mt-4" x-show="activeTab==='review'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-sm text-slate-300">Review / Edit</div>
+          <div class="mt-1 text-xs text-slate-500">Tap “Fix” from QA to jump here.</div>
+        </div>
+        <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+                @click="loadReview()">Refresh</button>
+      </div>
+
+      <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="reviewError" x-cloak x-text="reviewError"></div>
+
+      <template x-if="reviewState && Array.isArray(reviewState.segments) && reviewState.segments.length">
+        <div class="mt-4 space-y-3">
+          <template x-for="seg in reviewState.segments" :key="seg.segment_id">
+            <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3"
+                 :id="'seg-' + String(seg.segment_id)"
+                 :class="(focusSeg && Number(seg.segment_id)===Number(focusSeg)) ? 'ring-2 ring-emerald-600/70' : ''">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="text-xs font-mono text-slate-400">
+                  #<span x-text="seg.segment_id"></span>
+                  <span class="ml-2" x-text="Number(seg.start||0).toFixed(2)"></span> → <span x-text="Number(seg.end||0).toFixed(2)"></span>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 text-xs">
+                  <span class="rounded bg-slate-900/60 border border-slate-800 px-2 py-1 text-slate-200"
+                        x-text="seg.status || 'pending'"></span>
+                  <span class="rounded bg-slate-900/60 border border-slate-800 px-2 py-1 text-slate-200"
+                        x-text="seg.speaker || ''"></span>
+                </div>
+              </div>
+
+              <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                <div>
+                  <div class="text-xs text-slate-500">Source</div>
+                  <div class="mt-1 whitespace-pre-wrap rounded bg-black/20 border border-slate-900 p-2 text-sm text-slate-300"
+                       x-text="seg.source_text || ''"></div>
+                </div>
+                <div>
+                  <div class="text-xs text-slate-500">Target (editable)</div>
+                  <textarea class="mt-1 w-full min-h-[96px] rounded bg-slate-950 border border-slate-800 p-3 text-sm text-slate-100 {% if user and user.role and user.role.value == 'viewer' %}opacity-80{% endif %}"
+                            x-model="seg.chosen_text"
+                            :aria-label="`Review text for segment ${seg.segment_id}`"
+                            {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}></textarea>
+                </div>
+              </div>
+
+              <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <div class="text-xs text-slate-500">Forced speaker (override)</div>
+                  <select class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm text-slate-100 {% if user and user.role and user.role.value == 'viewer' %}opacity-80{% endif %}"
+                          x-model="seg._speaker_override"
+                          @change="setSpeakerOverride(seg.segment_id, seg._speaker_override)"
+                          {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    <option value="">(auto)</option>
+                    <template x-for="opt in speakerOptions" :key="opt.id">
+                      <option :value="opt.id" x-text="opt.label"></option>
+                    </template>
+                  </select>
+                </div>
+                <div>
+                  <div class="text-xs text-slate-500">Preview</div>
+                  <audio class="mt-2 w-full" controls preload="none"
+                         :src="('/api/jobs/' + encodeURIComponent(jobId) + '/review/segments/' + encodeURIComponent(seg.segment_id) + '/audio')"></audio>
+                </div>
+              </div>
+
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                        @click="reviewSave(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                  Save text
+                </button>
+                <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                        @click="reviewRegen(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                  Regen
+                </button>
+                <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                        @click="reviewToggleLock(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                  <span x-text="String(seg.status||'')==='locked' ? 'Unlock' : 'Lock'"></span>
+                </button>
+
+                <div class="ml-auto flex flex-wrap items-center gap-2">
+                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="applyHelper(seg, 'shorten10')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    Shorten 10%
+                  </button>
+                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="applyHelper(seg, 'formal')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    More formal
+                  </button>
+                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="applyHelper(seg, 'reduce_slang')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    Reduce slang
+                  </button>
+                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="applyHelper(seg, 'apply_pg')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    Apply PG
+                  </button>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <template x-if="reviewState && (!reviewState.segments || !reviewState.segments.length)">
+        <div class="mt-3 text-sm text-slate-500">No review segments yet (run the pipeline first).</div>
+      </template>
+
+      <div class="mt-6">
+        <details class="rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+          <summary class="cursor-pointer text-sm text-slate-200">Advanced: transcript editor (bulk edits)</summary>
+          <div class="mt-4">
+            {% include "partials/transcript_editor.html" %}
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- Overrides -->
+  <div class="mt-4" x-show="activeTab==='overrides'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-sm text-slate-300">Overrides</div>
+          <div class="mt-1 text-xs text-slate-500">Music regions and speaker overrides.</div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+                  @click="loadOverrides()">Refresh</button>
+          <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                  @click="saveOverrides()" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+            Save overrides
+          </button>
+        </div>
+      </div>
+
+      <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="overridesError" x-cloak x-text="overridesError"></div>
+
+      <div class="mt-4">
+        <div class="text-sm text-slate-300">Music regions</div>
+        <div class="mt-2 text-xs text-slate-500">Toggle to disable, adjust by ±0.5s, or snap to subtitle boundary.</div>
+        <template x-if="Array.isArray(musicRegions) && musicRegions.length">
+          <div class="mt-3 space-y-2">
+            <template x-for="r in musicRegions" :key="String(r._base_start) + ':' + String(r._base_end) + ':' + String(r.kind||'')">
+              <div class="rounded border border-slate-800 bg-slate-950/20 p-3">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="text-sm text-slate-200">
+                    <span class="text-slate-500">kind</span> <span x-text="r.kind || 'music'"></span>
+                    <span class="text-slate-500">·</span>
+                    <span class="font-mono text-xs text-slate-300" x-text="Number(r.start||0).toFixed(2) + '–' + Number(r.end||0).toFixed(2)"></span>
+                  </div>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" class="h-5 w-5" :checked="!isRegionDisabled(r)"
+                           @change="toggleRegion(r, $event.target.checked)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %} />
+                    <span class="text-slate-300">enabled</span>
+                  </label>
+                </div>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="nudgeRegion(r, 'start', -0.5)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>Start -0.5</button>
+                  <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="nudgeRegion(r, 'start', 0.5)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>Start +0.5</button>
+                  <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="nudgeRegion(r, 'end', -0.5)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>End -0.5</button>
+                  <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="nudgeRegion(r, 'end', 0.5)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>End +0.5</button>
+                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="snapRegion(r)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>Snap</button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+        <template x-if="!musicRegions || !musicRegions.length">
+          <div class="mt-3 text-sm text-slate-500">No detected music regions yet.</div>
+        </template>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Voices -->
+  <div class="mt-4" x-show="activeTab==='voices'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-sm text-slate-300">Voices</div>
+          <div class="mt-1 text-xs text-slate-500">Map episode speakers to series characters and manage refs.</div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+                  @click="loadVoices()">Refresh</button>
+          {% if user and user.role and user.role.value == "admin" %}
+          <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
+                  @click="rerunPass2()">
+            Rerun pass 2
+          </button>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="voicesError" x-cloak x-text="voicesError"></div>
+
+      <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+        <div class="text-sm text-slate-300">Speaker refs & character mapping</div>
+        <div class="mt-1 text-xs text-slate-500">Select a character and save mapping. Promote writes to the series voice store.</div>
+
+        <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="voiceRefsError" x-cloak x-text="voiceRefsError"></div>
+
+        <template x-if="voiceRefsLoaded && (!voiceRefs || !voiceRefs.available)">
+          <div class="mt-3 text-sm text-slate-500">
+            No speaker refs yet for this job.
+            <span class="text-xs" x-text="voiceRefs && voiceRefs.note ? ('(' + voiceRefs.note + ')') : ''"></span>
+          </div>
+        </template>
+
+        <template x-if="voiceRefsLoaded && voiceRefs && voiceRefs.available">
+          <div class="mt-4 space-y-3">
+            <template x-for="sid in Object.keys(voiceRefs.items || {}).sort()" :key="sid">
+              <div class="rounded border border-slate-800 bg-slate-950/20 p-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="text-sm text-slate-200">
+                    <span class="font-mono" x-text="sid"></span>
+                    <span class="text-slate-500">·</span>
+                    <span class="text-xs text-slate-400"
+                          x-text="'used=' + String((voiceRefs.items[sid]||{}).used_ref_kind || 'unknown')"></span>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2 text-xs">
+                    <span class="rounded bg-slate-900/60 border border-slate-800 px-2 py-1 text-slate-200"
+                          x-text="String((voiceRefs.items[sid]||{}).clone_status || 'unknown')"></span>
+                  </div>
+                </div>
+
+                <template x-if="(voiceRefs.items[sid]||{}).allow_audio">
+                  <div class="mt-3">
+                    <div class="text-xs text-slate-500">Extracted ref preview</div>
+                    <audio class="mt-2 w-full" controls preload="none"
+                           :src="(voiceRefs.items[sid]||{}).audio_url"></audio>
+                    <div class="mt-2 text-xs text-slate-500 break-all" x-text="(voiceRefs.items[sid]||{}).effective_ref_path || ''"></div>
+                  </div>
+                </template>
+
+                <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <div class="text-xs text-slate-500">Character (series)</div>
+                    <select class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm text-slate-100"
+                            x-model="speakerToCharacter[sid]">
+                      <option value="">(none)</option>
+                      <template x-for="c in seriesCharacters" :key="c.character_slug">
+                        <option :value="c.character_slug" x-text="(c.display_name || c.character_slug)"></option>
+                      </template>
+                    </select>
+                    <div class="mt-2 text-xs text-slate-500 break-all"
+                         x-text="(voiceRefs.items[sid]||{}).character_ref_path ? ('character ref: ' + (voiceRefs.items[sid]||{}).character_ref_path) : ''"></div>
+                  </div>
+                  <div>
+                    <div class="text-xs text-slate-500">Actions</div>
+                    <div class="mt-1 grid gap-2">
+                      <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium disabled:opacity-50"
+                              :disabled="!canEditVoices"
+                              @click="saveSpeakerMapping(sid)">
+                        Save mapping
+                      </button>
+                      <button type="button" class="rounded bg-emerald-700/30 hover:bg-emerald-700/40 border border-emerald-700/50 px-4 py-3 text-sm text-emerald-100 disabled:opacity-50"
+                              :disabled="!canEditVoices"
+                              @click="promoteToSeriesVoice(sid)">
+                        Promote to series voice
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+        <div class="text-sm text-slate-300">Create new character</div>
+        <div class="mt-2 grid gap-2 sm:grid-cols-3">
+          <input class="sm:col-span-2 rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm text-slate-100"
+                 x-model="newCharacterName" placeholder="Display name (e.g., Rimuru)" />
+          <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm disabled:opacity-50"
+                  :disabled="!canEditVoices"
+                  @click="createCharacter()">
+            Create
+          </button>
+        </div>
+      </div>
+
+      <details class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <summary class="cursor-pointer text-sm text-slate-200">Advanced: voice map (legacy)</summary>
+        <div class="mt-3 text-xs text-slate-500">Used for speaker labels and legacy overrides (best-effort).</div>
+        <div class="mt-4 overflow-x-auto">
+          <table class="min-w-full text-sm">
+            <thead class="text-xs text-slate-500">
+              <tr>
+                <th class="text-left py-2 pr-3">character_id</th>
+                <th class="text-left py-2 pr-3">label</th>
+                <th class="text-left py-2 pr-3">strategy</th>
+                <th class="text-left py-2 pr-3">tts_speaker</th>
+                <th class="text-left py-2 pr-3">tts_speaker_wav</th>
+                <th class="text-left py-2 pr-3">language</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="(row, idx) in voiceItems" :key="idx">
+                <tr class="border-t border-slate-900">
+                  <td class="py-2 pr-3">
+                    <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                           x-model="row.character_id" placeholder="SPEAKER_01" />
+                  </td>
+                  <td class="py-2 pr-3">
+                    <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                           x-model="row.label" placeholder="Alice" />
+                  </td>
+                  <td class="py-2 pr-3">
+                    <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                            x-model="row.speaker_strategy">
+                      <option value="zero-shot">zero-shot</option>
+                      <option value="preset">preset</option>
+                    </select>
+                  </td>
+                  <td class="py-2 pr-3">
+                    <input class="w-40 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                           x-model="row.tts_speaker" :disabled="row.speaker_strategy!=='preset'" placeholder="default" />
+                  </td>
+                  <td class="py-2 pr-3">
+                    <div class="text-xs text-slate-400" x-text="row.tts_speaker_wav || ''"></div>
+                  </td>
+                  <td class="py-2 pr-3">
+                    <select class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+                            x-model="row.language">
+                      <option value="en">en</option>
+                      <option value="ja">ja</option>
+                      <option value="auto">auto</option>
+                    </select>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="mt-4 flex flex-wrap items-center gap-2">
+          <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+                  @click="voiceItems.push({character_id:'', label:'', speaker_strategy:'preset', tts_speaker:'default', tts_speaker_wav:'', language:'en'})">
+            Add row
+          </button>
+          <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                  @click="saveVoiceMap()" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+            Save mapping
+          </button>
+        </div>
+        <div class="mt-3 text-sm text-emerald-200" x-show="voiceSaved" x-cloak>Saved.</div>
+        <div class="mt-3 text-sm text-red-200" x-show="voiceError" x-cloak x-text="voiceError"></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- Logs -->
+  <div class="mt-4" x-show="activeTab==='overview'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-300">Logs (live)</div>
+      <div class="mt-3 h-80 overflow-auto rounded-lg bg-black/40 border border-slate-800 p-3 text-xs font-mono text-slate-200"
+           hx-ext="sse"
+           sse-connect="/api/jobs/{{ job_id }}/logs/stream"
+           sse-swap="message"
+           hx-swap="beforeend">
+      </div>
+    </div>
+  </div>
+
+  <!-- Artifacts -->
+  <div class="mt-4" x-show="activeTab==='artifacts'" x-cloak>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-300">Artifacts</div>
+      <div class="mt-3 grid gap-4 lg:grid-cols-3">
+        <div class="lg:col-span-2">
+          <template x-if="files && files.hls_manifest">
+            <div>
+              <div class="text-sm text-slate-300 mb-2">Player (HLS)</div>
+              <link href="https://vjs.zencdn.net/8.17.4/video-js.css" rel="stylesheet" />
+              <video id="player" class="video-js vjs-default-skin w-full rounded-lg border border-slate-800" controls playsinline preload="auto"
+                     aria-label="Video player"></video>
+              <script src="https://vjs.zencdn.net/8.17.4/video.min.js"></script>
+              <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15"></script>
+            </div>
+          </template>
+          <template x-if="files && !files.hls_manifest && files.mp4">
+            <div>
+              <div class="text-sm text-slate-300 mb-2">Player (MP4)</div>
+              <link href="https://vjs.zencdn.net/8.17.4/video-js.css" rel="stylesheet" />
+              <video id="player" class="video-js vjs-default-skin w-full rounded-lg border border-slate-800" controls playsinline preload="auto"
+                     aria-label="Video player"></video>
+              <script src="https://vjs.zencdn.net/8.17.4/video.min.js"></script>
+            </div>
+          </template>
+          <template x-if="files && !files.hls_manifest && !files.mp4">
+            <div class="text-sm text-slate-400">
+              No HLS/MP4 available. Use download links below.
+            </div>
+          </template>
+
+          <div class="mt-4 text-sm text-slate-200 space-y-2">
+            <template x-if="files && files.mobile_mp4">
+              <div>
+                <span class="text-slate-500">Mobile MP4 (dubbed):</span>
+                <a class="underline" :href="files.mobile_mp4.url" target="_blank" rel="noreferrer">play/download</a>
+                <a class="underline ml-3" :href="vlcLink(files.mobile_mp4.url)">Open in VLC</a>
+              </div>
+            </template>
+            <template x-if="files && files.mobile_original_mp4">
+              <div>
+                <span class="text-slate-500">Mobile MP4 (original):</span>
+                <a class="underline" :href="files.mobile_original_mp4.url" target="_blank" rel="noreferrer">play/download</a>
+                <a class="underline ml-3" :href="vlcLink(files.mobile_original_mp4.url)">Open in VLC</a>
+              </div>
+            </template>
+            <template x-if="files && files.hls_manifest">
+              <div><span class="text-slate-500">HLS:</span> <a class="underline" :href="files.hls_manifest.url" target="_blank" rel="noreferrer">manifest</a></div>
+            </template>
+            <template x-if="files && files.mp4">
+              <div><span class="text-slate-500">MP4:</span> <a class="underline" :href="files.mp4.url" target="_blank" rel="noreferrer" download>download</a></div>
+            </template>
+            <template x-if="files && files.mkv">
+              <div>
+                <span class="text-slate-500">Master (MKV):</span>
+                <a class="underline" :href="files.mkv.url" target="_blank" rel="noreferrer" download>download</a>
+                <a class="underline ml-3" :href="vlcLink(files.mkv.url)">Open in VLC</a>
+                <span class="text-xs text-slate-500 ml-2">(best quality; some mobile browsers won't play)</span>
+              </div>
+            </template>
+            <div><span class="text-slate-500">SRT:</span> <span class="break-all" x-text="job?.output_srt || ''"></span></div>
+
+            <template x-if="files && Array.isArray(files.files)">
+              <div class="mt-3">
+                <div class="text-sm text-slate-300">Downloads</div>
+                <div class="mt-2 space-y-1 text-sm">
+                  <template x-for="f in files.files.filter(x => x && (x.kind==='audio_track' || x.kind==='subs'))" :key="f.kind + ':' + f.name">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-xs rounded border border-slate-800 bg-slate-900/40 px-2 py-1" x-text="f.kind"></span>
+                      <a class="underline" :href="f.url" target="_blank" rel="noreferrer" x-text="f.name"></a>
+                      <a class="underline ml-2" x-show="f.kind==='audio_track'" :href="vlcLink(f.url)" x-cloak>Open in VLC</a>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+          <div class="text-sm text-slate-300">Open on mobile</div>
+          <div class="mt-2 text-xs text-slate-500">Scan to open this job page.</div>
+          <img class="mt-3 w-48 h-48 rounded bg-white p-2"
+               :src="('/api/jobs/' + encodeURIComponent(jobId) + '/qrcode')"
+               alt="QR code to open job" />
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Sticky mobile player controls -->
+<div class="sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-slate-800 bg-slate-950/95 px-3 py-2"
+     x-show="activeTab==='artifacts' && hasPlayer" x-cloak
+     role="region" aria-label="Playback controls">
+  <div class="flex items-center justify-between gap-2">
+    <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+            @click="togglePlay()" aria-label="Play or pause">
+      <span x-text="playing ? 'Pause' : 'Play'"></span>
+    </button>
+    <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+            @click="toggleMute()" aria-label="Mute or unmute">
+      <span x-text="muted ? 'Unmute' : 'Mute'"></span>
+    </button>
+    <label class="sr-only" for="rateSel">Playback rate</label>
+    <select id="rateSel" class="rounded bg-slate-950 border border-slate-800 px-2 py-3 text-sm"
+            @change="setRate($event.target.value)" aria-label="Playback rate">
+      <option value="0.75">0.75×</option>
+      <option value="1" selected>1×</option>
+      <option value="1.25">1.25×</option>
+      <option value="1.5">1.5×</option>
+    </select>
+  </div>
+</div>
+
+<script>
+  function jobDetail(jobId) {
+    return {
+      jobId,
+      job: null,
+      currentUserId: {% if user %}"{{ user.id }}"{% else %}""{% endif %},
+      currentUserRole: {% if user and user.role and user.role.value %}"{{ user.role.value }}"{% else %}""{% endif %},
+      activeTab: "artifacts",
+      tabs: [
+        { key: "artifacts", label: "Playback" },
+        { key: "overview", label: "Progress/Logs" },
+        { key: "quality", label: "QA" },
+        { key: "review", label: "Review/Edit" },
+        { key: "overrides", label: "Overrides" },
+        { key: "voices", label: "Voices" },
+      ],
+      setActive(tab) {
+        this.activeTab = tab;
+        if (tab === "quality") {
+          if (!this.qaLoaded) this.loadQA();
+        }
+        if (tab === "artifacts") {
+          // ensure files loaded and player initialized
+          if (!this.files) this.loadFiles();
+          else this.initPlayer();
+        }
+        if (tab === "review") {
+          if (!this.reviewLoaded) this.loadReview();
+        }
+        if (tab === "overrides") {
+          if (!this.overridesLoaded) this.loadOverrides();
+        }
+        if (tab === "voices") {
+          if (!this.voiceRefsLoaded) this.loadVoiceRefs();
+          if (!this.seriesCharsLoaded) this.loadSeriesCharacters();
+          if (!this.speakerMappingsLoaded) this.loadSpeakerMappings();
+        }
+      },
+      voiceItems: [],
+      speakerOptions: [],
+      voiceSaved: false,
+      voiceError: "",
+      voiceRefsLoaded: false,
+      voiceRefs: null,
+      voiceRefsError: "",
+      voicesError: "",
+      seriesCharsLoaded: false,
+      seriesCharacters: [],
+      speakerMappingsLoaded: false,
+      speakerToCharacter: {},
+      newCharacterName: "",
+      get canEditVoices() {
+        if (!this.job) return false;
+        if (String(this.currentUserRole||"") === "admin") return true;
+        return String(this.job.owner_id||"") === String(this.currentUserId||"");
+      },
+      files: null,
+      qaLoaded: false,
+      qaSummary: null,
+      qaTopMd: "",
+      reviewLoaded: false,
+      reviewState: null,
+      reviewError: "",
+      overridesLoaded: false,
+      overrides: null,
+      overridesError: "",
+      musicRegions: [],
+      subtitleBoundaries: [],
+      speakerOverrides: {},
+      focusSeg: null,
+      hasPlayer: false,
+      playing: false,
+      muted: false,
+      _vjs: null,
+      _playerInit: false,
+      async init() {
+        await this.refresh();
+        await this.loadVoiceMap();
+        await this.loadFiles();
+        await this.loadQA();
+        // deep-link to a tab (and optionally a segment)
+        try {
+          const u = new URL(window.location.href);
+          let tab = (u.searchParams.get("tab") || "").toLowerCase();
+          // legacy aliases
+          if (tab === "transcript") tab = "review";
+          if (tab === "logs") tab = "overview";
+          if (tab && this.tabs.some(t => t.key === tab)) this.activeTab = tab;
+          const seg = u.searchParams.get("seg");
+          const n = seg ? Number(seg) : null;
+          if (n && Number.isFinite(n) && n > 0) this.focusSeg = Math.floor(n);
+        } catch (e) {}
+        try {
+          const m = document.getElementById("main");
+          if (m) m.focus();
+        } catch (e) {}
+        // poll job state lightly (UI only)
+        setInterval(() => { this.refresh(); }, 1500);
+        if (this.activeTab === "review") {
+          await this.loadReview();
+          if (this.focusSeg) setTimeout(() => { this.scrollToSeg(this.focusSeg); }, 160);
+        }
+        if (this.activeTab === "overrides") {
+          await this.loadOverrides();
+        }
+        if (this.activeTab === "voices") {
+          await this.loadVoices();
+        }
+      },
+
+      async loadVoices() {
+        this.voicesError = "";
+        await Promise.all([this.loadVoiceRefs(), this.loadSeriesCharacters(), this.loadSpeakerMappings()]);
+      },
+
+      async loadSeriesCharacters() {
+        this.seriesCharsLoaded = true;
+        try {
+          const seriesSlug = String(this.job?.series_slug || "");
+          if (!seriesSlug) { this.seriesCharacters = []; return; }
+          const r = await fetch("/api/series/" + encodeURIComponent(seriesSlug) + "/characters", { credentials: "include" });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          this.seriesCharacters = Array.isArray(data.items) ? data.items : [];
+        } catch (e) {
+          this.seriesCharacters = [];
+        }
+      },
+
+      async loadSpeakerMappings() {
+        this.speakerMappingsLoaded = true;
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/speaker-mapping", { credentials: "include" });
+          if (!r.ok) return;
+          const data = await r.json();
+          const items = Array.isArray(data.items) ? data.items : [];
+          const m = {};
+          for (const it of items) {
+            if (!it) continue;
+            const sid = String(it.speaker_id||"").trim();
+            const cslug = String(it.character_slug||"").trim();
+            if (sid && cslug) m[sid] = cslug;
+          }
+          this.speakerToCharacter = { ...this.speakerToCharacter, ...m };
+        } catch (e) {}
+      },
+
+      async createCharacter() {
+        try {
+          const name = String(this.newCharacterName||"").trim();
+          if (!name) return;
+          const seriesSlug = String(this.job?.series_slug || "");
+          if (!seriesSlug) return;
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/series/" + encodeURIComponent(seriesSlug) + "/characters", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "x-csrf-token": csrf },
+            body: JSON.stringify({ display_name: name })
+          });
+          if (!r.ok) throw new Error(await r.text());
+          this.newCharacterName = "";
+          await this.loadSeriesCharacters();
+          window.showToast("Character created", "success");
+        } catch (e) {
+          window.showToast("Failed to create character", "error");
+        }
+      },
+
+      async saveSpeakerMapping(speakerId) {
+        try {
+          const cslug = String(this.speakerToCharacter[speakerId] || "").trim();
+          if (!cslug) return;
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/speaker-mapping", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "x-csrf-token": csrf },
+            body: JSON.stringify({ speaker_id: speakerId, character_slug: cslug, locked: true })
+          });
+          if (!r.ok) throw new Error(await r.text());
+          await this.loadSpeakerMappings();
+          await this.loadVoiceRefs();
+          window.showToast("Mapping saved", "success");
+        } catch (e) {
+          window.showToast("Failed to save mapping", "error");
+        }
+      },
+
+      async promoteToSeriesVoice(speakerId) {
+        try {
+          const seriesSlug = String(this.job?.series_slug || "");
+          const cslug = String(this.speakerToCharacter[speakerId] || "").trim();
+          if (!seriesSlug || !cslug) return;
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/series/" + encodeURIComponent(seriesSlug) + "/characters/" + encodeURIComponent(cslug) + "/promote-ref", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "x-csrf-token": csrf },
+            body: JSON.stringify({ job_id: this.jobId, speaker_id: speakerId })
+          });
+          if (!r.ok) throw new Error(await r.text());
+          await this.loadSeriesCharacters();
+          await this.loadVoiceRefs();
+          window.showToast("Promoted to series voice", "success");
+        } catch (e) {
+          window.showToast("Failed to promote", "error");
+        }
+      },
+      async refresh() {
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId), { credentials: "include" });
+          if (!r.ok) return;
+          this.job = await r.json();
+        } catch (e) {}
+      },
+      async doAction(action) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const url = "/api/jobs/" + encodeURIComponent(this.jobId) + "/" + String(action || "");
+          const r = await fetch(url, { method: "POST", credentials: "include", headers: { "X-CSRF-Token": csrf } });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            window.showToast((d && d.detail) ? d.detail : ("Action failed (" + r.status + ")"), "error");
+            return;
+          }
+          await this.refresh();
+          window.showToast(String(action) + " OK", "success");
+        } catch (e) {}
+      },
+      async loadFiles() {
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/files", { credentials: "include" });
+          if (!r.ok) return;
+          this.files = await r.json();
+          this.hasPlayer = !!(this.files && (
+            (this.files.mobile_hls_manifest && this.files.mobile_hls_manifest.url) ||
+            (this.files.mobile_mp4 && this.files.mobile_mp4.url) ||
+            (this.files.hls_manifest && this.files.hls_manifest.url) ||
+            (this.files.mp4 && this.files.mp4.url)
+          ));
+          // init player if artifacts tab active
+          if (this.activeTab === "artifacts") this.initPlayer();
+        } catch (e) {}
+      },
+      vlcLink(relUrl) {
+        try {
+          const abs = new URL(relUrl, window.location.origin).toString();
+          return "vlc-x-callback://x-callback-url/stream?url=" + encodeURIComponent(abs);
+        } catch (e) {
+          return "#";
+        }
+      },
+      async loadQA() {
+        this.qaLoaded = true;
+        this.qaSummary = null;
+        this.qaTopMd = "";
+        try {
+          if (!this.files) {
+            await this.loadFiles();
+          }
+          const sum = this.files && this.files.qa_summary ? this.files.qa_summary.url : null;
+          if (sum) {
+            const r = await fetch(sum, { credentials: "include" });
+            if (r.ok) this.qaSummary = await r.json();
+          }
+          const md = this.files && this.files.qa_top_issues ? this.files.qa_top_issues.url : null;
+          if (md) {
+            const r2 = await fetch(md, { credentials: "include" });
+            if (r2.ok) this.qaTopMd = await r2.text();
+          }
+        } catch (e) {}
+      },
+      qaBadgeClass(sev) {
+        const s = String(sev || "").toLowerCase();
+        if (s === "fail" || s === "error" || s === "critical") return "bg-red-900/30 border-red-800 text-red-200";
+        if (s === "warn" || s === "warning") return "bg-amber-900/30 border-amber-800 text-amber-200";
+        return "bg-slate-900/60 border-slate-800 text-slate-200";
+      },
+      scrollToSeg(n) {
+        try {
+          const el = document.getElementById("seg-" + String(n));
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        } catch (e) {}
+      },
+      initPlayer() {
+        if (this._playerInit) return;
+        if (!this.files) return;
+        const playerEl = document.getElementById("player");
+        if (!playerEl) return;
+        try {
+          const vjs = window.videojs ? window.videojs(playerEl, { controls: true, playbackRates: [0.5, 1, 1.25, 1.5, 2] }) : null;
+          this._vjs = vjs || null;
+          // Auto-select best playback for phone browsers:
+          // - iOS: prefer HLS when available, else mobile MP4
+          // - others: prefer mobile MP4, then HLS, then MP4
+          const ua = String(navigator.userAgent || "");
+          const isIOS = /iPad|iPhone|iPod/.test(ua);
+          const hlsUrl = (this.files.mobile_hls_manifest && this.files.mobile_hls_manifest.url) ? this.files.mobile_hls_manifest.url
+                       : ((this.files.hls_manifest && this.files.hls_manifest.url) ? this.files.hls_manifest.url : "");
+          const mobileMp4 = (this.files.mobile_mp4 && this.files.mobile_mp4.url) ? this.files.mobile_mp4.url : "";
+          const mp4Url = (this.files.mp4 && this.files.mp4.url) ? this.files.mp4.url : "";
+          let src = "";
+          let typ = "";
+          if (isIOS && hlsUrl) { src = hlsUrl; typ = "application/x-mpegURL"; }
+          else if (mobileMp4) { src = mobileMp4; typ = "video/mp4"; }
+          else if (isIOS && hlsUrl) { src = hlsUrl; typ = "application/x-mpegURL"; }
+          else if (mp4Url) { src = mp4Url; typ = "video/mp4"; }
+          else if (hlsUrl) { src = hlsUrl; typ = "application/x-mpegURL"; }
+          if (src) {
+            if (vjs) {
+              vjs.src({ src: src, type: typ });
+            } else {
+              playerEl.src = src;
+              playerEl.type = typ;
+            }
+          }
+          if (vjs) {
+            vjs.on("play", () => { this.playing = true; });
+            vjs.on("pause", () => { this.playing = false; });
+            vjs.on("volumechange", () => { this.muted = !!vjs.muted(); });
+          } else {
+            playerEl.addEventListener("play", () => { this.playing = true; });
+            playerEl.addEventListener("pause", () => { this.playing = false; });
+            playerEl.addEventListener("volumechange", () => { this.muted = !!playerEl.muted; });
+          }
+          this._playerInit = true;
+        } catch (e) {}
+      },
+      togglePlay() {
+        try {
+          if (this._vjs) {
+            if (this._vjs.paused()) this._vjs.play();
+            else this._vjs.pause();
+            return;
+          }
+          const el = document.getElementById("player");
+          if (!el) return;
+          if (el.paused) el.play();
+          else el.pause();
+        } catch (e) {}
+      },
+      toggleMute() {
+        try {
+          if (this._vjs) {
+            this._vjs.muted(!this._vjs.muted());
+            this.muted = !!this._vjs.muted();
+            return;
+          }
+          const el = document.getElementById("player");
+          if (!el) return;
+          el.muted = !el.muted;
+          this.muted = !!el.muted;
+        } catch (e) {}
+      },
+      setRate(v) {
+        try {
+          const r = Number(v || 1);
+          if (!Number.isFinite(r)) return;
+          if (this._vjs) {
+            this._vjs.playbackRate(r);
+            return;
+          }
+          const el = document.getElementById("player");
+          if (!el) return;
+          el.playbackRate = r;
+        } catch (e) {}
+      },
+      async doDelete() {
+        try {
+          if (!confirm("Delete this job and its artifacts? This cannot be undone.")) return;
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId), { method: "DELETE", credentials: "include", headers: { "X-CSRF-Token": csrf } });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            window.showToast((d && d.detail) ? d.detail : ("Delete failed (" + r.status + ")"), "error");
+            return;
+          }
+          window.location = "/ui/dashboard";
+        } catch (e) {}
+      },
+      async loadVoiceMap() {
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/characters", { credentials: "include" });
+          if (!r.ok) return;
+          const data = await r.json();
+          this.voiceItems = Array.isArray(data.items) ? data.items : [];
+          if (!this.voiceItems.length) {
+            this.voiceItems = [{character_id:"", label:"", speaker_strategy:"preset", tts_speaker:"default", tts_speaker_wav:"", language:"en"}];
+          }
+          this.speakerOptions = this.voiceItems
+            .filter(x => x && String(x.character_id||"").trim().length)
+            .map(x => ({
+              id: String(x.character_id||"").trim(),
+              label: (String(x.label||"").trim() ? (String(x.label||"").trim() + " (" + String(x.character_id||"").trim() + ")") : String(x.character_id||"").trim())
+            }));
+        } catch (e) {}
+      },
+      async loadReview() {
+        this.reviewLoaded = true;
+        this.reviewError = "";
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments", { credentials: "include" });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.reviewError = data.detail || ("Review load failed (" + r.status + ")");
+            return;
+          }
+          this.reviewState = data;
+          // Pull speaker overrides (cheap) so dropdown shows current selection.
+          try {
+            const r2 = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides", { credentials: "include" });
+            const ov = await r2.json().catch(() => ({}));
+            if (r2.ok && ov && typeof ov === "object") {
+              const so = ov.speaker_overrides && typeof ov.speaker_overrides === "object" ? ov.speaker_overrides : {};
+              this.speakerOverrides = so;
+              if (this.reviewState && Array.isArray(this.reviewState.segments)) {
+                for (const seg of this.reviewState.segments) {
+                  const sid = String(seg && seg.segment_id !== undefined ? seg.segment_id : "");
+                  seg._speaker_override = (so && so[sid]) ? String(so[sid]) : "";
+                }
+              }
+            }
+          } catch (e) {}
+        } catch (e) {
+          this.reviewError = "Review load failed";
+        }
+      },
+      async reviewSave(seg) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/edit", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ text: String(seg.chosen_text || "") }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(data.detail || ("Save failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Saved", "success"); } catch (e) {}
+          await this.loadReview();
+        } catch (e) {}
+      },
+      async reviewRegen(seg) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/regen", {
+            method: "POST",
+            credentials: "include",
+            headers: { "X-CSRF-Token": csrf },
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(data.detail || ("Regen failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Regenerated", "success"); } catch (e) {}
+          await this.loadReview();
+        } catch (e) {}
+      },
+      async reviewToggleLock(seg) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const locked = String(seg.status || "") === "locked";
+          const action = locked ? "unlock" : "lock";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/" + action, {
+            method: "POST",
+            credentials: "include",
+            headers: { "X-CSRF-Token": csrf },
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(data.detail || ("Action failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast(action + " OK", "success"); } catch (e) {}
+          await this.loadReview();
+        } catch (e) {}
+      },
+      async applyHelper(seg, kind) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/helper", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ kind: String(kind || ""), text: String(seg.chosen_text || "") }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(data.detail || ("Helper failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          if (data && data.text !== undefined) {
+            seg.chosen_text = String(data.text || "");
+            try { window.showToast("Applied helper", "success"); } catch (e) {}
+          }
+        } catch (e) {}
+      },
+      async setSpeakerOverride(segmentId, value) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides/speaker", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ updates: [{ index: Number(segmentId || 0), speaker_override: String(value || "") }] }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(data.detail || ("Speaker override failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Speaker override saved", "success"); } catch (e) {}
+        } catch (e) {}
+      },
+      async loadOverrides() {
+        this.overridesLoaded = true;
+        this.overridesError = "";
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.overridesError = d.detail || ("Overrides load failed (" + r.status + ")");
+            return;
+          }
+          this.overrides = d;
+        } catch (e) {
+          this.overridesError = "Overrides load failed";
+        }
+        await this.loadEffectiveMusicRegions();
+        await this.loadSubtitleBoundaries();
+      },
+      async loadVoiceRefs() {
+        this.voiceRefsLoaded = true;
+        this.voiceRefsError = "";
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/voice_refs", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.voiceRefsError = d.detail || ("Voice refs load failed (" + r.status + ")");
+            return;
+          }
+          this.voiceRefs = d;
+        } catch (e) {
+          this.voiceRefsError = "Voice refs load failed";
+        }
+      },
+      async uploadRefOverride(speakerId) {
+        try {
+          const inp = document.getElementById("refFile_" + String(speakerId || ""));
+          const f = inp && inp.files && inp.files.length ? inp.files[0] : null;
+          if (!f) {
+            try { window.showToast("Pick a WAV/audio file first", "error"); } catch (e) {}
+            return;
+          }
+          const csrf = document.getElementById("csrf")?.value || "";
+          const buf = await f.arrayBuffer();
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/voice_refs/" + encodeURIComponent(String(speakerId||"")) + "/override", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": f.type || "application/octet-stream", "X-CSRF-Token": csrf },
+            body: buf,
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(d.detail || ("Upload failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Override uploaded", "success"); } catch (e) {}
+          await this.loadVoiceRefs();
+        } catch (e) {
+          try { window.showToast("Upload failed", "error"); } catch (e2) {}
+        }
+      },
+      async rerunPass2() {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/two_pass/rerun", {
+            method: "POST",
+            credentials: "include",
+            headers: { "X-CSRF-Token": csrf },
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(d.detail || ("Rerun failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Pass 2 queued", "success"); } catch (e) {}
+          await this.refresh();
+        } catch (e) {}
+      },
+      async saveOverrides() {
+        if (!this.overrides) return;
+        this.overridesError = "";
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides", {
+            method: "PUT",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify(this.overrides),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.overridesError = d.detail || ("Save failed (" + r.status + ")");
+            try { window.showToast(this.overridesError, "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Overrides saved", "success"); } catch (e) {}
+          await this.loadEffectiveMusicRegions();
+        } catch (e) {
+          this.overridesError = "Save failed";
+        }
+      },
+      _mro() {
+        if (!this.overrides || typeof this.overrides !== "object") return null;
+        if (!this.overrides.music_regions_overrides || typeof this.overrides.music_regions_overrides !== "object") {
+          this.overrides.music_regions_overrides = { adds: [], removes: [], edits: [] };
+        }
+        return this.overrides.music_regions_overrides;
+      },
+      isRegionDisabled(r) {
+        const mro = this._mro();
+        if (!mro) return false;
+        const removes = Array.isArray(mro.removes) ? mro.removes : [];
+        return removes.some(x => x && Number(x.start) === Number(r._base_start) && Number(x.end) === Number(r._base_end));
+      },
+      toggleRegion(r, enabled) {
+        const mro = this._mro();
+        if (!mro) return;
+        const removes = Array.isArray(mro.removes) ? mro.removes : [];
+        const keyStart = Number(r._base_start);
+        const keyEnd = Number(r._base_end);
+        const keep = removes.filter(x => !(x && Number(x.start) === keyStart && Number(x.end) === keyEnd));
+        if (!enabled) keep.push({ start: keyStart, end: keyEnd, reason: "user_remove" });
+        mro.removes = keep;
+        this.saveOverrides();
+      },
+      _upsertEdit(fromStart, fromEnd, toObj) {
+        const mro = this._mro();
+        if (!mro) return;
+        const edits = Array.isArray(mro.edits) ? mro.edits : [];
+        const fs = Number(fromStart);
+        const fe = Number(fromEnd);
+        const kept = edits.filter(e => !(e && e.from && Number(e.from.start) === fs && Number(e.from.end) === fe));
+        kept.push({ from: { start: fs, end: fe }, to: toObj });
+        mro.edits = kept;
+      },
+      nudgeRegion(r, which, delta) {
+        const ds = Number(delta || 0);
+        if (!Number.isFinite(ds) || !ds) return;
+        const s0 = Number(r.start || 0);
+        const e0 = Number(r.end || 0);
+        const ns = (which === "start") ? (s0 + ds) : s0;
+        const ne = (which === "end") ? (e0 + ds) : e0;
+        const to = { start: Math.max(0, ns), end: Math.max(0, Math.max(ns + 0.05, ne)), kind: r.kind || "music", confidence: Number(r.confidence || 0), reason: String(r.reason || "") };
+        this._upsertEdit(r._base_start, r._base_end, to);
+        this.saveOverrides();
+      },
+      _nearestBoundary(t) {
+        const x = Number(t || 0);
+        if (!Array.isArray(this.subtitleBoundaries) || !this.subtitleBoundaries.length) return x;
+        let best = this.subtitleBoundaries[0];
+        let bestD = Math.abs(best - x);
+        for (const b of this.subtitleBoundaries) {
+          const d = Math.abs(Number(b) - x);
+          if (d < bestD) { bestD = d; best = Number(b); }
+        }
+        return Number(best);
+      },
+      snapRegion(r) {
+        const ns = this._nearestBoundary(r.start || 0);
+        const ne = this._nearestBoundary(r.end || 0);
+        const to = { start: Math.max(0, Math.min(ns, ne - 0.05)), end: Math.max(0, Math.max(ne, ns + 0.05)), kind: r.kind || "music", confidence: Number(r.confidence || 0), reason: String(r.reason || "") };
+        this._upsertEdit(r._base_start, r._base_end, to);
+        this.saveOverrides();
+      },
+      async loadEffectiveMusicRegions() {
+        this.musicRegions = [];
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides/music/effective", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) return;
+          const regs = Array.isArray(d.regions) ? d.regions : [];
+          this.musicRegions = regs.map(x => ({ ...x, _base_start: Number(x.start || 0), _base_end: Number(x.end || 0) }));
+        } catch (e) {}
+      },
+      async loadSubtitleBoundaries() {
+        this.subtitleBoundaries = [];
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/transcript?page=1&per_page=500", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) return;
+          const items = Array.isArray(d.items) ? d.items : [];
+          const b = [];
+          for (const it of items) {
+            if (!it) continue;
+            if (it.start !== undefined) b.push(Number(it.start));
+            if (it.end !== undefined) b.push(Number(it.end));
+          }
+          this.subtitleBoundaries = b.filter(x => Number.isFinite(x)).sort((a,b) => a-b);
+        } catch (e) {}
+      },
+      async saveVoiceMap() {
+        this.voiceSaved = false;
+        this.voiceError = "";
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/characters", {
+            method: "PUT",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ items: this.voiceItems }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.voiceError = data.detail || ("Save failed (" + r.status + ")");
+            try { window.showToast(this.voiceError, "error"); } catch (e) {}
+            return;
+          }
+          this.voiceItems = Array.isArray(data.items) ? data.items : this.voiceItems;
+          this.voiceSaved = true;
+          try { window.showToast("Saved speaker mapping", "success"); } catch (e) {}
+          setTimeout(() => { this.voiceSaved = false; }, 1500);
+        } catch (e) {
+          this.voiceError = "Save failed";
+          try { window.showToast(this.voiceError, "error"); } catch (e) {}
+        }
+      },
+      async doAction(action) {
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/" + action, {
+            method: "POST",
+            credentials: "include",
+            headers: { "X-CSRF-Token": csrf },
+          });
+          await this.refresh();
+        } catch (e) {}
+      },
+    };
+  }
+</script>
+{% endblock %}
+

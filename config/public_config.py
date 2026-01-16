@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,20 +41,20 @@ class PublicConfig(BaseSettings):
     # --- core paths ---
     app_root: Path = Field(default_factory=_default_app_root, alias="APP_ROOT")
     output_dir: Path = Field(
-        default_factory=lambda: (Path.cwd() / "Output").resolve(), alias="ANIME_V2_OUTPUT_DIR"
+        default_factory=lambda: (Path.cwd() / "Output").resolve(), alias="DUBBING_OUTPUT_DIR"
     )
     log_dir: Path = Field(
-        default_factory=lambda: (Path.cwd() / "logs").resolve(), alias="ANIME_V2_LOG_DIR"
+        default_factory=lambda: (Path.cwd() / "logs").resolve(), alias="DUBBING_LOG_DIR"
     )
     # Runtime-only state directory (DBs, internal state). Prefer a non-repo mount in production.
-    # If unset, defaults to "<ANIME_V2_OUTPUT_DIR>/_state".
-    state_dir: Path | None = Field(default=None, alias="ANIME_V2_STATE_DIR")
-    auth_db_name: str = Field(default="auth.db", alias="ANIME_V2_AUTH_DB_NAME")
-    jobs_db_name: str = Field(default="jobs.db", alias="ANIME_V2_JOBS_DB_NAME")
-    cache_dir: Path | None = Field(default=None, alias="ANIME_V2_CACHE_DIR")
+    # If unset, defaults to "<DUBBING_OUTPUT_DIR>/_state".
+    state_dir: Path | None = Field(default=None, alias="DUBBING_STATE_DIR")
+    auth_db_name: str = Field(default="auth.db", alias="DUBBING_AUTH_DB_NAME")
+    jobs_db_name: str = Field(default="jobs.db", alias="DUBBING_JOBS_DB_NAME")
+    cache_dir: Path | None = Field(default=None, alias="DUBBING_CACHE_DIR")
     models_dir: Path = Field(default=Path("/models"), alias="MODELS_DIR")
 
-    # v2 input layout (web/API uploads)
+    # Web/API input layout (uploads)
     # Defaults match the repo's historical container layout: <APP_ROOT>/Input/uploads
     input_dir: Path | None = Field(default=None, alias="INPUT_DIR")
     input_uploads_dir: Path | None = Field(default=None, alias="INPUT_UPLOADS_DIR")
@@ -70,20 +70,20 @@ class PublicConfig(BaseSettings):
         alias="OUTPUTS_DIR",
     )
 
-    # --- legacy v1 defaults (keep historical behavior; configurable) ---
-    v1_output_dir: Path = Field(default=Path("/data/out"), alias="V1_OUTPUT_DIR")
-    v1_ui_host: str = Field(default="0.0.0.0", alias="V1_HOST")
-    v1_ui_port: int = Field(default=7860, alias="V1_PORT")
+    # --- legacy defaults (optional; configurable) ---
+    legacy_output_dir: Path = Field(default=Path("/data/out"), alias="LEGACY_OUTPUT_DIR")
+    legacy_ui_host: str = Field(default="0.0.0.0", alias="LEGACY_HOST")
+    legacy_ui_port: int = Field(default=7860, alias="LEGACY_PORT")
 
     # --- tool binaries ---
     ffmpeg_bin: str = Field(default="ffmpeg", alias="FFMPEG_BIN")
     ffprobe_bin: str = Field(default="ffprobe", alias="FFPROBE_BIN")
 
     # --- per-user settings storage ---
-    user_settings_path: Path | None = Field(default=None, alias="ANIME_V2_SETTINGS_PATH")
+    user_settings_path: Path | None = Field(default=None, alias="DUBBING_SETTINGS_PATH")
 
     # --- UI telemetry / audit (optional; off by default to avoid noisy logs) ---
-    ui_audit_page_views: bool = Field(default=False, alias="ANIME_V2_UI_AUDIT_PAGE_VIEWS")
+    ui_audit_page_views: bool = Field(default=False, alias="DUBBING_UI_AUDIT_PAGE_VIEWS")
 
     # --- alignment / metadata ---
     whisper_word_timestamps: bool = Field(default=False, alias="WHISPER_WORD_TIMESTAMPS")
@@ -304,8 +304,29 @@ class PublicConfig(BaseSettings):
         alias="VOICE_STORE",
     )
 
+    # Speaker reference extraction (post-diarization; used to build per-speaker ~N second refs).
+    # This does not enable any new pipeline by itself; it just writes reference WAVs for downstream use.
+    voice_ref_target_s: float = Field(
+        default=30.0, validation_alias=AliasChoices("VOICE_REF_TARGET_SECONDS", "VOICE_REF_TARGET_S")
+    )
+    voice_ref_min_candidate_s: float = Field(
+        default=0.7,
+        validation_alias=AliasChoices("VOICE_REF_MIN_SEG_SECONDS", "VOICE_REF_MIN_CANDIDATE_S"),
+    )
+    voice_ref_max_candidate_s: float = Field(
+        default=12.0,
+        validation_alias=AliasChoices("VOICE_REF_MAX_SEG_SECONDS", "VOICE_REF_MAX_CANDIDATE_S"),
+    )
+    voice_ref_overlap_eps_s: float = Field(default=0.05, alias="VOICE_REF_OVERLAP_EPS_S")
+    voice_ref_min_speech_ratio: float = Field(default=0.60, alias="VOICE_REF_MIN_SPEECH_RATIO")
+
+    # Two-pass voice cloning: pass1 runs without cloning to build speaker refs; pass2 reruns TTS+mix using refs.
+    voice_clone_two_pass: bool = Field(default=False, alias="VOICE_CLONE_TWO_PASS")
+
     # Tier-2 A: Character Voice Memory (opt-in; defaults preserve current behavior)
-    voice_memory: bool = Field(default=False, alias="VOICE_MEMORY")  # off by default
+    voice_memory: bool = Field(
+        default=False, validation_alias=AliasChoices("VOICE_MEMORY_ENABLED", "VOICE_MEMORY")
+    )
     voice_memory_dir: Path = Field(
         default_factory=lambda: (Path.cwd() / "data" / "voice_memory").resolve(),
         alias="VOICE_MEMORY_DIR",
@@ -364,6 +385,10 @@ class PublicConfig(BaseSettings):
     max_jobs_medium: int = Field(default=0, alias="MAX_JOBS_MEDIUM")
     max_jobs_low: int = Field(default=0, alias="MAX_JOBS_LOW")
 
+    # Global cross-instance queue limits (enforced in Redis-backed queue at dispatch time).
+    # Safe default for unknown concurrency: at most 1 high-mode job running globally.
+    max_high_running_global: int = Field(default=1, alias="MAX_HIGH_RUNNING_GLOBAL")
+
     # runtime model manager / allocator
     prewarm_whisper: str = Field(default="", alias="PREWARM_WHISPER")  # comma-separated models
     prewarm_tts: str = Field(default="", alias="PREWARM_TTS")  # comma-separated models
@@ -377,6 +402,25 @@ class PublicConfig(BaseSettings):
     # --- job submission idempotency ---
     idempotency_ttl_sec: int = Field(default=86400, alias="IDEMPOTENCY_TTL_SEC")
 
+    # --- Level 2 queue (Redis) ---
+    # auto: use Redis if configured+healthy, else fallback to local queue
+    # redis: require Redis (falls back only if unreachable at runtime)
+    # fallback: force local queue
+    queue_mode: str = Field(default="auto", alias="QUEUE_MODE")  # auto|redis|fallback
+    # Redis key prefix for queue/locks/counters (no secrets)
+    redis_queue_prefix: str = Field(default="dp", alias="REDIS_QUEUE_PREFIX")
+    # Per-job lock lease (ms). Must be refreshed while a job runs.
+    redis_lock_ttl_ms: int = Field(default=300_000, alias="REDIS_LOCK_TTL_MS")  # 5 minutes
+    redis_lock_refresh_ms: int = Field(default=20_000, alias="REDIS_LOCK_REFRESH_MS")  # 20 seconds
+    # Queue delivery attempts (primarily for crash re-delivery / dispatch failures)
+    redis_queue_max_attempts: int = Field(default=8, alias="REDIS_QUEUE_MAX_ATTEMPTS")
+    redis_queue_backoff_ms: int = Field(default=750, alias="REDIS_QUEUE_BACKOFF_MS")
+    redis_queue_backoff_cap_ms: int = Field(default=30_000, alias="REDIS_QUEUE_BACKOFF_CAP_MS")
+    # Cancel flag TTL (ms): how long to keep cancel markers (helps late consumers)
+    redis_cancel_ttl_ms: int = Field(default=24 * 3600_000, alias="REDIS_CANCEL_TTL_MS")
+    # Active set TTL (ms): keep per-user active job sets bounded
+    redis_active_set_ttl_ms: int = Field(default=6 * 3600_000, alias="REDIS_ACTIVE_SET_TTL_MS")
+
     # --- job limits/watchdogs ---
     max_video_min: int = Field(default=120, alias="MAX_VIDEO_MIN")
     # Optional: reject videos above these caps (0 disables)
@@ -387,12 +431,12 @@ class PublicConfig(BaseSettings):
     max_concurrent_per_user: int = Field(default=1, alias="MAX_CONCURRENT")
     daily_processing_minutes: int = Field(default=240, alias="DAILY_PROCESSING_MINUTES")
 
-    # --- submission policy (v2 jobs) ---
+    # --- submission policy ---
     # Safe defaults: allow 1 running job per user, small queue, and restrict high mode.
-    max_active_jobs_per_user: int = Field(default=1, alias="ANIME_V2_MAX_ACTIVE_JOBS_PER_USER")
-    max_queued_jobs_per_user: int = Field(default=5, alias="ANIME_V2_MAX_QUEUED_JOBS_PER_USER")
-    daily_job_cap: int = Field(default=0, alias="ANIME_V2_DAILY_JOB_CAP")  # 0 disables
-    high_mode_admin_only: bool = Field(default=True, alias="ANIME_V2_HIGH_MODE_ADMIN_ONLY")
+    max_active_jobs_per_user: int = Field(default=1, alias="DUBBING_MAX_ACTIVE_JOBS_PER_USER")
+    max_queued_jobs_per_user: int = Field(default=5, alias="DUBBING_MAX_QUEUED_JOBS_PER_USER")
+    daily_job_cap: int = Field(default=0, alias="DUBBING_DAILY_JOB_CAP")  # 0 disables
+    high_mode_admin_only: bool = Field(default=True, alias="DUBBING_HIGH_MODE_ADMIN_ONLY")
 
     watchdog_audio_s: int = Field(default=10 * 60, alias="WATCHDOG_AUDIO_S")
     watchdog_diarize_s: int = Field(default=20 * 60, alias="WATCHDOG_DIARIZE_S")
@@ -416,7 +460,7 @@ class PublicConfig(BaseSettings):
     otel_exporter_otlp_endpoint: str | None = Field(
         default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT"
     )
-    otel_service_name: str = Field(default="anime_v2", alias="OTEL_SERVICE_NAME")
+    otel_service_name: str = Field(default="dubbing_pipeline", alias="OTEL_SERVICE_NAME")
 
     # --- WebRTC defaults (TURN creds live in secrets) ---
     webrtc_stun: str = Field(default="stun:stun.l.google.com:19302", alias="WEBRTC_STUN")

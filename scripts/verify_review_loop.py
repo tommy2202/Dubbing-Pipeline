@@ -19,8 +19,8 @@ def _write_silence_wav(path: Path, duration_s: float, sr: int = 16000) -> None:
 
 def main() -> int:
     try:
-        from anime_v2.review.ops import edit_segment, lock_segment, regen_segment
-        from anime_v2.review.state import (
+        from dubbing_pipeline.review.ops import edit_segment, lock_segment, regen_segment
+        from dubbing_pipeline.review.state import (
             init_state_from_job,
             load_state,
             render_audio_only,

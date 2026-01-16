@@ -46,8 +46,8 @@ def _write_dummy_checkpoint(path: Path) -> None:
 
 def main() -> int:
     try:
-        from anime_v2.plugins.lipsync.base import LipSyncRequest
-        from anime_v2.plugins.lipsync.wav2lip_plugin import Wav2LipPlugin
+        from dubbing_pipeline.plugins.lipsync.base import LipSyncRequest
+        from dubbing_pipeline.plugins.lipsync.wav2lip_plugin import Wav2LipPlugin
     except Exception as ex:
         print(f"IMPORT_FAILED: {ex}")
         return 2

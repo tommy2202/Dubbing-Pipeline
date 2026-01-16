@@ -9,8 +9,8 @@ from pathlib import Path
 
 def main() -> int:
     try:
-        from anime_v2.expressive.policy import plan_for_segment
-        from anime_v2.expressive.prosody import analyze_segment
+        from dubbing_pipeline.expressive.policy import plan_for_segment
+        from dubbing_pipeline.expressive.prosody import analyze_segment
     except Exception as ex:
         print(f"IMPORT_FAILED: {ex}")
         return 2

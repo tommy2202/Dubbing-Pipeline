@@ -17,13 +17,13 @@ cloudflared tunnel login
 2) Create a tunnel:
 
 ```bash
-cloudflared tunnel create anime-v2
+cloudflared tunnel create dubbing-pipeline
 ```
 
 3) Create a DNS route to your tunnel:
 
 ```bash
-cloudflared tunnel route dns anime-v2 <YOUR_HOSTNAME>
+cloudflared tunnel route dns dubbing-pipeline <YOUR_HOSTNAME>
 ```
 
 4) Run cloudflared:

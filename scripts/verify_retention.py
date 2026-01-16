@@ -48,7 +48,7 @@ def _normalize(paths: set[Path]) -> set[Path]:
 
 
 def main() -> int:
-    from anime_v2.storage.retention import apply_retention
+    from dubbing_pipeline.storage.retention import apply_retention
 
     with tempfile.TemporaryDirectory(prefix="verify_retention_") as td:
         root = Path(td)

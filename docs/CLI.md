@@ -1,25 +1,25 @@
-## CLI reference (`anime-v2`)
+## CLI reference (`dubbing-pipeline`)
 
-The CLI is implemented with Click (`src/anime_v2/cli.py`). It has a **default command** (`run`), plus subcommands for review, QA, overrides, voice memory, lip-sync tooling, and character tuning.
+The CLI is implemented with Click (`src/dubbing_pipeline/cli.py`). It has a **default command** (`run`), plus subcommands for review, QA, overrides, voice memory, lip-sync tooling, and character tuning.
 
 ### Important quirk: `--help`
-Because `run` is the default command, `anime-v2 --help` shows **run** help.
+Because `run` is the default command, `dubbing-pipeline --help` shows **run** help.
 
 To see other command help:
 
 ```bash
-anime-v2 run --help
-anime-v2 review --help
-anime-v2 qa --help
-anime-v2 overrides --help
-anime-v2 voice --help
-anime-v2 lipsync --help
-anime-v2 character --help
+dubbing-pipeline run --help
+dubbing-pipeline review --help
+dubbing-pipeline qa --help
+dubbing-pipeline overrides --help
+dubbing-pipeline voice --help
+dubbing-pipeline lipsync --help
+dubbing-pipeline character --help
 ```
 
 ---
 
-## `anime-v2 run` (default)
+## `dubbing-pipeline run` (default)
 
 ### What it does
 Runs the full pipeline on a local video file (or a batch of files) and writes outputs under `Output/<stem>/`.
@@ -31,11 +31,11 @@ Library grouping (optional, best-effort):
 Set these before running to populate library metadata:
 
 ```bash
-export ANIME_V2_SERIES_TITLE="My Show"
-export ANIME_V2_SEASON_NUMBER="S1"      # accepts S1 / Season 1 / 01
-export ANIME_V2_EPISODE_NUMBER="E04"    # accepts E4 / Episode 4 / 04
-export ANIME_V2_OWNER_USER_ID="u_me"    # optional; affects manifest owner_user_id
-export ANIME_V2_VISIBILITY="private"    # public|private (optional)
+export DUBBING_SERIES_TITLE="My Show"
+export DUBBING_SEASON_NUMBER="S1"      # accepts S1 / Season 1 / 01
+export DUBBING_EPISODE_NUMBER="E04"    # accepts E4 / Episode 4 / 04
+export DUBBING_OWNER_USER_ID="u_me"    # optional; affects manifest owner_user_id
+export DUBBING_VISIBILITY="private"    # public|private (optional)
 ```
 
 ### Runtime folders + sample media
@@ -59,19 +59,19 @@ cp samples/Test.mp4 Input/Test.mp4
 
 ```bash
 # Default (medium, auto device)
-anime-v2 Input/Test.mp4
+dubbing-pipeline Input/Test.mp4
 
 # High quality
-anime-v2 Input/Test.mp4 --mode high --device auto
+dubbing-pipeline Input/Test.mp4 --mode high --device auto
 
 # CPU-only
-anime-v2 Input/Test.mp4 --device cpu
+dubbing-pipeline Input/Test.mp4 --device cpu
 ```
 
 ### Batch processing
 
 ```bash
-anime-v2 --batch "Input/*.mp4" --jobs 1 --resume
+dubbing-pipeline --batch "Input/*.mp4" --jobs 1 --resume
 ```
 
 Notes:
@@ -102,13 +102,13 @@ Examples:
 
 ```bash
 # Transcribe only (no translation)
-anime-v2 Input/Test.mp4 --no-translate --src-lang ja
+dubbing-pipeline Input/Test.mp4 --no-translate --src-lang ja
 
 # Spanish dub
-anime-v2 Input/Test.mp4 --src-lang auto --tgt-lang es
+dubbing-pipeline Input/Test.mp4 --src-lang auto --tgt-lang es
 
 # Write both SRT and VTT files
-anime-v2 Input/Test.mp4 --subs-format both
+dubbing-pipeline Input/Test.mp4 --subs-format both
 ```
 
 ### Diarization (optional)
@@ -142,7 +142,7 @@ anime-v2 Input/Test.mp4 --subs-format both
 Example:
 
 ```bash
-anime-v2 Input/Test.mp4 --mix enhanced --separation demucs
+dubbing-pipeline Input/Test.mp4 --mix enhanced --separation demucs
 ```
 
 ### Timing fit + pacing (optional)
@@ -259,18 +259,18 @@ anime-v2 Input/Test.mp4 --mix enhanced --separation demucs
 
 ---
 
-## `anime-v2 review ...` (review/edit loop)
+## `dubbing-pipeline review ...` (review/edit loop)
 
 ```bash
-anime-v2 review init <input_video>
-anime-v2 review list <job>
-anime-v2 review show <job> <segment_id>
-anime-v2 review edit <job> <segment_id> --text "New line"
-anime-v2 review regen <job> <segment_id>
-anime-v2 review play <job> <segment_id>
-anime-v2 review lock <job> <segment_id>
-anime-v2 review unlock <job> <segment_id>
-anime-v2 review render <job>
+dubbing-pipeline review init <input_video>
+dubbing-pipeline review list <job>
+dubbing-pipeline review show <job> <segment_id>
+dubbing-pipeline review edit <job> <segment_id> --text "New line"
+dubbing-pipeline review regen <job> <segment_id>
+dubbing-pipeline review play <job> <segment_id>
+dubbing-pipeline review lock <job> <segment_id>
+dubbing-pipeline review unlock <job> <segment_id>
+dubbing-pipeline review render <job>
 ```
 
 `<job>` may be:
@@ -279,68 +279,68 @@ anime-v2 review render <job>
 
 ---
 
-## `anime-v2 qa ...` (quality scoring)
+## `dubbing-pipeline qa ...` (quality scoring)
 
 ```bash
-anime-v2 qa run <job> --top 20
-anime-v2 qa run <job> --fail-only
-anime-v2 qa show <job>
+dubbing-pipeline qa run <job> --top 20
+dubbing-pipeline qa run <job> --fail-only
+dubbing-pipeline qa show <job>
 ```
 
 ---
 
-## `anime-v2 overrides ...` (music/speaker overrides)
+## `dubbing-pipeline overrides ...` (music/speaker overrides)
 
 Apply effective artifacts after edits:
 
 ```bash
-anime-v2 overrides apply <job>
+dubbing-pipeline overrides apply <job>
 ```
 
 Music regions:
 
 ```bash
-anime-v2 overrides music list <job>
-anime-v2 overrides music add <job> --start 10.0 --end 20.0 --kind music --reason "OP"
-anime-v2 overrides music edit <job> --from-start 10.0 --from-end 20.0 --start 9.5 --end 20.5
-anime-v2 overrides music remove <job> --start 9.5 --end 20.5
+dubbing-pipeline overrides music list <job>
+dubbing-pipeline overrides music add <job> --start 10.0 --end 20.0 --kind music --reason "OP"
+dubbing-pipeline overrides music edit <job> --from-start 10.0 --from-end 20.0 --start 9.5 --end 20.5
+dubbing-pipeline overrides music remove <job> --start 9.5 --end 20.5
 ```
 
 Speaker overrides:
 
 ```bash
-anime-v2 overrides speaker set <job> <segment_id> <character_id>
-anime-v2 overrides speaker unset <job> <segment_id>
+dubbing-pipeline overrides speaker set <job> <segment_id> <character_id>
+dubbing-pipeline overrides speaker unset <job> <segment_id>
 ```
 
 ---
 
-## `anime-v2 voice ...` (voice memory tools)
+## `dubbing-pipeline voice ...` (voice memory tools)
 
 ```bash
-anime-v2 voice list
-anime-v2 voice audition --text "Hello there" --lang en --top 3
-anime-v2 voice merge <from_id> <to_id> [--move-refs] [--keep-alias]
-anime-v2 voice undo-merge <merge_id>
+dubbing-pipeline voice list
+dubbing-pipeline voice audition --text "Hello there" --lang en --top 3
+dubbing-pipeline voice merge <from_id> <to_id> [--move-refs] [--keep-alias]
+dubbing-pipeline voice undo-merge <merge_id>
 ```
 
 ---
 
-## `anime-v2 lipsync preview ...` (helper)
+## `dubbing-pipeline lipsync preview ...` (helper)
 
 ```bash
-anime-v2 lipsync preview Input/Test.mp4 --out-dir Output/Test/lipsync_preview
+dubbing-pipeline lipsync preview Input/Test.mp4 --out-dir Output/Test/lipsync_preview
 ```
 
 ---
 
-## `anime-v2 character ...` (per-character tuning)
+## `dubbing-pipeline character ...` (per-character tuning)
 
 ```bash
-anime-v2 character set-voice-mode <character_id> clone|preset|single
-anime-v2 character set-rate <character_id> 1.05
-anime-v2 character set-style <character_id> normal
-anime-v2 character set-expressive <character_id> 0.6
+dubbing-pipeline character set-voice-mode <character_id> clone|preset|single
+dubbing-pipeline character set-rate <character_id> 1.05
+dubbing-pipeline character set-style <character_id> normal
+dubbing-pipeline character set-expressive <character_id> 0.6
 ```
 
 ---
@@ -349,21 +349,21 @@ anime-v2 character set-expressive <character_id> 0.6
 
 ### Fast “good enough” CPU run
 ```bash
-anime-v2 Input/Test.mp4 --mode low --device cpu --no-translate
+dubbing-pipeline Input/Test.mp4 --mode low --device cpu --no-translate
 ```
 
 ### High quality with QA
 ```bash
-anime-v2 Input/Test.mp4 --mode high --qa on
+dubbing-pipeline Input/Test.mp4 --mode high --qa on
 ```
 
 ### Mobile-friendly HLS export (optional)
 ```bash
-anime-v2 Input/Test.mp4 --emit mkv,mp4,hls
+dubbing-pipeline Input/Test.mp4 --emit mkv,mp4,hls
 ```
 
 ### Minimal retention (privacy-friendly)
 ```bash
-anime-v2 Input/Test.mp4 --privacy on --cache-policy minimal
+dubbing-pipeline Input/Test.mp4 --privacy on --cache-policy minimal
 ```
 

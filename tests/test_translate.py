@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import anime_v2.stages.translate as tr
+import dubbing_pipeline.stages.translate as tr
 
 
 def test_translate_preserves_mapping_and_punctuation(monkeypatch):

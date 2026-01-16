@@ -34,7 +34,7 @@ def _write_clipped_wav(path: Path, *, seconds: float, sr: int = 16000) -> None:
 
 def main() -> int:
     print("safe_config_report:", get_safe_config_report())
-    from anime_v2.qa.scoring import score_job
+    from dubbing_pipeline.qa.scoring import score_job
 
     job = Path("_tmp_qa_job")
     if job.exists():

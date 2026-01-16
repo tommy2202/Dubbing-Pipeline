@@ -31,9 +31,9 @@ def main() -> int:
     os.environ.setdefault("STRICT_SECRETS", "0")
     from tempfile import TemporaryDirectory
 
-    from anime_v2.voice_memory.store import VoiceMemoryStore
+    from dubbing_pipeline.voice_memory.store import VoiceMemoryStore
 
-    with TemporaryDirectory(prefix="anime_v2_voice_memory_") as td:
+    with TemporaryDirectory(prefix="dubbing_pipeline_voice_memory_") as td:
         root = Path(td) / "voice_memory"
         store = VoiceMemoryStore(root)
 

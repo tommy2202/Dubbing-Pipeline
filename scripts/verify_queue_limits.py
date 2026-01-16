@@ -8,13 +8,13 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from anime_v2.api.models import AuthStore, Role, User, now_ts
-from anime_v2.api.security import create_access_token
-from anime_v2.jobs.store import JobStore
-from anime_v2.runtime.scheduler import Scheduler
-from anime_v2.utils.crypto import PasswordHasher
-from anime_v2.utils.ratelimit import RateLimiter
-from anime_v2.web.routes_jobs import router as jobs_router
+from dubbing_pipeline.api.models import AuthStore, Role, User, now_ts
+from dubbing_pipeline.api.security import create_access_token
+from dubbing_pipeline.jobs.store import JobStore
+from dubbing_pipeline.runtime.scheduler import Scheduler
+from dubbing_pipeline.utils.crypto import PasswordHasher
+from dubbing_pipeline.utils.ratelimit import RateLimiter
+from dubbing_pipeline.web.routes_jobs import router as jobs_router
 
 
 def _make_tiny_mp4(path: Path) -> None:
@@ -68,14 +68,14 @@ def main() -> int:
 
         # Policy: only 1 inflight job allowed for non-admin (max_active=1, max_queued=0).
         os.environ["APP_ROOT"] = str(root)
-        os.environ["ANIME_V2_OUTPUT_DIR"] = str(out)
+        os.environ["DUBBING_OUTPUT_DIR"] = str(out)
         os.environ["REMOTE_ACCESS_MODE"] = "off"
         os.environ["COOKIE_SECURE"] = "0"
-        os.environ["ANIME_V2_JWT_SECRET"] = "test-secret-please-change"
-        os.environ["ANIME_V2_CSRF_SECRET"] = "test-secret-please-change"
-        os.environ["ANIME_V2_SESSION_SECRET"] = "test-secret-please-change"
-        os.environ["ANIME_V2_MAX_ACTIVE_JOBS_PER_USER"] = "1"
-        os.environ["ANIME_V2_MAX_QUEUED_JOBS_PER_USER"] = "0"
+        os.environ["DUBBING_JWT_SECRET"] = "test-secret-please-change"
+        os.environ["DUBBING_CSRF_SECRET"] = "test-secret-please-change"
+        os.environ["DUBBING_SESSION_SECRET"] = "test-secret-please-change"
+        os.environ["DUBBING_MAX_ACTIVE_JOBS_PER_USER"] = "1"
+        os.environ["DUBBING_MAX_QUEUED_JOBS_PER_USER"] = "0"
 
         # Clear cached settings between scripts.
         try:

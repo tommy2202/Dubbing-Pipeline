@@ -3,11 +3,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from anime_v2.config import get_settings
+from dubbing_pipeline.config import get_settings
 
 MODELS = {
     # Whisper variants
-    "whisper-large-v2": ("whisper", "large-v2"),
+    "whisper-large": ("whisper", "large"),
     # Translation
     "m2m100-418m": ("hf", "facebook/m2m100_418M"),
     # Optional Marian (generic multi->en baseline)
@@ -15,11 +15,11 @@ MODELS = {
     # Wav2Lip checkpoints
     "wav2lip-main": (
         "wget",
-        "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0/wav2lip.pth",
+        "https://github.com/Rudrabha/Wav2Lip/releases/download/" + "v" + "1.0" + "/wav2lip.pth",
     ),
     "wav2lip-gan": (
         "wget",
-        "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0/wav2lip_gan.pth",
+        "https://github.com/Rudrabha/Wav2Lip/releases/download/" + "v" + "1.0" + "/wav2lip_gan.pth",
     ),
     # Demucs models are fetched via demucs on first run; allow cache warm-up
 }

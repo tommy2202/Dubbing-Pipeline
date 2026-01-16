@@ -1,0 +1,686 @@
+{% extends "_base.html" %}
+
+{% block title %}Upload • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Upload Wizard</h1>
+    <p class="mt-1 text-sm text-slate-400">3 steps: File → Settings → Voice. Supports batch mode.</p>
+  </div>
+</div>
+
+<div
+  class="mt-6"
+  x-data="{
+    step: 1,
+    batch: false,
+    files: [],
+    file: null,
+    fileName: '',
+    fileSize: 0,
+    preset_id: '',
+    project_id: '',
+    project: '', // filesystem project profile name (projects/<name>/profile.yaml)
+    series_title: '',
+    season_text: '',
+    episode_text: '',
+    mode: '{{ (user_defaults.mode if user_defaults and user_defaults.mode else "medium") | e }}',
+    device: '{{ (user_defaults.device if user_defaults and user_defaults.device else "auto") | e }}',
+    src_lang: '{{ (user_defaults.src_lang if user_defaults and user_defaults.src_lang else "ja") | e }}',
+    tgt_lang: '{{ (user_defaults.tgt_lang if user_defaults and user_defaults.tgt_lang else "en") | e }}',
+    cache_policy: 'full', // full|balanced|minimal (default full => keep everything)
+    pg_enabled: false,
+    pg: 'off', // off|pg13|pg (session-only; default OFF on each app start)
+    tts_lang: '{{ (user_defaults.tts_lang if user_defaults and user_defaults.tts_lang else "en") | e }}',
+    voiceMode: 'preset', // preset | wav
+    tts_speaker: '{{ (user_defaults.tts_speaker if user_defaults and user_defaults.tts_speaker else "default") | e }}',
+    zero_shot: true,
+    useIdem: false,
+    idemKey: '',
+    error: '',
+    setFile(f) {
+      this.file = f || null;
+      this.fileName = f ? (f.name || '') : '';
+      this.fileSize = f ? (f.size || 0) : 0;
+    },
+    setFiles(list) {
+      const arr = [];
+      try { for (const f of (list || [])) arr.push(f); } catch(e) {}
+      this.files = arr;
+      if (arr.length === 1) this.setFile(arr[0]);
+      if (arr.length !== 1) { this.file = null; this.fileName=''; this.fileSize=0; }
+    },
+    fmtBytes(n) {
+      try {
+        const u = ['B','KB','MB','GB'];
+        let i = 0; let x = Number(n || 0);
+        while (x >= 1024 && i < u.length-1) { x/=1024; i++; }
+        return (i===0 ? String(x) : x.toFixed(1)) + ' ' + u[i];
+      } catch(e) { return String(n||0); }
+    },
+    genIdem() {
+      try {
+        const a = new Uint8Array(16);
+        crypto.getRandomValues(a);
+        this.idemKey = Array.from(a).map(b => b.toString(16).padStart(2,'0')).join('');
+      } catch(e) {
+        this.idemKey = String(Math.random()).slice(2) + String(Date.now());
+      }
+    }
+  }"
+  @job-submit-error.window="error = ($event.detail && $event.detail.message) ? $event.detail.message : 'Job submit failed'"
+>
+  <div class="mb-4 flex items-center gap-2 text-sm">
+    <div class="flex items-center gap-2">
+      <div :class="step===1 ? 'bg-indigo-600' : 'bg-slate-800'" class="h-6 w-6 rounded-full flex items-center justify-center text-xs">1</div>
+      <div class="text-slate-300">File</div>
+    </div>
+    <div class="h-px flex-1 bg-slate-800"></div>
+    <div class="flex items-center gap-2">
+      <div :class="step===2 ? 'bg-indigo-600' : 'bg-slate-800'" class="h-6 w-6 rounded-full flex items-center justify-center text-xs">2</div>
+      <div class="text-slate-300">Settings</div>
+    </div>
+    <div class="h-px flex-1 bg-slate-800"></div>
+    <div class="flex items-center gap-2">
+      <div :class="step===3 ? 'bg-indigo-600' : 'bg-slate-800'" class="h-6 w-6 rounded-full flex items-center justify-center text-xs">3</div>
+      <div class="text-slate-300">Voice</div>
+    </div>
+  </div>
+
+  <form
+    id="jobForm"
+    class="rounded-xl border border-slate-800 bg-slate-900/40 p-4"
+    :hx-post="batch ? '/api/jobs/batch' : '/api/jobs'"
+    hx-encoding="multipart/form-data"
+    hx-swap="none"
+  >
+    <div id="wizardError" class="mb-3 text-sm text-red-200" role="alert" aria-live="polite"
+         x-show="error" x-cloak x-text="error"></div>
+
+    <!-- Step 1 -->
+    <div x-show="step===1">
+      <div class="text-sm text-slate-300">Step 1 — Video file</div>
+      <div class="mt-2 flex items-center gap-2 text-sm text-slate-300">
+        <input id="batchMode" type="checkbox" class="h-5 w-5" x-model="batch" @change="setFiles([]); setFile(null)" />
+        <label for="batchMode">Batch mode (multiple files)</label>
+      </div>
+      <div
+        class="mt-3 rounded-xl border border-dashed border-slate-700 bg-slate-950/30 p-6"
+        @dragover.prevent
+        @drop.prevent="
+          if (batch) {
+            setFiles($event.dataTransfer.files || []);
+          } else {
+            const f = ($event.dataTransfer.files && $event.dataTransfer.files[0]) ? $event.dataTransfer.files[0] : null;
+            setFile(f);
+          }
+          if ($event.dataTransfer.files && $refs.fileInput) { $refs.fileInput.files = $event.dataTransfer.files; }
+        "
+      >
+        <div class="text-sm text-slate-400" id="fileHelp">Drag & drop an MP4/MKV here, or pick a file.</div>
+        <div class="mt-3">
+          <label class="sr-only" for="fileInputEl">Choose video file</label>
+          <input
+            x-ref="fileInput"
+            id="fileInputEl"
+            type="file"
+            :name="batch ? 'files' : 'file'"
+            :multiple="batch"
+            accept="video/*"
+            class="block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700"
+            @change="batch ? setFiles($event.target.files) : setFile($event.target.files && $event.target.files[0])"
+            aria-describedby="fileHelp"
+          />
+        </div>
+        <template x-if="!batch && file">
+          <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm">
+            <div class="text-slate-200" x-text="fileName"></div>
+            <div class="text-slate-500" x-text="fmtBytes(fileSize)"></div>
+          </div>
+        </template>
+        <template x-if="batch && files.length">
+          <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm">
+            <div class="text-slate-200" x-text="files.length + ' files selected'"></div>
+            <div class="mt-2 text-xs text-slate-400 space-y-1">
+              <template x-for="f in files.slice(0, 6)" :key="f.name">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="truncate" x-text="f.name"></div>
+                  <div class="text-slate-500" x-text="fmtBytes(f.size)"></div>
+                </div>
+              </template>
+              <div class="text-slate-500" x-show="files.length > 6">…and more</div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Server file picker fallback (reliable, no upload) -->
+        <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+          <div class="text-sm text-slate-300">Or choose a server-local file (reliable)</div>
+          <div class="mt-1 text-xs text-slate-500">Lists video files under <code>APP_ROOT/Input</code>.</div>
+          <input type="hidden" name="video_path" id="videoPathHidden" value="" />
+          <div class="mt-3 flex items-center gap-2">
+            <select id="serverFileSel" class="w-full rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm">
+              <option value="">(choose)</option>
+            </select>
+            <button type="button" id="serverFileRefresh"
+                    class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-3 text-xs">
+              Refresh
+            </button>
+          </div>
+          <div class="mt-2 text-xs text-slate-500 break-all" id="serverFileChosen" style="display:none;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div x-show="step===2" x-cloak>
+      <div class="text-sm text-slate-300">Step 2 — Settings</div>
+      <div class="mt-3 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">Library metadata (required)</div>
+        <div class="mt-1 text-xs text-slate-500">Used for grouped browsing under <code>Library/</code>.</div>
+        <div class="mt-3 grid gap-4 sm:grid-cols-3">
+          <div class="sm:col-span-1">
+            <label class="block text-sm text-slate-300" for="seriesTitle">Series name</label>
+            <input id="seriesTitle" name="series_title"
+                   class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                   placeholder="My Show"
+                   x-model="series_title"
+                   required />
+          </div>
+          <div class="sm:col-span-1">
+            <label class="block text-sm text-slate-300" for="seasonText">Season</label>
+            <input id="seasonText" name="season_text"
+                   class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                   placeholder="S1 / Season 1 / 01"
+                   x-model="season_text"
+                   required />
+          </div>
+          <div class="sm:col-span-1">
+            <label class="block text-sm text-slate-300" for="episodeText">Episode</label>
+            <input id="episodeText" name="episode_text"
+                   class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                   placeholder="E4 / Episode 4 / 04"
+                   x-model="episode_text"
+                   required />
+          </div>
+        </div>
+      </div>
+      <div class="mt-3 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm text-slate-300" for="presetSel">Preset (optional)</label>
+          <select id="presetSel" name="preset_id" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                  x-model="preset_id">
+            <option value="">(none)</option>
+          </select>
+          <div class="mt-1 text-xs text-slate-500" id="presetHelp">Loaded from /api/presets on page load (JS).</div>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300" for="projectSel">Project (optional)</label>
+          <select id="projectSel" name="project_id" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                  x-model="project_id">
+            <option value="">(none)</option>
+          </select>
+          <div class="mt-1 text-xs text-slate-500">Loaded from /api/projects.</div>
+        </div>
+      </div>
+      <div class="mt-4 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm text-slate-300" for="profileSel">Project profile (optional)</label>
+          <select id="profileSel" name="project" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                  x-model="project">
+            <option value="">(none)</option>
+          </select>
+          <div class="mt-1 text-xs text-slate-500">Loaded from /api/project-profiles (filesystem profiles).</div>
+        </div>
+      </div>
+      <div class="mt-4 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm text-slate-300" for="modeSel">Mode</label>
+          <select id="modeSel" name="mode" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                  x-model="mode">
+            <option value="high">high</option>
+            <option value="medium">medium</option>
+            <option value="low">low</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300" for="deviceSel">Device</label>
+          <select id="deviceSel" name="device" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                  x-model="device">
+            <option value="auto">auto</option>
+            <option value="cpu">cpu</option>
+            <option value="cuda">cuda</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300" for="srcLang">Source lang</label>
+          <input id="srcLang" name="src_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                 x-model="src_lang" placeholder="ja" />
+        </div>
+        <div>
+          <label class="block text-sm text-slate-300" for="tgtLang">Target lang</label>
+          <input id="tgtLang" name="tgt_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                 x-model="tgt_lang" placeholder="en" />
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">Retention</div>
+        <div class="mt-2 text-xs text-slate-500">Controls how many intermediate artifacts are kept under Output/&lt;job&gt;.</div>
+        <div class="mt-3">
+          <label class="block text-sm text-slate-300" for="cachePolicySel">Cache policy</label>
+          <select id="cachePolicySel" name="cache_policy"
+                  class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                  x-model="cache_policy">
+            <option value="full">full (keep everything)</option>
+            <option value="balanced">balanced (delete heavy temps)</option>
+            <option value="minimal">minimal (keep finals + essential logs/manifests)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">PG Mode (session-only)</div>
+        <div class="mt-3 flex flex-wrap items-center gap-4 text-sm text-slate-300">
+          <label class="flex items-center gap-3" for="pgEnabled">
+            <input
+              id="pgEnabled"
+              type="checkbox"
+              class="h-5 w-5"
+              x-model="pg_enabled"
+              @change="pg = pg_enabled ? (pg === 'pg' ? 'pg' : 'pg13') : 'off'"
+            />
+            <span>PG Mode</span>
+          </label>
+
+          <div class="flex items-center gap-2">
+            <span class="text-slate-500">Level:</span>
+            <select
+              class="rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs"
+              x-model="pg"
+              name="pg"
+              :disabled="!pg_enabled"
+            >
+              <option value="pg13">pg13</option>
+              <option value="pg">pg</option>
+              <option value="off">off</option>
+            </select>
+          </div>
+        </div>
+        <div class="mt-2 text-xs text-slate-500">
+          Applies after translation/style rules and before timing-fit/TTS/subtitles. Default is OFF on restart.
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">Quality checks</div>
+        <label class="mt-3 flex items-center gap-3 text-sm text-slate-300" for="qaEnabled">
+          <input id="qaEnabled" type="checkbox" class="h-5 w-5" name="qa" value="1" />
+          <span>Run QA scoring (writes Output/&lt;job&gt;/qa/*)</span>
+        </label>
+        <div class="mt-2 text-xs text-slate-500">
+          Offline-only; does not change outputs. Useful with Review Loop to find segments to edit/lock.
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">Import subtitles / transcript (optional)</div>
+        <div class="mt-2 text-xs text-slate-500">
+          If provided, the server can skip ASR and/or translation. (Small files only.)
+        </div>
+        <div class="mt-3 grid gap-4 sm:grid-cols-2">
+          <div>
+            <label class="block text-sm text-slate-300" for="srcSrt">Source SRT (skip ASR)</label>
+            <input id="srcSrt" name="src_srt" type="file" accept=".srt,text/plain"
+                   class="mt-1 block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700" />
+          </div>
+          <div>
+            <label class="block text-sm text-slate-300" for="tgtSrt">Target SRT (skip translation)</label>
+            <input id="tgtSrt" name="tgt_srt" type="file" accept=".srt,text/plain"
+                   class="mt-1 block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700" />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="block text-sm text-slate-300" for="trJson">Transcript JSON (advanced)</label>
+            <input id="trJson" name="transcript_json" type="file" accept="application/json,.json"
+                   class="mt-1 block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div x-show="step===3" x-cloak>
+      <div class="text-sm text-slate-300">Step 3 — Voice (XTTS)</div>
+      <div class="mt-4 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm text-slate-300" for="ttsLang">TTS language</label>
+          <input id="ttsLang" name="tts_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                 x-model="tts_lang" placeholder="en" />
+        </div>
+        <div class="flex items-center gap-3 pt-6">
+          <input id="zeroShot" type="checkbox" name="zero_shot" value="1" class="h-5 w-5" x-model="zero_shot" />
+          <label class="text-sm text-slate-300" for="zeroShot">Zero-shot (clone if WAV provided)</label>
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">Voice source</div>
+        <div class="mt-3 flex flex-wrap items-center gap-4 text-sm">
+          <label class="flex items-center gap-2" for="voicePreset">
+            <input id="voicePreset" type="radio" value="preset" x-model="voiceMode" />
+            <span>Preset speaker</span>
+          </label>
+          <label class="flex items-center gap-2" for="voiceWav">
+            <input id="voiceWav" type="radio" value="wav" x-model="voiceMode" />
+            <span>Upload speaker WAV</span>
+          </label>
+        </div>
+
+        <div class="mt-3">
+          <label class="block text-sm text-slate-300" for="ttsSpeaker">Preset speaker</label>
+          <input
+            id="ttsSpeaker"
+            name="tts_speaker"
+            class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+            x-model="tts_speaker"
+            placeholder="default"
+            :disabled="voiceMode!=='preset'"
+          />
+          <div class="mt-1 text-xs text-slate-500">Disabled when uploading a speaker WAV.</div>
+        </div>
+
+        <div class="mt-3">
+          <label class="block text-sm text-slate-300" for="ttsWav">Speaker WAV</label>
+          <input
+            id="ttsWav"
+            type="file"
+            name="tts_speaker_wav"
+            accept="audio/*"
+            class="mt-1 block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-slate-100 hover:file:bg-slate-700"
+            :disabled="voiceMode!=='wav'"
+          />
+          <div class="mt-1 text-xs text-slate-500">When enabled, the client omits `tts_speaker` via disable.</div>
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <label class="flex items-center gap-3 text-sm" for="useIdem">
+          <input id="useIdem" type="checkbox" class="h-5 w-5" x-model="useIdem" @change="if(useIdem){genIdem()} else {idemKey=''}" />
+          <span>Use idempotency</span>
+        </label>
+        <template x-if="useIdem">
+          <div class="mt-3">
+            <div class="text-xs text-slate-500">Key (sent as `idempotency_key` form field)</div>
+            <input class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-xs text-slate-100"
+                   x-model="idemKey" readonly />
+            <input type="hidden" name="idempotency_key" :value="idemKey" />
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="mt-6 flex items-center justify-between gap-3">
+      <button type="button"
+              class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+              :disabled="step===1"
+              :class="step===1 ? 'opacity-50 cursor-not-allowed' : ''"
+              @click="step = Math.max(1, step-1); error=''">
+        Back
+      </button>
+
+      <div class="flex items-center gap-3">
+        <button type="button"
+                class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
+                x-show="step<3"
+                @click="
+                  error='';
+                  if(step===1 && !file){ error='Please choose a video file.'; return; }
+                  step = Math.min(3, step+1);
+                ">
+          Next
+        </button>
+
+        <button
+          type="submit"
+          x-show="step===3"
+          x-cloak
+          class="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-5 py-3 text-sm font-semibold"
+          @click="
+            error='';
+            if(!String(series_title||'').trim()){ error='Series name is required.'; $event.preventDefault(); return; }
+            if(!String(season_text||'').trim()){ error='Season is required.'; $event.preventDefault(); return; }
+            if(!String(episode_text||'').trim()){ error='Episode is required.'; $event.preventDefault(); return; }
+            if(batch){
+              if(!files.length){ error='Please choose at least one video file.'; $event.preventDefault(); return; }
+            } else {
+              if(!file){ error='Please choose a video file.'; $event.preventDefault(); return; }
+            }
+          "
+        >
+          Start Job
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<script>
+  // Redirect to job detail after /api/jobs returns {id}
+  (function () {
+    const form = document.getElementById("jobForm");
+    if (!form) return;
+
+    // Resumable chunked upload (single-file only). Falls back to HTMX multipart.
+    form.addEventListener("submit", async function (evt) {
+      try {
+        const batch = !!document.getElementById("batchMode")?.checked;
+        if (batch) return; // HTMX handles batch
+
+        const videoPath = (document.getElementById("videoPathHidden")?.value || "").trim();
+        if (videoPath) return; // HTMX handles server file path
+
+        const fileEl = document.getElementById("fileInputEl");
+        const file = fileEl && fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
+        if (!file) return; // allow existing validation to fire
+
+        // Intercept HTMX submit
+        evt.preventDefault();
+        evt.stopPropagation();
+
+        const csrf = document.getElementById("csrf")?.value || "";
+        const fd = new FormData(form);
+        const cfg = {
+          series_title: String(fd.get("series_title") || ""),
+          season_text: String(fd.get("season_text") || ""),
+          episode_text: String(fd.get("episode_text") || ""),
+          mode: String(fd.get("mode") || "medium"),
+          device: String(fd.get("device") || "auto"),
+          src_lang: String(fd.get("src_lang") || "auto"),
+          tgt_lang: String(fd.get("tgt_lang") || "en"),
+          project: String(fd.get("project") || ""),
+          cache_policy: String(fd.get("cache_policy") || "full"),
+          pg: String(fd.get("pg") || "off"),
+          qa: String(fd.get("qa") || "").trim() !== "",
+        };
+
+        async function readSmallTextFile(inputId) {
+          const el = document.getElementById(inputId);
+          if (!el || !el.files || !el.files.length) return "";
+          const f = el.files[0];
+          if (f.size > (2 * 1024 * 1024)) throw new Error(inputId + " too large");
+          return await f.text();
+        }
+        try {
+          const srcTxt = await readSmallTextFile("srcSrt");
+          const tgtTxt = await readSmallTextFile("tgtSrt");
+          const jsTxt = await readSmallTextFile("trJson");
+          if (srcTxt) cfg.src_srt_text = srcTxt;
+          if (tgtTxt) cfg.tgt_srt_text = tgtTxt;
+          if (jsTxt) cfg.transcript_json_text = jsTxt;
+        } catch (e) {
+          throw e;
+        }
+
+        // 1) init upload
+        const initR = await fetch("/api/uploads/init", {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify({ filename: file.name, total_bytes: file.size, mime: file.type || "" }),
+        });
+        if (!initR.ok) throw new Error("upload init failed (" + initR.status + ")");
+        const init = await initR.json();
+        const uploadId = init.upload_id;
+        const chunkBytes = init.chunk_bytes || (5 * 1024 * 1024);
+
+        // 2) upload chunks
+        let offset = 0;
+        let idx = 0;
+        while (offset < file.size) {
+          const end = Math.min(file.size, offset + chunkBytes);
+          const blob = file.slice(offset, end);
+          const ab = await blob.arrayBuffer();
+          const digest = await crypto.subtle.digest("SHA-256", ab);
+          const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+          const chunkR = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/chunk?index=${idx}&offset=${offset}`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/octet-stream", "X-Chunk-Sha256": hex, "X-CSRF-Token": csrf },
+            body: ab,
+          });
+          if (!chunkR.ok) throw new Error("upload chunk failed (" + chunkR.status + ")");
+          offset = end;
+          idx += 1;
+        }
+
+        // 3) complete
+        const doneR = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/complete`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify({}),
+        });
+        if (!doneR.ok) throw new Error("upload complete failed (" + doneR.status + ")");
+
+        // 4) create job referencing upload_id
+        const jobR = await fetch("/api/jobs", {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify({ upload_id: uploadId, ...cfg }),
+        });
+        const jobData = await jobR.json().catch(() => ({}));
+        if (!jobR.ok) {
+          const msg = (jobData && (jobData.detail || jobData.error)) ? (jobData.detail || jobData.error) : ("Job submit failed (" + jobR.status + ")");
+          window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
+          return;
+        }
+        const jobId = jobData.id || jobData.job_id || null;
+        if (jobId) window.location = "/ui/jobs/" + encodeURIComponent(jobId) + "?created=1";
+      } catch (e) {
+        window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: String(e || "submit failed") } }));
+      }
+    }, true);
+
+    form.addEventListener("htmx:afterRequest", function (evt) {
+      try {
+        const xhr = evt.detail.xhr;
+        if (!xhr) return;
+        const data = JSON.parse(xhr.responseText || "{}");
+        if (xhr.status !== 200) {
+          const msg = (data && (data.detail || data.error)) ? (data.detail || data.error) : ("Job submit failed (" + xhr.status + ")");
+          window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
+          return;
+        }
+        const ids = data.ids || [];
+        const jobId = data.id || data.job_id || (Array.isArray(ids) && ids.length ? ids[0] : null);
+        if (jobId) window.location = "/ui/jobs/" + encodeURIComponent(jobId) + "?created=1";
+      } catch (e) {
+        // ignore
+      }
+    });
+  })();
+</script>
+
+<script>
+  // Server file picker: populate from /api/files and wire selection into hidden video_path field.
+  (function () {
+    const sel = document.getElementById("serverFileSel");
+    const btn = document.getElementById("serverFileRefresh");
+    const chosen = document.getElementById("serverFileChosen");
+    const hidden = document.getElementById("videoPathHidden");
+    const fileEl = document.getElementById("fileInputEl");
+    if (!sel || !btn || !hidden) return;
+
+    async function refresh() {
+      try {
+        const r = await fetch("/api/files", { credentials: "include" });
+        if (!r.ok) return;
+        const d = await r.json();
+        const items = Array.isArray(d.items) ? d.items : [];
+        // reset options
+        sel.innerHTML = '<option value="">(choose)</option>';
+        for (const it of items) {
+          if (!it || it.type !== "file") continue;
+          const o = document.createElement("option");
+          o.value = it.path || "";
+          o.textContent = it.name || it.path || "";
+          sel.appendChild(o);
+        }
+      } catch (e) {}
+    }
+
+    sel.addEventListener("change", function () {
+      try {
+        const v = String(sel.value || "");
+        hidden.value = v;
+        if (v && chosen) { chosen.style.display = ""; chosen.textContent = "Selected: " + v; }
+        if (!v && chosen) { chosen.style.display = "none"; chosen.textContent = ""; }
+        if (v && fileEl) fileEl.value = "";
+      } catch (e) {}
+    });
+    if (fileEl) {
+      fileEl.addEventListener("change", function () {
+        try {
+          if (fileEl.files && fileEl.files.length) {
+            hidden.value = "";
+            if (chosen) { chosen.style.display = "none"; chosen.textContent = ""; }
+            sel.value = "";
+          }
+        } catch (e) {}
+      });
+    }
+    btn.addEventListener("click", refresh);
+    refresh();
+  })();
+</script>
+
+<script>
+  // Populate preset/project selects (simple, no build step)
+  (function(){
+    async function fill(url, selName){
+      const sel = document.querySelector('select[name="'+selName+'"]');
+      if(!sel) return;
+      try{
+        const r = await fetch(url, {credentials:'include'});
+        if(!r.ok) return;
+        const d = await r.json();
+        const items = Array.isArray(d.items) ? d.items : [];
+        for(const it of items){
+          const o = document.createElement('option');
+          // Support both {id,name} and {name} payloads
+          o.value = (it.id !== undefined && it.id !== null) ? it.id : (it.name || '');
+          o.textContent = it.name || it.id || '';
+          sel.appendChild(o);
+        }
+      }catch(e){}
+    }
+    fill('/api/presets','preset_id');
+    fill('/api/projects','project_id');
+    fill('/api/project-profiles','project');
+  })();
+</script>
+{% endblock %}
+

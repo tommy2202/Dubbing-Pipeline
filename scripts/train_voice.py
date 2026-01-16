@@ -30,7 +30,7 @@ def main() -> int:
 
     Expected inputs:
       - A folder of audio clips (wav) + transcripts (txt/json) per speaker.
-      - A base TTS model identifier (e.g. Coqui XTTS v2) or checkpoint path.
+      - A base TTS model identifier (e.g. Coqui XTTS) or checkpoint path.
 
     Expected outputs:
       - A deterministic `manifest.jsonl` describing samples (paths + text + durations)

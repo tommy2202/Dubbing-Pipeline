@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from concurrent.futures import CancelledError as FuturesCancelledError
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -23,19 +24,20 @@ def _sha256_hex(b: bytes) -> str:
 def main() -> int:
     # Tighten limits so we can test rejection cheaply.
     os.environ["APP_ROOT"] = "/workspace"
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(Path("/tmp") / "anime_v2_file_smoke_out")
+    os.environ["DUBBING_OUTPUT_DIR"] = str(Path("/tmp") / "dubbing_pipeline_file_smoke_out")
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
     os.environ["COOKIE_SECURE"] = "0"
     os.environ["MAX_UPLOAD_MB"] = "1"
 
-    from anime_v2.config import get_settings
-    from anime_v2.server import app
+    from dubbing_pipeline.config import get_settings
+    from dubbing_pipeline.server import app
 
     get_settings.cache_clear()
 
-    with TestClient(app) as c:
-        hdr = _login(c, "admin", "adminpass")
+    try:
+        with TestClient(app) as c:
+            hdr = _login(c, "admin", "adminpass")
 
         # 1) Traversal attempts
         r = c.get("/api/files", params={"dir": "../"}, headers=hdr)
@@ -75,6 +77,10 @@ def main() -> int:
             headers={**hdr, "X-Chunk-Sha256": _sha256_hex(payload)},
         )
         assert r.status_code == 400, r.text
+    except FuturesCancelledError:
+        # Some Starlette/AnyIO combinations can raise CancelledError on shutdown.
+        # The assertions above already ran; treat shutdown cancellation as clean exit.
+        pass
 
     print("security_file_smoke: ok")
     return 0

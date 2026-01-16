@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from anime_v2.config import get_settings
-from anime_v2.stages.character_store import Character, CharacterStore
+from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.stages.character_store import Character, CharacterStore
 
 
 def _b64_32() -> str:

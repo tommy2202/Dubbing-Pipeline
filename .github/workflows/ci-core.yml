@@ -1,0 +1,120 @@
+name: ci-core
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+    inputs:
+      run_reliability:
+        description: "Run reliability E2E scripts (lite)"
+        required: false
+        default: "false"
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: System deps (ffmpeg, espeak)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg espeak-ng libsndfile1
+
+      - name: Install project + test deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip install "openai-whisper==20231117"
+
+      - name: Guardrails (no tracked artifacts / no secrets)
+        run: |
+          python scripts/check_no_tracked_artifacts.py
+          python scripts/check_no_secrets.py
+
+      - name: Smoke import all
+        run: |
+          python scripts/smoke_import_all.py
+
+      - name: Package + verify release zip (allowlist)
+        run: |
+          python scripts/package_release.py --out dist --name ci-release.zip
+          python scripts/verify_release_zip.py dist/ci-release.zip
+
+      - name: Extra gates (repo scripts)
+        env:
+          LOG_LEVEL: INFO
+          COQUI_TOS_AGREED: "0"
+          OFFLINE_MODE: "0"
+          ALLOW_EGRESS: "1"
+        run: |
+          python scripts/verify_env.py
+          python scripts/polish_gate.py
+          python scripts/mobile_gate.py
+          python scripts/security_mobile_gate.py
+          python scripts/security_smoke.py
+
+      - name: Cache Whisper models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/whisper
+          key: whisper-${{ runner.os }}-small
+
+  reliability_nightly:
+    name: reliability (nightly, lite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: github.event_name == 'schedule' || inputs.run_reliability == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: System deps (ffmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install project (editable)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Reliability E2E (lite)
+        env:
+          LOG_LEVEL: INFO
+          # Avoid any heavy model downloads in nightly by default.
+          OFFLINE_MODE: "1"
+          ALLOW_EGRESS: "0"
+          ALLOW_HF_EGRESS: "0"
+          # Make upload resume more punishing
+          SIMULATE_NETWORK_LOSS: "1"
+          # Clean skip if no GPU
+          SKIP_GPU_TESTS: "0"
+        run: |
+          python scripts/e2e_smoke_cli.py
+          python scripts/e2e_smoke_web.py
+          python scripts/e2e_ffmpeg_cases.py
+          python scripts/e2e_upload_resume.py
+          python scripts/e2e_gpu_sanity.py
+          python scripts/collect_diagnostics.py
+

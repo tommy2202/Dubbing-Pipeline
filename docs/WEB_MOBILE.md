@@ -1,6 +1,6 @@
 ## Web + Mobile guide
 
-This guide covers the **FastAPI server + web UI** (`anime-v2-web`) and how to use it from a phone (LAN or remote).
+This guide covers the **FastAPI server + web UI** (`dubbing-web`) and how to use it from a phone (LAN or remote).
 
 If you only want remote setup details, also see:
 - `docs/mobile_remote.md`
@@ -16,7 +16,7 @@ If you only want remote setup details, also see:
 export REMOTE_ACCESS_MODE=off
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 Health:
@@ -175,7 +175,7 @@ If deps are missing, the server returns `503 WebRTC deps not installed`.
 export REMOTE_ACCESS_MODE=tailscale
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 Then run:
@@ -193,7 +193,7 @@ export REMOTE_ACCESS_MODE=cloudflare
 export TRUST_PROXY_HEADERS=1
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 Then follow `docs/remote_access.md` for tunnel + Access setup.

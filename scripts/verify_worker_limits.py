@@ -10,9 +10,9 @@ def _sleep(seconds: float) -> None:
 
 
 def main() -> int:
-    from anime_v2.jobs.models import Job, JobState
-    from anime_v2.jobs.store import JobStore
-    from anime_v2.jobs.watchdog import PhaseTimeout, run_with_timeout
+    from dubbing_pipeline.jobs.models import Job, JobState
+    from dubbing_pipeline.jobs.store import JobStore
+    from dubbing_pipeline.jobs.watchdog import PhaseTimeout, run_with_timeout
 
     # 1) Timeout triggers
     t0 = time.perf_counter()
@@ -24,7 +24,7 @@ def main() -> int:
         assert dt < 5.0
 
     # 2) Cancel triggers early termination
-    out = Path("/tmp") / "anime_v2_worker_limits"
+    out = Path("/tmp") / "dubbing_pipeline_worker_limits"
     out.mkdir(parents=True, exist_ok=True)
     store = JobStore(out / "jobs.db")
     job = Job(

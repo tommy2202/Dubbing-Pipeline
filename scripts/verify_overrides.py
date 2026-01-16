@@ -11,7 +11,7 @@ def _write_json(p: Path, obj) -> None:
 
 
 def main() -> int:
-    from anime_v2.review.overrides import (
+    from dubbing_pipeline.review.overrides import (
         apply_music_region_overrides,
         apply_overrides,
         apply_speaker_overrides_to_segments,

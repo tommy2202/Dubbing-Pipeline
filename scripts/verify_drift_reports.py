@@ -4,9 +4,9 @@ import shutil
 import sys
 from pathlib import Path
 
-from anime_v2.reports.drift import write_drift_reports, write_drift_snapshot
-from anime_v2.utils.io import write_json
-from anime_v2.voice_memory.store import VoiceMemoryStore
+from dubbing_pipeline.reports.drift import write_drift_reports, write_drift_snapshot
+from dubbing_pipeline.utils.io import write_json
+from dubbing_pipeline.voice_memory.store import VoiceMemoryStore
 
 
 def _tmp_root() -> Path:

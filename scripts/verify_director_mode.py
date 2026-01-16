@@ -22,7 +22,7 @@ def _write_tone(path: Path, *, seconds: float, sr: int = 16000, amp: float = 0.2
 
 def main() -> int:
     print("safe_config_report:", get_safe_config_report())
-    from anime_v2.expressive.director import plan_for_segment, write_director_plans_jsonl
+    from dubbing_pipeline.expressive.director import plan_for_segment, write_director_plans_jsonl
 
     tmp = Path("_tmp_director")
     tmp.mkdir(parents=True, exist_ok=True)

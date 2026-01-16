@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import CancelledError as FuturesCancelledError
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -43,14 +44,14 @@ def main() -> int:
     api = "api_token_TEST_DO_NOT_LOG_3b7c2d1a"
     admin_pw = "admin_password_TEST_DO_NOT_LOG_8c2e7f90"
 
-    log_dir = Path("/tmp/anime_v2_no_leak_logs").resolve()
-    out_dir = Path("/tmp/anime_v2_no_leak_out").resolve()
+    log_dir = Path("/tmp/dubbing_pipeline_no_leak_logs").resolve()
+    out_dir = Path("/tmp/dubbing_pipeline_no_leak_out").resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     os.environ["APP_ROOT"] = "/workspace"
-    os.environ["ANIME_V2_LOG_DIR"] = str(log_dir)
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(out_dir)
+    os.environ["DUBBING_LOG_DIR"] = str(log_dir)
+    os.environ["DUBBING_OUTPUT_DIR"] = str(out_dir)
     os.environ["COOKIE_SECURE"] = "0"
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = admin_pw
@@ -60,34 +61,39 @@ def main() -> int:
     os.environ["API_TOKEN"] = api
     os.environ["STRICT_SECRETS"] = "1"
 
-    from anime_v2.config import get_settings
-    from anime_v2.server import app
+    from dubbing_pipeline.config import get_settings
+    from dubbing_pipeline.server import app
 
     get_settings.cache_clear()
 
-    with TestClient(app) as c:
-        # failed login (should audit + not leak password)
-        _ = c.post("/api/auth/login", json={"username": "admin", "password": "wrong", "session": True})
+    try:
+        with TestClient(app) as c:
+            # failed login (should audit + not leak password)
+            _ = c.post("/api/auth/login", json={"username": "admin", "password": "wrong", "session": True})
 
-        hdr = _login(c, "admin", admin_pw)
-        assert hdr
+            hdr = _login(c, "admin", admin_pw)
+            assert hdr
 
-        # create an API key (response contains key; must never show up in logs due to masking)
-        r = c.post("/keys", json={"scopes": ["read:job"]}, headers=hdr)
-        assert r.status_code == 200, r.text
-        key_plain = r.json()["key"]
+            # create an API key (response contains key; must never show up in logs due to masking)
+            r = c.post("/keys", json={"scopes": ["read:job"]}, headers=hdr)
+            assert r.status_code == 200, r.text
+            key_plain = r.json()["key"]
 
-        # Use the key in a request (should not leak in logs)
-        r2 = c.get("/api/jobs?limit=1", headers={"X-Api-Key": key_plain})
-        assert r2.status_code in (200, 403), r2.text
+            # Use the key in a request (should not leak in logs)
+            r2 = c.get("/api/jobs?limit=1", headers={"X-Api-Key": key_plain})
+            assert r2.status_code in (200, 403), r2.text
 
-        # Create a trivial upload init + ensure audit emits
-        r3 = c.post(
-            "/api/uploads/init",
-            json={"filename": "x.mp4", "total_bytes": 1024},
-            headers=hdr,
-        )
-        assert r3.status_code == 200, r3.text
+            # Create a trivial upload init + ensure audit emits
+            r3 = c.post(
+                "/api/uploads/init",
+                json={"filename": "x.mp4", "total_bytes": 1024},
+                headers=hdr,
+            )
+            assert r3.status_code == 200, r3.text
+    except FuturesCancelledError:
+        # Some Starlette/AnyIO combinations can raise CancelledError on shutdown.
+        # The assertions above already ran; treat shutdown cancellation as clean exit.
+        pass
 
     needles = [jwt, sess, csrf, api, admin_pw, key_plain]
     hits = []

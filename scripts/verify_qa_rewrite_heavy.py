@@ -11,7 +11,7 @@ def _write_json(p: Path, obj) -> None:
 
 
 def main() -> int:
-    from anime_v2.qa.scoring import score_job
+    from dubbing_pipeline.qa.scoring import score_job
 
     with tempfile.TemporaryDirectory(prefix="verify_qa_rewrite_heavy_") as td:
         job = Path(td) / "Output" / "job_qa"

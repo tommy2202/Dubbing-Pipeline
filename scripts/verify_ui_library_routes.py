@@ -33,7 +33,7 @@ def main() -> int:
         except Exception:
             pass
 
-        from anime_v2.server import app
+        from dubbing_pipeline.server import app
 
         with TestClient(app) as c:
             # Unauthed redirects

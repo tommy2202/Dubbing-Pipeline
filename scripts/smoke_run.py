@@ -37,7 +37,7 @@ def main() -> int:
     # Import smoke
     from importlib import import_module
 
-    for mod in ("anime_v2.server", "anime_v2.cli", "anime_v2.web.app"):
+    for mod in ("dubbing_pipeline.server", "dubbing_pipeline.cli", "dubbing_pipeline.web.app"):
         import_module(mod)
     print("IMPORT_SMOKE_OK")
 
@@ -79,7 +79,7 @@ def main() -> int:
             stderr=subprocess.DEVNULL,
         )
 
-    from anime_v2.cli import cli
+    from dubbing_pipeline.cli import cli
 
     # Low-mode, CPU, no-translate, no mux subs, minimal output
     cli.main(

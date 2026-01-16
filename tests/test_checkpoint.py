@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from anime_v2.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from dubbing_pipeline.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
 
 
 def test_checkpoint_roundtrip_and_validation(tmp_path: Path) -> None:

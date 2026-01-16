@@ -3,10 +3,10 @@ requires = ["setuptools>=68.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "anime-dubbing-v1"
-version = "1.0.0b0"
+name = "dubbing-pipeline"
+version = "1.0.0"
 authors = [{name="Your Name"}]
-description = "Offline anime dubbing suite - Version 1 slice 1"
+description = "Offline-first dubbing pipeline"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -30,6 +30,8 @@ dependencies = [
   "redis>=5.1.1",
   "slowapi>=0.1.9",
   "structlog>=24.4.0",
+  "pytest>=8.3.3",
+  "httpx>=0.28.1",
   "opentelemetry-sdk>=1.27.0",
   "opentelemetry-exporter-otlp>=1.27.0",
   "opentelemetry-instrumentation-fastapi>=0.48b0",
@@ -39,7 +41,7 @@ dependencies = [
 
 [project.optional-dependencies]
 legacy = [
-  # anime-v1 legacy CLI/UI optional deps (kept out of default install)
+  # legacy optional deps (kept out of default install)
   "pydub>=0.25.1",
   "vosk>=0.3.45",
   "gradio>=4.0.0",
@@ -86,18 +88,20 @@ webrtc = [
 ]
 
 [project.scripts]
-anime-v1 = "anime_v1.cli:cli"
-anime-v2 = "anime_v2.cli:cli"
-anime-v2-web = "anime_v2.web.run:main"
-dub = "anime_v2.cli:cli"
-dub-web = "anime_v2.web.run:main"
+dubbing-pipeline = "dubbing_pipeline.cli:cli"
+dubbing-web = "dubbing_pipeline.web.run:main"
+# Short aliases
+dub = "dubbing_pipeline.cli:cli"
+dub-web = "dubbing_pipeline.web.run:main"
+# Legacy CLI (optional)
+dub-legacy = "dubbing_pipeline_legacy.cli:cli"
 
 [tool.setuptools]
 package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
-include = ["anime_v1*", "anime_v2*", "config*"]
+include = ["dubbing_pipeline*", "dubbing_pipeline_legacy*", "config*"]
 
 [tool.pytest.ini_options]
 markers = [

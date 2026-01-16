@@ -5,12 +5,12 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from anime_v2.config import get_settings
-from anime_v2.server import app
+from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.server import app
 
 
 def test_ui_login_renders_csrf(tmp_path: Path) -> None:
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
+    os.environ["DUBBING_OUTPUT_DIR"] = str(tmp_path / "Output")
     os.environ["APP_ROOT"] = "/workspace"
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
@@ -24,7 +24,7 @@ def test_ui_login_renders_csrf(tmp_path: Path) -> None:
 
 
 def test_ui_dashboard_redirects_when_not_logged_in(tmp_path: Path) -> None:
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
+    os.environ["DUBBING_OUTPUT_DIR"] = str(tmp_path / "Output")
     os.environ["APP_ROOT"] = "/workspace"
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
@@ -37,7 +37,7 @@ def test_ui_dashboard_redirects_when_not_logged_in(tmp_path: Path) -> None:
 
 
 def test_ui_dashboard_renders_when_logged_in(tmp_path: Path) -> None:
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
+    os.environ["DUBBING_OUTPUT_DIR"] = str(tmp_path / "Output")
     os.environ["APP_ROOT"] = "/workspace"
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"
@@ -55,7 +55,7 @@ def test_ui_dashboard_renders_when_logged_in(tmp_path: Path) -> None:
 
 
 def test_ui_job_detail_shows_created_toast(tmp_path: Path) -> None:
-    os.environ["ANIME_V2_OUTPUT_DIR"] = str(tmp_path / "Output")
+    os.environ["DUBBING_OUTPUT_DIR"] = str(tmp_path / "Output")
     os.environ["APP_ROOT"] = "/workspace"
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_PASSWORD"] = "adminpass"

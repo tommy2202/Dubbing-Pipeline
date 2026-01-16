@@ -90,7 +90,7 @@ def main() -> int:
 
         # Use repo exporter to ensure metadata behavior is correct
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from anime_v2.stages.export import export_mkv_multitrack  # noqa: E402
+        from dubbing_pipeline.stages.export import export_mkv_multitrack  # noqa: E402
 
         out = d / "out.mkv"
         export_mkv_multitrack(

@@ -35,7 +35,7 @@ def main() -> int:
 
     # 2) ffmpeg/ffprobe availability
     try:
-        from anime_v2.utils.ffmpeg_safe import ffprobe_duration_seconds
+        from dubbing_pipeline.utils.ffmpeg_safe import ffprobe_duration_seconds
 
         # Validate tool availability (accept either absolute paths or PATH-resolvable names).
         ffmpeg_bin_s = str(s.ffmpeg_bin)

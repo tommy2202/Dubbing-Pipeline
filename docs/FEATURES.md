@@ -122,14 +122,14 @@ These are normalized and stored as:
   - `--voice-memory off|on` (default `off`)
   - `--voice-memory-dir <path>` (optional override)
 - **CLI tools**:
-  - `anime-v2 voice list`
-  - `anime-v2 voice audition --text "..." [--character <id>]`
-  - `anime-v2 voice merge FROM_ID TO_ID [--move-refs] [--keep-alias]`
-  - `anime-v2 voice undo-merge <merge_id>`
+  - `dubbing-pipeline voice list`
+  - `dubbing-pipeline voice audition --text "..." [--character <id>]`
+  - `dubbing-pipeline voice merge FROM_ID TO_ID [--move-refs] [--keep-alias]`
+  - `dubbing-pipeline voice undo-merge <merge_id>`
 
 ### Per-character tuning (optional)
 - **What it does**: per-character voice/prosody preferences for the pipeline.
-- **CLI** (`anime-v2 character ...`):
+- **CLI** (`dubbing-pipeline character ...`):
   - `set-voice-mode <character_id> clone|preset|single`
   - `set-rate <character_id> <rate_mul>`
   - `set-style <character_id> default|tight|normal|dramatic`
@@ -194,7 +194,7 @@ These are normalized and stored as:
   - `--lipsync off|wav2lip` (default off)
   - `--strict-plugins` to fail if the plugin isn’t available
 - **CLI tool**:
-  - `anime-v2 lipsync preview <video>`
+  - `dubbing-pipeline lipsync preview <video>`
 - **Fallbacks**:
   - if deps aren’t installed, web/API may return `503 WebRTC deps not installed` / lip-sync is skipped unless strict.
 
@@ -216,7 +216,7 @@ These are normalized and stored as:
 - **What it does**: runs offline checks and produces a score and issue list.
 - **Controls**:
   - CLI run: `--qa off|on` (default off)
-  - CLI tools: `anime-v2 qa run <job>` and `anime-v2 qa show <job>`
+  - CLI tools: `dubbing-pipeline qa run <job>` and `dubbing-pipeline qa show <job>`
 - **Outputs**:
   - `Output/<stem>/qa/summary.json`
   - `Output/<stem>/qa/*` (issue details)
@@ -231,7 +231,7 @@ These are normalized and stored as:
 - **Web UI**:
   - Job page “Review / Edit” tab
   - Quick helpers: shorten 10%, formal, reduce slang, apply PG style (best-effort; uses the configured rewrite provider)
-- **CLI** (`anime-v2 review ...`):
+- **CLI** (`dubbing-pipeline review ...`):
   - `init <input_video>`
   - `list <job>`
   - `show <job> <segment_id>`
@@ -248,9 +248,9 @@ These are normalized and stored as:
 - **What it does**: lets you override music/singing regions and force speaker/character IDs per segment.
 - **Web UI**: “Overrides” tab.
 - **CLI**:
-  - `anime-v2 overrides music add|edit|remove|list ...`
-  - `anime-v2 overrides speaker set|unset ...`
-  - `anime-v2 overrides apply <job>`
+  - `dubbing-pipeline overrides music add|edit|remove|list ...`
+  - `dubbing-pipeline overrides speaker set|unset ...`
+  - `dubbing-pipeline overrides apply <job>`
 
 ---
 

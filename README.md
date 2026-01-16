@@ -1,10 +1,10 @@
-## Dubbing-Pipeline (offline-first dubbing, v2-first)
+## Dubbing Pipeline (offline-first dubbing)
 
 This repository is an **offline-first dubbing pipeline** for turning a source video into a dubbed output with a practical “edit → regen → review” loop.
 
 It ships with:
-- **CLI** for local processing: `anime-v2`
-- **FastAPI server + web UI** for mobile-friendly job submission, progress monitoring, QA, editing, and playback: `anime-v2-web`
+- **CLI** for local processing: `dubbing-pipeline`
+- **FastAPI server + web UI** for mobile-friendly job submission, progress monitoring, QA, editing, and playback: `dubbing-web`
 
 Outputs are written under:
 - `Output/<stem>/...` (canonical)
@@ -19,6 +19,7 @@ Outputs are written under:
 - **Ops**: model cache status + optional prewarm, library management (tags/archive/delete), verification gates.
 
 ### Documentation index (start here)
+- **Quickstart (Tailscale recommended)**: `docs/GOLDEN_PATH_TAILSCALE.md`
 - Overview & architecture: `docs/OVERVIEW.md`
 - Full feature list (defaults + optional + outputs): `docs/FEATURES.md`
 - Setup (local + Docker + GPU + security): `docs/SETUP.md`
@@ -27,9 +28,30 @@ Outputs are written under:
 - Troubleshooting: `docs/TROUBLESHOOTING.md`
 
 Additional focused docs:
-- Remote access: `docs/remote_access.md` and `docs/mobile_remote.md`
+- Remote access (advanced): `docs/advanced/README.md`
 - Private notifications (ntfy): `docs/notifications.md`
 - Security details: `docs/security.md`
+
+---
+
+## Quickstart (Tailscale recommended)
+
+If you want to safely access the web UI from your phone on mobile data **without** exposing your machine publicly:
+
+- Follow: `docs/GOLDEN_PATH_TAILSCALE.md`
+- Run:
+
+```bash
+./scripts/run_prod.sh
+```
+
+Windows:
+
+```powershell
+.\scripts\run_prod.ps1
+```
+
+This starts the server in **Tailscale mode** (IP allowlist enforced) and prints the exact **tailnet URL** to open.
 
 ---
 
@@ -108,7 +130,7 @@ python3 scripts/security_mobile_gate.py
 Notes:
 - `scripts/verify_env.py` reports **required vs optional** dependencies and which features are enabled.
 - `scripts/polish_gate.py` is the “release polish” one-command check (imports + env + synthetic feature tests + stub/dupe scan).
-- `scripts/mobile_gate.py` is the **end-to-end mobile/remote readiness** suite (synthetic media, no real anime required).
+- `scripts/mobile_gate.py` is the **end-to-end mobile/remote readiness** suite (synthetic media, no real content required).
 - `scripts/security_mobile_gate.py` runs a **combined security + mobile** verification set (auth incl QR, upload safety, job lifecycle, playback variants, optional ntfy, and secret-leak scan).
 
 Mobile/web guide: `docs/WEB_MOBILE.md` (legacy mobile doc: `docs/mobile_update.md`).
@@ -116,65 +138,65 @@ Mobile/web guide: `docs/WEB_MOBILE.md` (legacy mobile doc: `docs/mobile_update.m
 ### Run a single dub job (CLI)
 
 ```bash
-anime-v2 Input/Test.mp4 --mode medium --device auto
+dubbing-pipeline Input/Test.mp4 --mode medium --device auto
 ```
 
 Logging flags:
 
 ```bash
-anime-v2 Input/Test.mp4 --log-level DEBUG --debug-dump
+dubbing-pipeline Input/Test.mp4 --log-level DEBUG --debug-dump
 ```
 
 Override ASR model directly:
 
 ```bash
-anime-v2 Input/Test.mp4 --asr-model large-v3 --device auto
+dubbing-pipeline Input/Test.mp4 --asr-model large-v3 --device auto
 ```
 
 ### Batch folder/glob (CLI)
 
 ```bash
-anime-v2 --batch "Input/*.mp4" --jobs 2 --resume
+dubbing-pipeline --batch "Input/*.mp4" --jobs 2 --resume
 ```
 
 ### Multi-language examples (CLI)
 
 ```bash
-anime-v2 Input/Test.mp4 --src-lang auto --tgt-lang es
-anime-v2 Input/Test.mp4 --no-translate --src-lang ja
+dubbing-pipeline Input/Test.mp4 --src-lang auto --tgt-lang es
+dubbing-pipeline Input/Test.mp4 --no-translate --src-lang ja
 ```
 
 Force MT provider:
 
 ```bash
-anime-v2 Input/Test.mp4 --mt-provider nllb --src-lang ja --tgt-lang en
-anime-v2 Input/Test.mp4 --mt-provider none
+dubbing-pipeline Input/Test.mp4 --mt-provider nllb --src-lang ja --tgt-lang en
+dubbing-pipeline Input/Test.mp4 --mt-provider none
 ```
 
 ### Subtitles (SRT/VTT)
 
 ```bash
-anime-v2 Input/Test.mp4 --subs both --subs-format both
+dubbing-pipeline Input/Test.mp4 --subs both --subs-format both
 ```
 
 ### Voice controls
 
 ```bash
 # force single narrator voice
-anime-v2 Input/Test.mp4 --voice-mode single
+dubbing-pipeline Input/Test.mp4 --voice-mode single
 
 # prefer preset selection (skip cloning)
-anime-v2 Input/Test.mp4 --voice-mode preset
+dubbing-pipeline Input/Test.mp4 --voice-mode preset
 
 # hint cloning references from a folder: <dir>/<speaker_id>.wav
-anime-v2 Input/Test.mp4 --voice-mode clone --voice-ref-dir data/voices
+dubbing-pipeline Input/Test.mp4 --voice-mode clone --voice-ref-dir data/voices
 ```
 
 ### Expressive controls
 
 ```bash
-anime-v2 Input/Test.mp4 --emotion-mode auto
-anime-v2 Input/Test.mp4 --emotion-mode tags
+dubbing-pipeline Input/Test.mp4 --emotion-mode auto
+dubbing-pipeline Input/Test.mp4 --emotion-mode tags
 ```
 
 ### Optional Dialogue Isolation (Demucs)
@@ -183,7 +205,7 @@ Defaults preserve current behavior (**no separation**). To isolate dialogue and 
 
 ```bash
 # enable enhanced mixing + demucs stems (requires: pip install -e ".[mixing]")
-anime-v2 Input/Test.mp4 --mix enhanced --separation demucs
+dubbing-pipeline Input/Test.mp4 --mix enhanced --separation demucs
 ```
 
 Artifacts:
@@ -195,7 +217,7 @@ Artifacts:
 ### Enhanced Mixing (LUFS + Ducking)
 
 ```bash
-anime-v2 Input/Test.mp4 --mix enhanced --lufs-target -16 --ducking --ducking-strength 1.0 --limiter
+dubbing-pipeline Input/Test.mp4 --mix enhanced --lufs-target -16 --ducking --ducking-strength 1.0 --limiter
 ```
 
 ### Multi-track Outputs (Tier‑Next H, optional)
@@ -206,10 +228,10 @@ CLI:
 
 ```bash
 # Multi-audio MKV (recommended): Original + Dubbed + Background + Dialogue
-anime-v2 Input/Test.mp4 --multitrack on --container mkv
+dubbing-pipeline Input/Test.mp4 --multitrack on --container mkv
 
 # MP4 fallback: normal MP4 (dubbed) + sidecar .m4a tracks in Output/<job>/audio/tracks/
-anime-v2 Input/Test.mp4 --multitrack on --container mp4
+dubbing-pipeline Input/Test.mp4 --multitrack on --container mp4
 ```
 
 Artifacts:
@@ -233,7 +255,7 @@ Playback tip:
 
 ### Per-job logs and manifests
 
-When running `anime-v2`, the pipeline also writes per-job artifacts:
+When running `dubbing-pipeline`, the pipeline also writes per-job artifacts:
 
 - `Output/<job>/logs/pipeline.log` (JSONL)
 - `Output/<job>/logs/pipeline.txt` (human-readable breadcrumbs)
@@ -254,17 +276,17 @@ Report: `Output/<job>/analysis/retention_report.json`
 
 ---
 
-## Next Version Features (A–M)
+## Optional Features (A–M)
 
-These are opt-in upgrades that extend the canonical v2 pipeline without introducing parallel systems.
+These are opt-in upgrades that extend the canonical pipeline without introducing parallel systems.
 
 - **A Mode contract tests**: `scripts/verify_modes_contract.py`
 - **B Artifact retention + cache policy**: `--cache-policy`, `Output/<job>/analysis/retention_report.json`
 - **C Per-project profiles**: `--project <name>` with `projects/<name>/{profile,qa,mix,style_guide,delivery}.yaml`
-- **D UI/CLI overrides**: `anime-v2 overrides ...` (music regions + speaker overrides)
+- **D UI/CLI overrides**: `dubbing-pipeline overrides ...` (music regions + speaker overrides)
 - **E Subtitle formatting + variants**: `Output/<job>/subs/{src,tgt_literal,tgt_pg,tgt_fit}.{srt,vtt}`
-- **F Voice-memory character merge tools**: `anime-v2 voice merge/undo-merge`
-- **G Voice audition tool**: `anime-v2 voice audition --text ...`
+- **F Voice-memory character merge tools**: `dubbing-pipeline voice merge/undo-merge`
+- **G Voice audition tool**: `dubbing-pipeline voice audition --text ...`
 - **H QA rewrite-heavy/pacing-heavy/outlier checks + fix links**: `Output/<job>/qa/*` + UI deep-links
 - **I Streaming context bridging**: overlap de-dup + context hints across chunks (default HIGH/MED)
 - **J Lip-sync improvements**: offline preview + scene-limited lip-sync (optional)
@@ -275,20 +297,20 @@ These are opt-in upgrades that extend the canonical v2 pipeline without introduc
 ### Mode + project + cache policy (example)
 
 ```bash
-anime-v2 Input/Test.mp4 --mode high --project example --cache-policy balanced --retention-days 0
+dubbing-pipeline Input/Test.mp4 --mode high --project example --cache-policy balanced --retention-days 0
 ```
 
 ### Overrides (CLI)
 
 ```bash
 # Music regions
-anime-v2 overrides music list <job>
-anime-v2 overrides music add <job> --start 12.3 --end 25.0 --kind music --confidence 1.0 --reason "manual"
-anime-v2 overrides apply <job>
+dubbing-pipeline overrides music list <job>
+dubbing-pipeline overrides music add <job> --start 12.3 --end 25.0 --kind music --confidence 1.0 --reason "manual"
+dubbing-pipeline overrides apply <job>
 
 # Per-segment speaker override
-anime-v2 overrides speaker set <job> 12 SPEAKER_01
-anime-v2 overrides speaker unset <job> 12
+dubbing-pipeline overrides speaker set <job> 12 SPEAKER_01
+dubbing-pipeline overrides speaker unset <job> 12
 ```
 
 ### Subtitle variants (outputs)
@@ -302,19 +324,19 @@ After a run, check:
 ### Voice memory tools (merge + audition)
 
 ```bash
-anime-v2 voice list
-anime-v2 voice merge SPEAKER_99 SPEAKER_01
-anime-v2 voice undo-merge <merge_id>
-anime-v2 voice audition --text "Testing line" --top 5 --character SPEAKER_01 --lang en
+dubbing-pipeline voice list
+dubbing-pipeline voice merge SPEAKER_99 SPEAKER_01
+dubbing-pipeline voice undo-merge <merge_id>
+dubbing-pipeline voice audition --text "Testing line" --top 5 --character SPEAKER_01 --lang en
 ```
 
 ### Character delivery profiles (Feature K)
 
 ```bash
-anime-v2 character set-rate SPEAKER_01 1.05
-anime-v2 character set-style SPEAKER_01 dramatic
-anime-v2 character set-expressive SPEAKER_01 0.7
-anime-v2 character set-voice-mode SPEAKER_01 clone
+dubbing-pipeline character set-rate SPEAKER_01 1.05
+dubbing-pipeline character set-style SPEAKER_01 dramatic
+dubbing-pipeline character set-expressive SPEAKER_01 0.7
+dubbing-pipeline character set-voice-mode SPEAKER_01 clone
 ```
 
 ### Drift reports (Feature L)
@@ -328,18 +350,18 @@ After a run, check:
 This is used only during timing-fit and is **OFF by default**. See `docs/offline_llm_rewrite.md`.
 
 ```bash
-anime-v2 Input/Test.mp4 \
+dubbing-pipeline Input/Test.mp4 \
   --timing-fit \
   --rewrite-provider local_llm \
   --rewrite-endpoint http://127.0.0.1:8080/completion \
   --rewrite-strict
 ```
 
-### Legacy v1 (optional)
+### Legacy (optional)
 
-`anime-v1` is kept for compatibility, but most users should use **v2**.
+`dub-legacy` is kept for compatibility, but most users should use the primary pipeline.
 
-If you need v1 CLI/UI dependencies:
+If you need legacy CLI/UI dependencies:
 
 ```bash
 python3 -m pip install -e ".[legacy]"
@@ -347,16 +369,16 @@ python3 -m pip install -e ".[legacy]"
 
 ### Singing/Music Preservation (Tier‑Next A/B, optional)
 
-Opt-in detector that attempts to find **music/singing-heavy regions** (anime OP/ED, inserted songs) and **leaves the original audio unchanged** during those time ranges.
+Opt-in detector that attempts to find **music/singing-heavy regions** (opening/ending themes, inserted songs) and **leaves the original audio unchanged** during those time ranges.
 
 ```bash
-anime-v2 Input/Test.mp4 --music-detect on --music-threshold 0.70
+dubbing-pipeline Input/Test.mp4 --music-detect on --music-threshold 0.70
 ```
 
 OP/ED specialization (best-effort):
 
 ```bash
-anime-v2 Input/Test.mp4 --music-detect on --op-ed-detect on --op-ed-seconds 90
+dubbing-pipeline Input/Test.mp4 --music-detect on --op-ed-detect on --op-ed-seconds 90
 ```
 
 Artifacts:
@@ -374,9 +396,9 @@ Opt-in **deterministic** text sanitization pass applied **after translation/styl
 CLI:
 
 ```bash
-anime-v2 Input/Test.mp4 --pg pg13
-anime-v2 Input/Test.mp4 --pg pg
-anime-v2 Input/Test.mp4 --pg pg13 --pg-policy /path/to/pg_policy.json
+dubbing-pipeline Input/Test.mp4 --pg pg13
+dubbing-pipeline Input/Test.mp4 --pg pg
+dubbing-pipeline Input/Test.mp4 --pg pg13 --pg-policy /path/to/pg_policy.json
 ```
 
 Web UI:
@@ -393,14 +415,14 @@ Offline scoring and checks that produce **actionable** per-segment issues (drift
 Enable during a run (does not change media outputs, only writes reports):
 
 ```bash
-anime-v2 Input/Test.mp4 --qa on
+dubbing-pipeline Input/Test.mp4 --qa on
 ```
 
 Run QA on an existing job directory:
 
 ```bash
-anime-v2 qa run Output/<job> --top 20
-anime-v2 qa run Output/<job> --fail-only
+dubbing-pipeline qa run Output/<job> --top 20
+dubbing-pipeline qa run Output/<job> --fail-only
 ```
 
 Artifacts:
@@ -424,10 +446,10 @@ CLI:
 
 ```bash
 # load projects/example/style_guide.yaml
-anime-v2 Input/Test.mp4 --project example
+dubbing-pipeline Input/Test.mp4 --project example
 
 # explicit path override
-anime-v2 Input/Test.mp4 --style-guide projects/example/style_guide.yaml
+dubbing-pipeline Input/Test.mp4 --style-guide projects/example/style_guide.yaml
 ```
 
 Audit artifact:
@@ -443,7 +465,7 @@ Optional scene-aware post-processing to reduce rapid diarization speaker flips *
 CLI:
 
 ```bash
-anime-v2 Input/Test.mp4 --speaker-smoothing on --scene-detect audio --smoothing-min-turn 0.6 --smoothing-surround-gap 0.4
+dubbing-pipeline Input/Test.mp4 --speaker-smoothing on --scene-detect audio --smoothing-min-turn 0.6 --smoothing-surround-gap 0.4
 ```
 
 Artifact:
@@ -460,7 +482,7 @@ Optional “direction” layer that makes **conservative** per-segment expressiv
 CLI:
 
 ```bash
-anime-v2 Input/Test.mp4 --director on --director-strength 0.5
+dubbing-pipeline Input/Test.mp4 --director on --director-strength 0.5
 ```
 
 Artifact:
@@ -471,7 +493,7 @@ Artifact:
 Defaults preserve current behavior. To enable timing-aware translation fitting + segment pacing:
 
 ```bash
-anime-v2 Input/Test.mp4 --timing-fit --pacing --wps 2.7 --tolerance 0.10 --pacing-min-stretch 0.88 --pacing-max-stretch 1.18
+dubbing-pipeline Input/Test.mp4 --timing-fit --pacing --wps 2.7 --tolerance 0.10 --pacing-min-stretch 0.88 --pacing-max-stretch 1.18
 ```
 
 Notes:
@@ -483,7 +505,7 @@ Notes:
 Debug artifacts (per segment):
 
 ```bash
-anime-v2 Input/Test.mp4 --timing-fit --pacing --timing-debug
+dubbing-pipeline Input/Test.mp4 --timing-fit --pacing --timing-debug
 ```
 
 This writes:
@@ -497,16 +519,16 @@ Opt-in feature to keep **stable character identities across episodes** by persis
 Enable:
 
 ```bash
-anime-v2 Input/Test.mp4 --voice-memory on --voice-match-threshold 0.75 --voice-auto-enroll
+dubbing-pipeline Input/Test.mp4 --voice-memory on --voice-match-threshold 0.75 --voice-auto-enroll
 ```
 
 Management:
 
 ```bash
-anime-v2 --list-characters
-anime-v2 --rename-character SPEAKER_01 "Zoro"
-anime-v2 --set-character-voice-mode SPEAKER_01 clone
-anime-v2 --set-character-preset SPEAKER_01 alice
+dubbing-pipeline --list-characters
+dubbing-pipeline --rename-character SPEAKER_01 "Zoro"
+dubbing-pipeline --set-character-voice-mode SPEAKER_01 clone
+dubbing-pipeline --set-character-preset SPEAKER_01 alice
 ```
 
 Reset:
@@ -523,29 +545,29 @@ Edit per-segment text, regenerate audio for a single segment, preview, and lock 
 Initialize state (after running the pipeline at least once):
 
 ```bash
-anime-v2 review init Input/Test.mp4
+dubbing-pipeline review init Input/Test.mp4
 ```
 
 Inspect and edit:
 
 ```bash
-anime-v2 review list <job>
-anime-v2 review show <job> 12
-anime-v2 review edit <job> 12 --text "Edited line…"
+dubbing-pipeline review list <job>
+dubbing-pipeline review show <job> 12
+dubbing-pipeline review edit <job> 12 --text "Edited line…"
 ```
 
 Regenerate + preview + lock:
 
 ```bash
-anime-v2 review regen <job> 12
-anime-v2 review play <job> 12
-anime-v2 review lock <job> 12
+dubbing-pipeline review regen <job> 12
+dubbing-pipeline review play <job> 12
+dubbing-pipeline review lock <job> 12
 ```
 
 Render final review output (rebuild episode audio from current per-segment WAVs and best-effort remux):
 
 ```bash
-anime-v2 review render <job>
+dubbing-pipeline review render <job>
 ```
 
 Artifacts:
@@ -567,19 +589,19 @@ Setup (offline):
 Run:
 
 ```bash
-anime-v2 Input/Test.mp4 --lipsync wav2lip --wav2lip-checkpoint /models/wav2lip/wav2lip.pth
+dubbing-pipeline Input/Test.mp4 --lipsync wav2lip --wav2lip-checkpoint /models/wav2lip/wav2lip.pth
 ```
 
 Preview (offline, best-effort face visibility scan):
 
 ```bash
-anime-v2 lipsync preview Input/Test.mp4
+dubbing-pipeline lipsync preview Input/Test.mp4
 ```
 
 Scene-limited lip-sync (only apply where face visibility is good; falls back to pass-through elsewhere):
 
 ```bash
-anime-v2 Input/Test.mp4 --lipsync wav2lip --lipsync-scene-limited on
+dubbing-pipeline Input/Test.mp4 --lipsync wav2lip --lipsync-scene-limited on
 ```
 
 Output:
@@ -609,13 +631,13 @@ Timing interaction:
 Example:
 
 ```bash
-anime-v2 Input/Test.mp4 --timing-fit --pacing --expressive source-audio --expressive-strength 0.5 --expressive-debug
+dubbing-pipeline Input/Test.mp4 --timing-fit --pacing --expressive source-audio --expressive-strength 0.5 --expressive-debug
 ```
 
 ### Pseudo-streaming (chunk mode)
 
 ```bash
-anime-v2 Input/Test.mp4 --realtime --chunk-seconds 20 --chunk-overlap 2 --stitch
+dubbing-pipeline Input/Test.mp4 --realtime --chunk-seconds 20 --chunk-overlap 2 --stitch
 ```
 
 ### Streaming Mode (Tier‑3 C, optional)
@@ -625,13 +647,13 @@ Chunked dubbing mode that produces playable per-chunk MP4s under `Output/<job>/s
 Enable (segments output):
 
 ```bash
-anime-v2 Input/Test.mp4 --stream on --chunk-seconds 10 --overlap-seconds 1 --stream-output segments
+dubbing-pipeline Input/Test.mp4 --stream on --chunk-seconds 10 --overlap-seconds 1 --stream-output segments
 ```
 
 Enable (stitched final MP4):
 
 ```bash
-anime-v2 Input/Test.mp4 --stream on --chunk-seconds 10 --overlap-seconds 1 --stream-output final
+dubbing-pipeline Input/Test.mp4 --stream on --chunk-seconds 10 --overlap-seconds 1 --stream-output final
 ```
 
 Artifacts:
@@ -640,7 +662,7 @@ Artifacts:
 - `Output/<job>/stream/chunk_001.mp4`, `chunk_002.mp4`, ...
 - `Output/<job>/stream/stream.final.mp4` (when `--stream-output final`)
 
-API (when using `anime-v2-web`):
+API (when using `dubbing-web`):
 - `GET /api/jobs/{id}/stream/manifest`
 - `GET /api/jobs/{id}/stream/chunks/{n}`
 
@@ -656,14 +678,14 @@ Troubleshooting:
 ### Preflight / dry-run
 
 ```bash
-anime-v2 Input/Test.mp4 --dry-run
+dubbing-pipeline Input/Test.mp4 --dry-run
 ```
 
 ### Logging verbosity
 
 ```bash
-anime-v2 Input/Test.mp4 --verbose
-anime-v2 Input/Test.mp4 --debug
+dubbing-pipeline Input/Test.mp4 --verbose
+dubbing-pipeline Input/Test.mp4 --debug
 ```
 
 Artifacts land in:
@@ -691,7 +713,7 @@ docker build -f docker/Dockerfile -t dubbing-pipeline .
 
 ```bash
 docker run --rm \
-  --entrypoint anime-v2 \
+  --entrypoint dubbing-pipeline \
   -v "$(pwd)":/app \
   -v "$(pwd)/Input":/app/Input \
   -v "$(pwd)/Output":/app/Output \
@@ -741,7 +763,7 @@ Safety:
 
 ## API usage (FastAPI)
 
-The canonical server entrypoint is `anime-v2-web`.
+The canonical server entrypoint is `dubbing-web`.
 
 For browser/mobile use:
 - Open `http://<host>:8000/ui/login` (or `/login` alias) and sign in with username/password.
@@ -812,17 +834,17 @@ python3 -m pytest -q
 ## CHANGELOG (hardening pass)
 
 - **Config/tooling consistency**: removed remaining hardcoded `ffmpeg/ffprobe` literals; everything flows through settings + shared helpers.
-- **FFmpeg robustness**: improved `anime_v2.utils.ffmpeg_safe` with retries/timeout support and better error messages.
+- **FFmpeg robustness**: improved `dubbing_pipeline.utils.ffmpeg_safe` with retries/timeout support and better error messages.
 - **File I/O safety**: added atomic write/copy helpers and used them for critical artifacts (e.g., realtime manifests, job SRT propagation).
 - **CLI operability**: added `--dry-run`, `--verbose`, `--debug` for safer preflight and better diagnostics without changing defaults.
 - **Runtime verification**: added `scripts/verify_runtime.py` for config + tool + filesystem checks (safe config report only).
 
 
 - **Retention**: `RETENTION_DAYS_INPUT` (default `7`) best-effort purges old raw uploads from `Input/uploads/`. `RETENTION_DAYS_LOGS` (default `14`) purges old files from `logs/` and old per-job `Output/**/job.log`.
-  - Run manually: `python -m anime_v2.ops.retention`
+  - Run manually: `python -m dubbing_pipeline.ops.retention`
 
 - **Backups**: creates a metadata-only zip (no large media) under `backups/`:
   - Includes: `data/**`, `Output/*.db`, `Output/**/{*.json,*.srt,job.log}`
-  - Run manually: `python -m anime_v2.ops.backup`
+  - Run manually: `python -m dubbing_pipeline.ops.backup`
   - Output: `backups/backup-YYYYmmdd-HHMM.zip` and `backups/backup-YYYYmmdd-HHMM.manifest.json` (with per-file SHA256).
   - **Restore**: unzip into the repo/app root (so paths like `data/...` and `Output/...` land in place), then verify file hashes against the manifest.

@@ -5,17 +5,17 @@ import os
 import tempfile
 from pathlib import Path
 
-from anime_v2.jobs.models import Job, JobState, Visibility, now_utc
-from anime_v2.library.manifest import read_manifest, write_manifest
-from anime_v2.library.paths import ensure_library_dir, get_job_output_root, mirror_outputs_best_effort
-from anime_v2.library.normalize import series_to_slug
+from dubbing_pipeline.jobs.models import Job, JobState, Visibility, now_utc
+from dubbing_pipeline.library.manifest import read_manifest, write_manifest
+from dubbing_pipeline.library.paths import ensure_library_dir, get_job_output_root, mirror_outputs_best_effort
+from dubbing_pipeline.library.normalize import series_to_slug
 
 
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         out_root = root / "Output"
-        os.environ["ANIME_V2_OUTPUT_DIR"] = str(out_root)
+        os.environ["DUBBING_OUTPUT_DIR"] = str(out_root)
 
         job = Job(
             id="job_123",

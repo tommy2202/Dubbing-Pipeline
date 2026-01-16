@@ -1,0 +1,269 @@
+{% extends "_base.html" %}
+
+{% block title %}{{ series_slug }} • Library • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <div class="text-xs text-slate-500"><a class="underline" href="/ui/library">Library</a> / <span class="break-all">{{ series_slug }}</span></div>
+    <h1 class="mt-1 text-2xl font-semibold">Seasons</h1>
+    <p class="mt-1 text-sm text-slate-400">Select a season to browse episodes.</p>
+  </div>
+</div>
+
+<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4"
+     x-data="librarySeasons('{{ series_slug }}')"
+     x-init="init()">
+  <div class="flex flex-wrap items-end justify-between gap-3">
+    <div class="text-sm text-slate-300">Series: <span class="text-slate-200 break-all">{{ series_slug }}</span></div>
+    <div class="flex items-end gap-2">
+      <div>
+        <label class="block text-xs text-slate-500" for="viewSel">View</label>
+        <select id="viewSel"
+                class="mt-1 rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                x-model="view"
+                @change="reload(true)">
+          <option value="all">My + Public</option>
+          <option value="mine">My</option>
+          <option value="public">Public</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-4" x-show="loading" x-cloak>
+    <div class="text-sm text-slate-500">Loading…</div>
+  </div>
+
+  <div class="mt-4 grid gap-3 sm:grid-cols-2" x-show="!loading" x-cloak>
+    <template x-for="s in items" :key="s.season_number">
+      <a class="block rounded-xl border border-slate-800 bg-slate-950/30 hover:bg-slate-950/50 p-4"
+         :href="'/ui/library/' + encodeURIComponent(seriesSlug) + '/season/' + encodeURIComponent(s.season_number)">
+        <div class="text-base font-semibold" x-text="'Season ' + s.season_number"></div>
+        <div class="mt-2 text-sm text-slate-300">
+          <span class="text-slate-500">Episodes:</span> <span x-text="s.episodes_count"></span>
+        </div>
+      </a>
+    </template>
+  </div>
+
+  <div class="mt-4 text-sm text-slate-500" x-show="!loading && items.length===0" x-cloak>
+    No seasons found.
+  </div>
+</div>
+
+<!-- Characters / Voices -->
+<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4"
+     x-data="seriesCharacters('{{ series_slug }}')"
+     x-init="init()">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <div class="text-sm text-slate-300">Characters / Voices</div>
+      <div class="mt-1 text-xs text-slate-500">Series-scoped voice refs (opt-in).</div>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+              @click="reload()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="error" x-cloak x-text="error"></div>
+
+  <div class="mt-4 grid gap-3 sm:grid-cols-2" x-show="!loading" x-cloak>
+    <template x-for="c in items" :key="c.character_slug">
+      <div class="rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+        <div class="flex flex-wrap items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="text-base font-semibold text-slate-200 truncate"
+                 x-text="c.display_name || c.character_slug"></div>
+            <div class="mt-1 text-xs text-slate-500 break-all" x-text="c.character_slug"></div>
+            <div class="mt-1 text-xs text-slate-500" x-text="c.updated_at ? ('updated ' + c.updated_at) : ''"></div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2 text-xs">
+            <template x-if="c.has_ref">
+              <span class="rounded bg-emerald-700/20 border border-emerald-700/40 px-2 py-1 text-emerald-200">ref</span>
+            </template>
+            <template x-if="!c.has_ref">
+              <span class="rounded bg-slate-800/50 border border-slate-800 px-2 py-1 text-slate-300">no ref</span>
+            </template>
+          </div>
+        </div>
+
+        <template x-if="c.audio_url">
+          <div class="mt-3">
+            <audio class="w-full" controls preload="none" :src="c.audio_url"></audio>
+            <div class="mt-2 text-xs text-slate-500 break-all" x-text="c.ref_path || ''"></div>
+          </div>
+        </template>
+
+        <div class="mt-3 grid gap-2">
+          <template x-if="canEdit">
+            <div>
+              <label class="block text-xs text-slate-500">Upload override ref.wav</label>
+              <input type="file" accept="audio/wav" class="mt-1 block w-full text-sm"
+                     @change="uploadRef(c.character_slug, $event)" />
+            </div>
+          </template>
+          <template x-if="canEdit">
+            <button class="rounded bg-red-900/40 hover:bg-red-900/60 border border-red-900/40 px-4 py-3 text-sm text-red-100"
+                    @click="deleteCharacter(c.character_slug)">
+              Delete / reset
+            </button>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <div class="mt-4 text-sm text-slate-500" x-show="!loading && items.length===0" x-cloak>
+    No characters yet.
+  </div>
+
+  <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+    <div class="text-sm text-slate-300">Create new character</div>
+    <div class="mt-2 grid gap-2 sm:grid-cols-3">
+      <input class="sm:col-span-2 rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm text-slate-100"
+             x-model="newName" placeholder="Display name (e.g., Rimuru)" />
+      <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium disabled:opacity-50"
+              :disabled="!canEdit"
+              @click="createCharacter()">
+        Create
+      </button>
+    </div>
+    <div class="mt-2 text-xs text-slate-500" x-show="createdSlug" x-cloak>
+      Created: <span class="text-slate-300" x-text="createdSlug"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+  function librarySeasons(seriesSlug) {
+    return {
+      seriesSlug: seriesSlug,
+      view: "all",
+      items: [],
+      loading: true,
+      async init() {
+        try {
+          const url = new URL(window.location.href);
+          this.view = url.searchParams.get("view") || "all";
+        } catch (e) {}
+        await this.reload(true);
+      },
+      async reload(reset) {
+        this.loading = true;
+        try {
+          const url = "/api/library/" + encodeURIComponent(this.seriesSlug) + "/seasons"
+            + "?limit=200&offset=0"
+            + (this.view ? ("&view=" + encodeURIComponent(this.view)) : "");
+          const r = await fetch(url, { credentials: "include" });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          this.items = Array.isArray(data) ? data : [];
+          try {
+            const u = new URL(window.location.href);
+            if (this.view && this.view !== "all") u.searchParams.set("view", this.view); else u.searchParams.delete("view");
+            window.history.replaceState({}, "", u.toString());
+          } catch (e) {}
+        } catch (e) {
+          window.showToast("Failed to load seasons", "error");
+          this.items = [];
+        } finally {
+          this.loading = false;
+        }
+      }
+    };
+  }
+
+  function seriesCharacters(seriesSlug) {
+    return {
+      seriesSlug: seriesSlug,
+      items: [],
+      canEdit: false,
+      loading: true,
+      error: "",
+      newName: "",
+      createdSlug: "",
+      async init() { await this.reload(); },
+      async reload() {
+        this.loading = true;
+        this.error = "";
+        try {
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/characters", { credentials: "include" });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          this.items = Array.isArray(data.items) ? data.items : [];
+          this.canEdit = !!data.can_edit;
+        } catch (e) {
+          this.items = [];
+          this.error = "Failed to load characters";
+        } finally {
+          this.loading = false;
+        }
+      },
+      async createCharacter() {
+        if (!this.canEdit) return;
+        const name = String(this.newName || "").trim();
+        if (!name) return;
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/characters", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "x-csrf-token": csrf },
+            body: JSON.stringify({ display_name: name })
+          });
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          this.createdSlug = String(data.character?.character_slug || "");
+          this.newName = "";
+          await this.reload();
+          window.showToast("Character created", "success");
+        } catch (e) {
+          window.showToast("Failed to create character", "error");
+        }
+      },
+      async deleteCharacter(characterSlug) {
+        if (!this.canEdit) return;
+        if (!confirm("Delete this character voice?")) return;
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/characters/" + encodeURIComponent(characterSlug), {
+            method: "DELETE",
+            credentials: "include",
+            headers: { "x-csrf-token": csrf }
+          });
+          if (!r.ok) throw new Error(await r.text());
+          await this.reload();
+          window.showToast("Character deleted", "success");
+        } catch (e) {
+          window.showToast("Failed to delete character", "error");
+        }
+      },
+      async uploadRef(characterSlug, ev) {
+        if (!this.canEdit) return;
+        try {
+          const f = ev?.target?.files?.[0];
+          if (!f) return;
+          const csrf = document.getElementById("csrf")?.value || "";
+          const buf = await f.arrayBuffer();
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/characters/" + encodeURIComponent(characterSlug) + "/ref", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/octet-stream", "x-csrf-token": csrf },
+            body: buf
+          });
+          if (!r.ok) throw new Error(await r.text());
+          await this.reload();
+          window.showToast("Ref uploaded", "success");
+        } catch (e) {
+          window.showToast("Failed to upload ref", "error");
+        } finally {
+          try { ev.target.value = ""; } catch(e) {}
+        }
+      }
+    };
+  }
+</script>
+{% endblock %}
+

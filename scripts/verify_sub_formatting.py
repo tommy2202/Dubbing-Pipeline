@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def main() -> int:
-    from anime_v2.subs.formatting import (
+    from dubbing_pipeline.subs.formatting import (
         SubtitleFormatRules,
         format_subtitle_blocks_with_stats,
         write_formatted_subs_variant,

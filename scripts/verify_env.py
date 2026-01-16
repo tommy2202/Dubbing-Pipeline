@@ -86,7 +86,7 @@ def main() -> int:
         DepCheck("webrtcvad", False, "webrtcvad"),
         DepCheck("aiortc", False, "aiortc"),
         DepCheck("av", False, "av"),
-        # v1 legacy extras
+        # legacy extras
         DepCheck("pydub", False, "pydub"),
         DepCheck("gradio", False, "gradio"),
         DepCheck("vosk", False, "vosk"),

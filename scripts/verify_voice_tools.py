@@ -23,9 +23,9 @@ def _touch_wav(path: Path) -> None:
 
 
 def main() -> int:
-    from anime_v2.voice_memory.audition import audition
-    from anime_v2.voice_memory.store import VoiceMemoryStore
-    from anime_v2.voice_memory.tools import merge_characters, undo_merge
+    from dubbing_pipeline.voice_memory.audition import audition
+    from dubbing_pipeline.voice_memory.store import VoiceMemoryStore
+    from dubbing_pipeline.voice_memory.tools import merge_characters, undo_merge
 
     with tempfile.TemporaryDirectory(prefix="verify_voice_tools_") as td:
         root = Path(td) / "voice_memory"

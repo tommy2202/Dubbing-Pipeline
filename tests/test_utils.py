@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from anime_v2.utils.paths import (
+from dubbing_pipeline.utils.paths import (
     output_dir_for,
     output_root,
     voices_embeddings_dir,
     voices_registry_path,
     voices_root,
 )
-from anime_v2.utils.time import format_srt_timestamp
+from dubbing_pipeline.utils.time import format_srt_timestamp
 
 
 def test_format_srt_timestamp_basic():

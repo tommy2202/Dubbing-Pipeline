@@ -30,11 +30,11 @@ def main() -> int:
 
         os.environ["APP_ROOT"] = str(root)
         os.environ["INPUT_DIR"] = str(inp)
-        os.environ["ANIME_V2_OUTPUT_DIR"] = str(out)
-        os.environ["ANIME_V2_LOG_DIR"] = str(out / "logs")
+        os.environ["DUBBING_OUTPUT_DIR"] = str(out)
+        os.environ["DUBBING_LOG_DIR"] = str(out / "logs")
         os.environ["COOKIE_SECURE"] = "0"
 
-        # Very small timeouts (we stub heavy stages)
+        # Very small timeouts (we bypass heavy stages)
         os.environ["WATCHDOG_AUDIO_S"] = "10"
         os.environ["WATCHDOG_WHISPER_S"] = "10"
         os.environ["WATCHDOG_TRANSLATE_S"] = "10"
@@ -43,10 +43,10 @@ def main() -> int:
         os.environ["WATCHDOG_MUX_S"] = "10"
         os.environ["WATCHDOG_EXPORT_S"] = "10"
 
-        from anime_v2.config import get_settings
-        from anime_v2.jobs.models import Job, JobState
-        from anime_v2.jobs.queue import JobQueue
-        from anime_v2.jobs.store import JobStore
+        from dubbing_pipeline.config import get_settings
+        from dubbing_pipeline.jobs.models import Job, JobState
+        from dubbing_pipeline.jobs.queue import JobQueue
+        from dubbing_pipeline.jobs.store import JobStore
 
         get_settings.cache_clear()
 
@@ -85,10 +85,10 @@ def main() -> int:
         store.put(job)
 
         # Monkeypatch heavy stages so the run is fast and deterministic.
-        import anime_v2.jobs.queue as qmod
-        import anime_v2.stages.export as exmod
+        import dubbing_pipeline.jobs.queue as qmod
+        import dubbing_pipeline.stages.export as exmod
 
-        def _audio_extract_stub(*, video, out_dir, wav_out=None, **_kw):
+        def _audio_extract_fake(*, video, out_dir, wav_out=None, **_kw):
             p = Path(wav_out or (Path(out_dir) / "audio.wav"))
             _write_silence_wav(p, seconds=1.0)
             return p
@@ -99,23 +99,23 @@ def main() -> int:
         def _translate_should_not_run(*_a, **_kw):
             raise RuntimeError("translate should be skipped when tgt_srt is imported")
 
-        def _tts_stub(*, out_dir, transcript_srt=None, translated_json=None, wav_out=None, **_kw):
+        def _tts_fake(*, out_dir, transcript_srt=None, translated_json=None, wav_out=None, **_kw):
             p = Path(wav_out or (Path(out_dir) / "tts.wav"))
             _write_silence_wav(p, seconds=1.0)
             return p
 
-        def _mix_stub(*_a, **_kw):
+        def _mix_fake(*_a, **_kw):
             # Minimal outputs structure expected by queue
             out_dir = Path(_kw.get("out_dir"))
-            mkv = out_dir / "stub.dub.mkv"
+            mkv = out_dir / "test.dub.mkv"
             mkv.write_bytes(b"mkv")
             return {"mkv": str(mkv), "mp4": None}
 
-        def _mux_stub(*, out_mkv, **_kw):
+        def _mux_fake(*, out_mkv, **_kw):
             Path(out_mkv).parent.mkdir(parents=True, exist_ok=True)
             Path(out_mkv).write_bytes(b"mkv")
 
-        def _export_stub(*, out_path=None, out_dir=None, **_kw):
+        def _export_fake(*, out_path=None, out_dir=None, **_kw):
             if out_path:
                 Path(out_path).parent.mkdir(parents=True, exist_ok=True)
                 Path(out_path).write_bytes(b"mp4")
@@ -123,15 +123,15 @@ def main() -> int:
                 Path(out_dir).mkdir(parents=True, exist_ok=True)
                 (Path(out_dir) / "index.m3u8").write_text("#EXTM3U\n", encoding="utf-8")
 
-        qmod.audio_extractor.extract = _audio_extract_stub  # type: ignore[attr-defined]
+        qmod.audio_extractor.extract = _audio_extract_fake  # type: ignore[attr-defined]
         qmod.transcribe = _transcribe_should_not_run  # type: ignore[assignment]
         qmod.translate_segments = _translate_should_not_run  # type: ignore[assignment]
-        qmod.tts.run = _tts_stub  # type: ignore[attr-defined]
-        qmod.mix = _mix_stub  # type: ignore[assignment]
-        qmod.mkv_export.mux = _mux_stub  # type: ignore[attr-defined]
+        qmod.tts.run = _tts_fake  # type: ignore[attr-defined]
+        qmod.mix = _mix_fake  # type: ignore[assignment]
+        qmod.mkv_export.mux = _mux_fake  # type: ignore[attr-defined]
 
-        exmod.export_mobile_mp4 = _export_stub  # type: ignore[assignment]
-        exmod.export_mobile_hls = _export_stub  # type: ignore[assignment]
+        exmod.export_mobile_mp4 = _export_fake  # type: ignore[assignment]
+        exmod.export_mobile_hls = _export_fake  # type: ignore[assignment]
 
         asyncio.run(q._run_job(job.id))
 

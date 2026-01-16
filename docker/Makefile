@@ -4,11 +4,11 @@ test:
 	python -m pytest -q
 
 docker-build:
-	docker build -f docker/Dockerfile -t anime-v2:local .
+	docker build -f docker/Dockerfile -t dubbing-pipeline:local .
 
 sbom:
-	syft anime-v2:local -o spdx-json > sbom.spdx.json
+	syft dubbing-pipeline:local -o spdx-json > sbom.spdx.json
 
 trivy:
-	trivy image --severity HIGH,CRITICAL --ignore-unfixed anime-v2:local
+	trivy image --severity HIGH,CRITICAL --ignore-unfixed dubbing-pipeline:local
 

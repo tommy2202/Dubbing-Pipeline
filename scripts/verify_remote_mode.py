@@ -7,7 +7,7 @@ from typing import Any
 from config.settings import get_settings
 from fastapi import FastAPI
 
-from anime_v2.api.remote_access import remote_access_middleware
+from dubbing_pipeline.api.remote_access import remote_access_middleware
 
 
 def _reset_settings_env(env: dict[str, str]) -> None:

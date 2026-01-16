@@ -12,7 +12,7 @@ ALLOW_TEMPLATE_FILES = {
     ".env.secrets.example",
 }
 
-PLACEHOLDER_VALUES = {
+TEMPLATE_SAMPLE_VALUES = {
     "change-me",
     "changeme",
     "CHANGE-ME",
@@ -64,9 +64,9 @@ def _read_text(path: Path) -> str:
     return data.decode("utf-8", errors="ignore")
 
 
-def _check_template_placeholders(path: Path, text: str) -> list[str]:
+def _check_template_samples(path: Path, text: str) -> list[str]:
     """
-    Templates are allowed to contain env assignments, but they must be placeholders.
+    Templates are allowed to contain env assignments, but they must be sample values.
     """
     findings: list[str] = []
 
@@ -76,15 +76,15 @@ def _check_template_placeholders(path: Path, text: str) -> list[str]:
         # Strip inline comments: FOO=bar  # comment
         val = raw_val.split("#", 1)[0].strip().strip('"').strip("'")
 
-        # Allow obvious placeholders only.
-        if val in PLACEHOLDER_VALUES:
+        # Allow obvious sample values only.
+        if val in TEMPLATE_SAMPLE_VALUES:
             continue
 
-        # Allow common explicit placeholders used elsewhere in this repo.
+        # Allow common explicit sample prefixes used elsewhere in this repo.
         if val.lower().startswith("dev-insecure-"):
             continue
 
-        findings.append(f"{path}: non-placeholder value for {key} ({val!r})")
+        findings.append(f"{path}: non-sample value for {key} ({val!r})")
 
     # Also block private keys even in templates.
     if PRIVATE_KEY_RE.search(text):
@@ -117,7 +117,7 @@ def main() -> int:
             continue
 
         if p.name in ALLOW_TEMPLATE_FILES:
-            offenders.extend(_check_template_placeholders(p, txt))
+            offenders.extend(_check_template_samples(p, txt))
             continue
 
         if PRIVATE_KEY_RE.search(txt):

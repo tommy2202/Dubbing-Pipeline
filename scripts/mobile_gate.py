@@ -7,6 +7,7 @@ import os
 import subprocess
 import tempfile
 import time
+from concurrent.futures import CancelledError as FuturesCancelledError
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +63,7 @@ def _verify_remote_modes() -> None:
     """
     Confirms REMOTE_ACCESS_MODE enforcement decisions (off/tailscale/cloudflare).
     """
-    from anime_v2.api.remote_access import remote_access_middleware
+    from dubbing_pipeline.api.remote_access import remote_access_middleware
 
     app = FastAPI()
 
@@ -196,8 +197,8 @@ def _verify_end_to_end() -> None:
 
         # Configure env BEFORE importing the app/settings.
         os.environ["APP_ROOT"] = str(app_root)
-        os.environ["ANIME_V2_OUTPUT_DIR"] = str(out_dir)
-        os.environ["ANIME_V2_LOG_DIR"] = str(log_dir)
+        os.environ["DUBBING_OUTPUT_DIR"] = str(out_dir)
+        os.environ["DUBBING_LOG_DIR"] = str(log_dir)
         os.environ["INPUT_DIR"] = str(in_dir)
         os.environ["INPUT_UPLOADS_DIR"] = str(uploads_dir)
         os.environ["REMOTE_ACCESS_MODE"] = "off"
@@ -224,71 +225,76 @@ def _verify_end_to_end() -> None:
         except Exception:
             pass
 
-        from anime_v2.server import app
+        from dubbing_pipeline.server import app
 
-        with TestClient(app) as c:
-            # 1) login via username/password (session cookie)
-            r = c.post("/auth/login", json={"username": "admin", "password": "password123", "session": True})
-            assert r.status_code == 200, r.text
-            assert c.cookies.get("session"), "missing session cookie"
-            csrf = c.cookies.get("csrf") or ""
-            assert csrf, "missing csrf cookie"
+        try:
+            completed = False
+            with TestClient(app) as c:
+                # 1) login via username/password (session cookie)
+                r = c.post("/auth/login", json={"username": "admin", "password": "password123", "session": True})
+                assert r.status_code == 200, r.text
+                assert c.cookies.get("session"), "missing session cookie"
+                csrf = c.cookies.get("csrf") or ""
+                assert csrf, "missing csrf cookie"
 
-            # 2) chunked upload
-            data = src_mp4.read_bytes()
-            init = c.post(
-                "/api/uploads/init",
-                json={"filename": "tiny.mp4", "total_bytes": len(data), "mime": "video/mp4"},
-                headers={"X-CSRF-Token": csrf},
-            )
-            assert init.status_code == 200, init.text
-            up = init.json()
-            upload_id = str(up["upload_id"])
-            chunk_bytes = int(up.get("chunk_bytes") or 262144)
-
-            off = 0
-            idx = 0
-            while off < len(data):
-                end = min(len(data), off + chunk_bytes)
-                chunk = data[off:end]
-                rr = c.post(
-                    f"/api/uploads/{upload_id}/chunk?index={idx}&offset={off}",
-                    content=chunk,
-                    headers={
-                        "content-type": "application/octet-stream",
-                        "X-Chunk-Sha256": _sha256_hex(chunk),
-                        "X-CSRF-Token": csrf,
-                    },
+                # 2) chunked upload
+                data = src_mp4.read_bytes()
+                init = c.post(
+                    "/api/uploads/init",
+                    json={"filename": "tiny.mp4", "total_bytes": len(data), "mime": "video/mp4"},
+                    headers={"X-CSRF-Token": csrf},
                 )
-                assert rr.status_code == 200, rr.text
-                off = end
-                idx += 1
+                assert init.status_code == 200, init.text
+                up = init.json()
+                upload_id = str(up["upload_id"])
+                chunk_bytes = int(up.get("chunk_bytes") or 262144)
 
-            done = c.post(
-                f"/api/uploads/{upload_id}/complete",
-                json={},
-                headers={"X-CSRF-Token": csrf},
-            )
-            assert done.status_code == 200, done.text
-            assert done.json().get("ok") is True
+                off = 0
+                idx = 0
+                while off < len(data):
+                    end = min(len(data), off + chunk_bytes)
+                    chunk = data[off:end]
+                    rr = c.post(
+                        f"/api/uploads/{upload_id}/chunk?index={idx}&offset={off}",
+                        content=chunk,
+                        headers={
+                            "content-type": "application/octet-stream",
+                            "X-Chunk-Sha256": _sha256_hex(chunk),
+                            "X-CSRF-Token": csrf,
+                        },
+                    )
+                    assert rr.status_code == 200, rr.text
+                    off = end
+                    idx += 1
 
-            # 3) create job (enable QA)
-            jobr = c.post(
-                "/api/jobs",
-                json={
-                    "upload_id": upload_id,
-                    "mode": "low",
-                    "device": "cpu",
-                    "src_lang": "auto",
-                    "tgt_lang": "en",
-                    "pg": "off",
-                    "qa": True,
-                    "cache_policy": "minimal",
-                },
-                headers={"X-CSRF-Token": csrf},
-            )
-            assert jobr.status_code == 200, jobr.text
-            job_id = str(jobr.json()["id"])
+                done = c.post(
+                    f"/api/uploads/{upload_id}/complete",
+                    json={"final_sha256": _sha256_hex(data)},
+                    headers={"X-CSRF-Token": csrf},
+                )
+                assert done.status_code == 200, done.text
+                assert done.json().get("ok") is True
+
+                # 3) create job (enable QA)
+                jobr = c.post(
+                    "/api/jobs",
+                    json={
+                        "upload_id": upload_id,
+                        "series_title": "Mobile Gate",
+                        "season_number": 1,
+                        "episode_number": 1,
+                        "mode": "low",
+                        "device": "cpu",
+                        "src_lang": "auto",
+                        "tgt_lang": "en",
+                        "pg": "off",
+                        "qa": True,
+                        "cache_policy": "minimal",
+                    },
+                    headers={"X-CSRF-Token": csrf},
+                )
+                assert jobr.status_code == 200, jobr.text
+                job_id = str(jobr.json()["id"])
 
             # 4) poll until DONE/FAILED
             t0 = time.time()
@@ -393,6 +399,12 @@ def _verify_end_to_end() -> None:
                 headers={"X-CSRF-Token": csrf},
             )
             assert ul.status_code == 200, ul.text
+            completed = True
+        except FuturesCancelledError:
+            # Some Starlette/AnyIO combos can raise CancelledError during shutdown.
+            if completed:
+                return
+            raise
 
 
 def main() -> int:

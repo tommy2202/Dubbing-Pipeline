@@ -5,48 +5,48 @@
 #### Core pipeline
 
 - **Config (public + secret + merged settings)**: `config/public_config.py`, `config/secret_config.py`, `config/settings.py`
-- **CLI entrypoint**: `src/anime_v2/cli.py` (default group + subcommands)
-- **Web server**: `src/anime_v2/server.py`, `src/anime_v2/web/app.py`, templates under `src/anime_v2/web/templates/`
-- **Job queue orchestration**: `src/anime_v2/jobs/queue.py`, `src/anime_v2/jobs/store.py`, `src/anime_v2/jobs/models.py`
+- **CLI entrypoint**: `src/dubbing_pipeline/cli.py` (default group + subcommands)
+- **Web server**: `src/dubbing_pipeline/server.py`, `src/dubbing_pipeline/web/app.py`, templates under `src/dubbing_pipeline/web/templates/`
+- **Job queue orchestration**: `src/dubbing_pipeline/jobs/queue.py`, `src/dubbing_pipeline/jobs/store.py`, `src/dubbing_pipeline/jobs/models.py`
 - **Stages**:
-  - audio extract: `src/anime_v2/stages/audio_extractor.py`
-  - diarization: `src/anime_v2/stages/diarization.py`
-  - transcription: `src/anime_v2/stages/transcription.py`
-  - translation: `src/anime_v2/stages/translation.py`
-  - alignment: `src/anime_v2/stages/align.py`
-  - TTS: `src/anime_v2/stages/tts.py`, provider selection `src/anime_v2/stages/tts_engine.py`
-  - mixing/export: `src/anime_v2/audio/mix.py`, `src/anime_v2/stages/mixing.py`, `src/anime_v2/stages/export.py`
-- **Timeline / pacing**: `src/anime_v2/timing/fit_text.py`, `src/anime_v2/timing/pacing.py`
+  - audio extract: `src/dubbing_pipeline/stages/audio_extractor.py`
+  - diarization: `src/dubbing_pipeline/stages/diarization.py`
+  - transcription: `src/dubbing_pipeline/stages/transcription.py`
+  - translation: `src/dubbing_pipeline/stages/translation.py`
+  - alignment: `src/dubbing_pipeline/stages/align.py`
+  - TTS: `src/dubbing_pipeline/stages/tts.py`, provider selection `src/dubbing_pipeline/stages/tts_engine.py`
+  - mixing/export: `src/dubbing_pipeline/audio/mix.py`, `src/dubbing_pipeline/stages/mixing.py`, `src/dubbing_pipeline/stages/export.py`
+- **Timeline / pacing**: `src/dubbing_pipeline/timing/fit_text.py`, `src/dubbing_pipeline/timing/pacing.py`
 
 #### Tier features already in place
 
-- **Music detection/preservation**: `src/anime_v2/audio/music_detect.py`
-- **PG filter**: `src/anime_v2/text/pg_filter.py`
-- **Style guide**: `src/anime_v2/text/style_guide.py` (+ `projects/example/style_guide.yaml`)
-- **Speaker smoothing**: `src/anime_v2/diarization/smoothing.py`
-- **Director mode**: `src/anime_v2/expressive/director.py`
-- **QA scoring + CLI**: `src/anime_v2/qa/scoring.py`, `src/anime_v2/qa/cli.py`
-- **Voice memory store**: `src/anime_v2/voice_memory/store.py`, embeddings `src/anime_v2/voice_memory/embeddings.py`
-- **Review loop**: `src/anime_v2/review/state.py`, `src/anime_v2/review/ops.py`, `src/anime_v2/review/cli.py`
-- **Streaming**: `src/anime_v2/streaming/chunker.py`, `src/anime_v2/streaming/runner.py`
-- **Lip-sync plugin**: `src/anime_v2/plugins/lipsync/base.py`, `registry.py`, `wav2lip_plugin.py`
-- **Multi-track artifacts/mux**: `src/anime_v2/audio/tracks.py`, `src/anime_v2/stages/export.py:export_mkv_multitrack`
+- **Music detection/preservation**: `src/dubbing_pipeline/audio/music_detect.py`
+- **PG filter**: `src/dubbing_pipeline/text/pg_filter.py`
+- **Style guide**: `src/dubbing_pipeline/text/style_guide.py` (+ `projects/example/style_guide.yaml`)
+- **Speaker smoothing**: `src/dubbing_pipeline/diarization/smoothing.py`
+- **Director mode**: `src/dubbing_pipeline/expressive/director.py`
+- **QA scoring + CLI**: `src/dubbing_pipeline/qa/scoring.py`, `src/dubbing_pipeline/qa/cli.py`
+- **Voice memory store**: `src/dubbing_pipeline/voice_memory/store.py`, embeddings `src/dubbing_pipeline/voice_memory/embeddings.py`
+- **Review loop**: `src/dubbing_pipeline/review/state.py`, `src/dubbing_pipeline/review/ops.py`, `src/dubbing_pipeline/review/cli.py`
+- **Streaming**: `src/dubbing_pipeline/streaming/chunker.py`, `src/dubbing_pipeline/streaming/runner.py`
+- **Lip-sync plugin**: `src/dubbing_pipeline/plugins/lipsync/base.py`, `registry.py`, `wav2lip_plugin.py`
+- **Multi-track artifacts/mux**: `src/dubbing_pipeline/audio/tracks.py`, `src/dubbing_pipeline/stages/export.py:export_mkv_multitrack`
 
 #### Ops / retention / caching / logs
 
-- **Workdir pruning**: `src/anime_v2/ops/storage.py` (server periodic prune)
-- **Retention**: `src/anime_v2/ops/retention.py` (inputs + logs)
-- **Cross-job cache**: `src/anime_v2/cache/store.py` (index.json)
-- **Stage checkpoints**: `src/anime_v2/jobs/checkpoint.py`
-- **Stage manifests (best-effort)**: `src/anime_v2/jobs/manifests.py`
-- **Per-job logs helper**: `src/anime_v2/utils/job_logs.py`
-- **FFmpeg runner with stderr capture**: `src/anime_v2/utils/ffmpeg_safe.py`
+- **Workdir pruning**: `src/dubbing_pipeline/ops/storage.py` (server periodic prune)
+- **Retention**: `src/dubbing_pipeline/ops/retention.py` (inputs + logs)
+- **Cross-job cache**: `src/dubbing_pipeline/cache/store.py` (index.json)
+- **Stage checkpoints**: `src/dubbing_pipeline/jobs/checkpoint.py`
+- **Stage manifests (best-effort)**: `src/dubbing_pipeline/jobs/manifests.py`
+- **Per-job logs helper**: `src/dubbing_pipeline/utils/job_logs.py`
+- **FFmpeg runner with stderr capture**: `src/dubbing_pipeline/utils/ffmpeg_safe.py`
 
 ### Conflict list (overlaps / duplicates to delete or reroute)
 
 - **Mode logic is duplicated**:
-  - `src/anime_v2/cli.py` has `MODE_TO_MODEL` + ad-hoc defaults.
-  - `src/anime_v2/jobs/queue.py` has its own `MODE_TO_MODEL`.
+  - `src/dubbing_pipeline/cli.py` has `MODE_TO_MODEL` + ad-hoc defaults.
+  - `src/dubbing_pipeline/jobs/queue.py` has its own `MODE_TO_MODEL`.
   - **Plan**: introduce one canonical resolver (new module) and route both CLI and queue through it; keep existing CLI flags as overrides.
 - **Project “profiles” split across sources**:
   - style guide uses `projects/<name>/style_guide.yaml` (canonical)
@@ -169,7 +169,7 @@ For each feature: **data model**, **pipeline insertion**, **fallbacks**, **CLI/c
 - **Fallbacks**:
   - If embedding provider missing: return empty candidates with reason.
 - **CLI/config/UI**:
-  - CLI: `anime-v2 voice audition ...`
+  - CLI: `dubbing-pipeline voice audition ...`
   - UI: show candidate list in characters tab.
 
 #### H) QA warning for heavy timing-fit compression (“rewrite-heavy”)
@@ -244,7 +244,7 @@ For each feature: **data model**, **pipeline insertion**, **fallbacks**, **CLI/c
 - **Fallbacks**:
   - No historical episodes: skip with info.
 - **CLI/config/UI**:
-  - CLI: `anime-v2 voice drift-report --show-id ...`
+  - CLI: `dubbing-pipeline voice drift-report --show-id ...`
   - UI: optional “Drift” tab under project page.
 
 #### M) Optional OFFLINE LLM transcreation/rewrite provider hook

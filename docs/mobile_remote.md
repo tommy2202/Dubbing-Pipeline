@@ -12,7 +12,7 @@ This document is the “phone-first” remote access guide. It builds on:
 export REMOTE_ACCESS_MODE=tailscale
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 3) Get the exact URL to open on your phone:
@@ -33,7 +33,7 @@ export REMOTE_ACCESS_MODE=cloudflare
 export TRUST_PROXY_HEADERS=1
 export HOST=0.0.0.0
 export PORT=8000
-anime-v2-web
+dubbing-web
 ```
 
 2) Follow `docs/remote_access.md` and `scripts/remote/cloudflared/README.md` to provision the tunnel and protect it with Access.

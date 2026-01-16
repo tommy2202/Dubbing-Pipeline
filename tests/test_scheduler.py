@@ -4,10 +4,10 @@ import time
 
 import pytest
 
-from anime_v2.jobs.models import Job, JobState
-from anime_v2.jobs.store import JobStore
-from anime_v2.runtime import lifecycle
-from anime_v2.runtime.scheduler import JobRecord, Scheduler
+from dubbing_pipeline.jobs.models import Job, JobState
+from dubbing_pipeline.jobs.store import JobStore
+from dubbing_pipeline.runtime import lifecycle
+from dubbing_pipeline.runtime.scheduler import JobRecord, Scheduler
 
 
 def _mk_job(jid: str, *, owner: str = "u1") -> Job:
@@ -42,7 +42,7 @@ def test_backpressure_degrades_mode(tmp_path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("MAX_CONCURRENCY_GLOBAL", "1")
     monkeypatch.setenv("MAX_CONCURRENCY_TRANSCRIBE", "1")
     monkeypatch.setenv("MAX_CONCURRENCY_TTS", "1")
-    from anime_v2.config import get_settings
+    from dubbing_pipeline.config import get_settings
 
     get_settings.cache_clear()
 

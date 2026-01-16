@@ -7,12 +7,12 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
-from anime_v2.api.deps import require_scope
-from anime_v2.api.models import AuthStore, Role, User, now_ts
-from anime_v2.api.routes_auth import router as auth_router
-from anime_v2.api.security import issue_csrf_token
-from anime_v2.utils.crypto import PasswordHasher
-from anime_v2.utils.ratelimit import RateLimiter
+from dubbing_pipeline.api.deps import require_scope
+from dubbing_pipeline.api.models import AuthStore, Role, User, now_ts
+from dubbing_pipeline.api.routes_auth import router as auth_router
+from dubbing_pipeline.api.security import issue_csrf_token
+from dubbing_pipeline.utils.crypto import PasswordHasher
+from dubbing_pipeline.utils.ratelimit import RateLimiter
 
 
 def _make_app(tmp: Path) -> FastAPI:

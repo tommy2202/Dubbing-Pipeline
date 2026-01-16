@@ -1,0 +1,13 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 2s
+      retries: 10
+    # IMPORTANT: do not publish Redis ports publicly.
+    # Access is intended only from the internal Docker network.
+
