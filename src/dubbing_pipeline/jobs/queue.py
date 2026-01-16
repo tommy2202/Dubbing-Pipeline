@@ -224,56 +224,64 @@ class JobQueue:
             raise JobCanceled()
 
     async def _worker(self) -> None:
-        while True:
-            job_id = await self._q.get()
-            try:
-                # Pause support (best-effort): if job is paused, requeue and yield.
-                j = self.store.get(job_id)
-                if j is not None and j.state == JobState.PAUSED:
-                    await asyncio.sleep(0.25)
-                    await self._q.put(job_id)
-                    continue
-
-                # Level-2: acquire distributed lock/counters before running.
-                # If unavailable or denied, the backend may defer/requeue via Redis and we skip execution.
-                backend = getattr(self, "queue_backend", None)
-                if backend is not None:
-                    try:
-                        uid = str(getattr(j, "owner_id", "") or "") if j is not None else ""
-                        ok_to_run = await backend.before_job_run(job_id=str(job_id), user_id=(uid or None))
-                        if not ok_to_run:
-                            # backend handled deferral/cancel; do not run locally.
-                            continue
-                    except Exception as ex:
-                        logger.warning(
-                            "queue_before_job_run_failed",
-                            job_id=str(job_id),
-                            error=str(ex),
-                        )
-                        # Conservative: skip execution if backend is present but failed.
+        try:
+            while True:
+                try:
+                    job_id = await self._q.get()
+                except asyncio.CancelledError:
+                    logger.info("task stopped", task="job_queue.worker")
+                    return
+                try:
+                    # Pause support (best-effort): if job is paused, requeue and yield.
+                    j = self.store.get(job_id)
+                    if j is not None and j.state == JobState.PAUSED:
+                        await asyncio.sleep(0.25)
+                        await self._q.put(job_id)
                         continue
 
-                await self._run_job(job_id)
+                    # Level-2: acquire distributed lock/counters before running.
+                    # If unavailable or denied, the backend may defer/requeue via Redis and we skip execution.
+                    backend = getattr(self, "queue_backend", None)
+                    if backend is not None:
+                        try:
+                            uid = str(getattr(j, "owner_id", "") or "") if j is not None else ""
+                            ok_to_run = await backend.before_job_run(job_id=str(job_id), user_id=(uid or None))
+                            if not ok_to_run:
+                                # backend handled deferral/cancel; do not run locally.
+                                continue
+                        except Exception as ex:
+                            logger.warning(
+                                "queue_before_job_run_failed",
+                                job_id=str(job_id),
+                                error=str(ex),
+                            )
+                            # Conservative: skip execution if backend is present but failed.
+                            continue
 
-                # Best-effort post-run hook: ack/release locks based on persisted final state.
-                if backend is not None:
-                    try:
-                        j2 = self.store.get(job_id)
-                        st = ""
-                        if j2 is not None and getattr(j2, "state", None) is not None:
-                            st = str(getattr(j2.state, "value", "") or "")
-                        uid2 = str(getattr(j2, "owner_id", "") or "") if j2 is not None else ""
-                        await backend.after_job_run(
-                            job_id=str(job_id),
-                            user_id=(uid2 or None),
-                            final_state=st,
-                            ok=st == "DONE",
-                            error=None,
-                        )
-                    except Exception:
-                        pass
-            finally:
-                self._q.task_done()
+                    await self._run_job(job_id)
+
+                    # Best-effort post-run hook: ack/release locks based on persisted final state.
+                    if backend is not None:
+                        try:
+                            j2 = self.store.get(job_id)
+                            st = ""
+                            if j2 is not None and getattr(j2, "state", None) is not None:
+                                st = str(getattr(j2.state, "value", "") or "")
+                            uid2 = str(getattr(j2, "owner_id", "") or "") if j2 is not None else ""
+                            await backend.after_job_run(
+                                job_id=str(job_id),
+                                user_id=(uid2 or None),
+                                final_state=st,
+                                ok=st == "DONE",
+                                error=None,
+                            )
+                        except Exception:
+                            pass
+                finally:
+                    self._q.task_done()
+        except asyncio.CancelledError:
+            logger.info("task stopped", task="job_queue.worker")
+            return
 
     async def _run_job(self, job_id: str) -> None:
         job = self.store.get(job_id)

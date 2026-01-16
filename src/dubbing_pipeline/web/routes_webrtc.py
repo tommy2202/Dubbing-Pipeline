@@ -86,6 +86,7 @@ class _Peer:
 
 _peers: dict[str, _Peer] = {}
 _peers_lock = asyncio.Lock()
+_idle_watch_tasks: dict[str, asyncio.Task] = {}
 
 
 def _idle_timeout_s() -> int:
@@ -115,16 +116,36 @@ async def _close_peer(token: str, reason: str) -> None:
 
 
 async def _idle_watch(token: str) -> None:
-    while True:
-        await asyncio.sleep(10)
-        async with _peers_lock:
-            peer = _peers.get(token)
-            if peer is None:
+    try:
+        while True:
+            await asyncio.sleep(10)
+            async with _peers_lock:
+                peer = _peers.get(token)
+                if peer is None:
+                    return
+                idle = time.monotonic() - peer.last_activity
+            if idle > _idle_timeout_s():
+                await _close_peer(token, "idle_timeout")
                 return
-            idle = time.monotonic() - peer.last_activity
-        if idle > _idle_timeout_s():
-            await _close_peer(token, "idle_timeout")
-            return
+    except asyncio.CancelledError:
+        logger.info("task stopped", task="webrtc.idle_watch", token=str(token))
+        return
+    finally:
+        async with _peers_lock:
+            _idle_watch_tasks.pop(token, None)
+
+
+async def shutdown_webrtc_peers() -> None:
+    async with _peers_lock:
+        tokens = list(_peers.keys())
+        idle_tasks = list(_idle_watch_tasks.values())
+        _idle_watch_tasks.clear()
+    for t in idle_tasks:
+        t.cancel()
+    if idle_tasks:
+        await asyncio.gather(*idle_tasks, return_exceptions=True)
+    for token in tokens:
+        await _close_peer(token, "shutdown")
 
 
 @router.post("/webrtc/offer")
@@ -214,7 +235,9 @@ async def webrtc_offer(request: Request, _: object = Depends(require_scope("read
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
 
-        asyncio.create_task(_idle_watch(peer_token))
+        idle_task = asyncio.create_task(_idle_watch(peer_token))
+        async with _peers_lock:
+            _idle_watch_tasks[peer_token] = idle_task
         logger.info(
             "webrtc peer created token=%s job_id=%s ip=%s file=%s",
             peer_token,
