@@ -13,7 +13,7 @@ from click.exceptions import UsageError
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.stages import audio_extractor, mkv_export, tts
 from dubbing_pipeline.stages.align import AlignConfig, realign_srt
-from dubbing_pipeline.stages.character_store import CharacterStore
+from dubbing_pipeline.audio.routing import resolve_diarization_input
 from dubbing_pipeline.stages.diarization import DiarizeConfig
 from dubbing_pipeline.stages.diarization import diarize as diarize_v2
 from dubbing_pipeline.stages.mixing import MixConfig, mix
@@ -1787,8 +1787,8 @@ def run(
     stems_dir.mkdir(parents=True, exist_ok=True)
     audio_dir.mkdir(parents=True, exist_ok=True)
     background_wav: Path | None = None
+    sep_mode = str(separation or "off").lower()
     if str(mix_mode).lower() == "enhanced":
-        sep_mode = str(separation or "off").lower()
         if sep_mode == "demucs":
             try:
                 from dubbing_pipeline.audio.separation import separate_dialogue
@@ -1816,7 +1816,18 @@ def run(
         t_stage = time.perf_counter()
         show = show_id or video.stem
         cfg = DiarizeConfig(diarizer=diarizer.lower())
-        utts = diarize_v2(str(extracted), device=chosen_device, cfg=cfg)
+        try:
+            diar_route = resolve_diarization_input(
+                cli_job,
+                extracted_wav=Path(str(extracted)),
+                base_dir=out_dir,
+                separation_enabled=bool(str(mix_mode).lower() == "enhanced" and sep_mode == "demucs"),
+            )
+            diar_wav = diar_route.wav
+        except Exception:
+            diar_route = None
+            diar_wav = Path(str(extracted))
+        utts = diarize_v2(str(diar_wav), device=chosen_device, cfg=cfg)
 
         # Tier-Next F: optional scene-aware speaker smoothing (opt-in; default off).
         if str(speaker_smoothing).lower() == "on" and str(scene_detect).lower() != "off":
@@ -1827,7 +1838,7 @@ def run(
                     write_speaker_smoothing_report,
                 )
 
-                scenes = detect_scenes_audio(Path(str(extracted)))
+                scenes = detect_scenes_audio(Path(str(diar_wav)))
                 utts2, changes = smooth_speakers_in_scenes(
                     utts,
                     scenes,
@@ -1882,17 +1893,68 @@ def run(
                 from dubbing_pipeline.utils.ffmpeg_safe import extract_audio_mono_16k
 
                 extract_audio_mono_16k(
-                    src=Path(str(extracted)),
+                    src=Path(str(diar_wav)),
                     dst=seg_wav,
                     start_s=float(s),
                     end_s=float(e),
                     timeout_s=120,
                 )
             except Exception:
-                seg_wav = Path(str(extracted))
+                seg_wav = Path(str(diar_wav))
             by_label.setdefault(lab, []).append((s, e, seg_wav))
 
-        thresholds = {"sim": float(char_sim_thresh)}
+        # Canonical speaker refs for matching + cloning.
+        label_refs: dict[str, Path] = {}
+        try:
+            from dubbing_pipeline.voice_refs.extract_refs import ExtractRefsConfig, extract_speaker_refs
+
+            refs_dir = (analysis_dir / "voice_refs").resolve()
+            refs_dir.mkdir(parents=True, exist_ok=True)
+            cfg_ref = ExtractRefsConfig(
+                target_seconds=float(getattr(get_settings(), "voice_ref_target_s", 30.0) or 30.0),
+                min_seg_seconds=float(
+                    getattr(get_settings(), "voice_ref_min_candidate_s", 2.0) or 2.0
+                ),
+                max_seg_seconds=float(
+                    getattr(get_settings(), "voice_ref_max_candidate_s", 10.0) or 10.0
+                ),
+                overlap_eps_s=float(
+                    getattr(get_settings(), "voice_ref_overlap_eps_s", 0.05) or 0.05
+                ),
+                min_speech_ratio=float(
+                    getattr(get_settings(), "voice_ref_min_speech_ratio", 0.60) or 0.60
+                ),
+            )
+            timeline = []
+            for lab, segs in by_label.items():
+                for st, en, wav_p in segs:
+                    timeline.append(
+                        {
+                            "start": float(st),
+                            "end": float(en),
+                            "speaker_id": str(lab),
+                            "wav_path": str(wav_p),
+                        }
+                    )
+            man_refs = extract_speaker_refs(
+                diarization_timeline=timeline,
+                dialogue_wav=Path(str(diar_wav)),
+                out_dir=refs_dir,
+                config=cfg_ref,
+            )
+            items = man_refs.get("items") if isinstance(man_refs, dict) else None
+            if isinstance(items, dict):
+                for sid, rec in items.items():
+                    if not isinstance(rec, dict):
+                        continue
+                    rp = str(rec.get("ref_path") or "").strip()
+                    if rp:
+                        p = Path(rp).resolve()
+                        if p.exists():
+                            label_refs[str(sid)] = p
+        except Exception as ex:
+            logger.warning("[dp] voice refs extraction failed; continuing (%s)", ex)
+
         # Map diar speaker label -> persistent character id
         lab_to_char: dict[str, str] = {}
         vm_store = None
@@ -1915,21 +1977,16 @@ def run(
                         }
                 episode_key = compute_episode_key(audio_hash=None, video_path=video)
             except Exception as ex:
-                logger.warning("[dp] voice-memory unavailable; using legacy mapping (%s)", ex)
+                logger.warning("[dp] voice-memory unavailable; using diarization labels (%s)", ex)
                 vm_store = None
                 episode_key = ""
         else:
             episode_key = ""
-            store = None
-            try:
-                store = CharacterStore.default()
-                store.load()
-            except Exception:
-                store = None
-        for lab, segs in by_label.items():
-            # pick longest seg wav for embedding
-            segs_sorted = sorted(segs, key=lambda t: (t[1] - t[0]), reverse=True)
-            rep_wav = segs_sorted[0][2]
+        for lab, _segs in by_label.items():
+            rep_wav = label_refs.get(str(lab))
+            if rep_wav is None:
+                lab_to_char[lab] = lab
+                continue
             if vm_store is not None:
                 try:
                     manual = vm_map.get(lab)
@@ -1955,34 +2012,23 @@ def run(
                     logger.warning("[dp] voice-memory match failed (%s): %s", lab, ex)
                     lab_to_char[lab] = lab
             else:
-                if store is None:
-                    lab_to_char[lab] = lab
-                    continue
+                lab_to_char[lab] = lab
+            # Persist embedding for preset matching (best-effort).
+            try:
                 emb = ecapa_embedding(rep_wav, device=chosen_device)
                 if emb is None:
-                    # no embeddings => stable ID per show label
-                    lab_to_char[lab] = lab
                     continue
-                cid = store.match_or_create(emb, show_id=show, thresholds=thresholds)
-                store.link_speaker_wav(cid, str(rep_wav))
-                lab_to_char[lab] = cid
-                # also persist npy for downstream preset matching (optional)
-                try:
-                    import numpy as np  # type: ignore
+                import numpy as np  # type: ignore
 
-                    emb_dir = (out_dir / "voices" / "embeddings").resolve()
-                    emb_dir.mkdir(parents=True, exist_ok=True)
-                    emb_path = emb_dir / f"{cid}.npy"
-                    np.save(str(emb_path), emb.astype("float32"))
-                    speaker_embeddings[cid] = str(emb_path)
-                except Exception:
-                    pass
+                cid = lab_to_char.get(lab, lab)
+                emb_dir = (out_dir / "voices" / "embeddings").resolve()
+                emb_dir.mkdir(parents=True, exist_ok=True)
+                emb_path = emb_dir / f"{cid}.npy"
+                np.save(str(emb_path), emb.astype("float32"))
+                speaker_embeddings[cid] = str(emb_path)
+            except Exception:
+                pass
 
-        if store is not None:
-            from contextlib import suppress
-
-            with suppress(Exception):
-                store.save()
         if vm_store is not None and episode_key:
             from contextlib import suppress
 
@@ -2012,7 +2058,11 @@ def run(
         write_json(
             diar_json,
             {
-                "audio_path": str(extracted),
+                "audio_path": str(diar_wav),
+                "diarization_input": str(diar_route.kind if diar_route else "original"),
+                "diarization_input_rel": str(
+                    diar_route.rel_path if diar_route else Path(str(diar_wav)).name
+                ),
                 "segments": diar_segments,
                 "speaker_embeddings": speaker_embeddings,
             },
@@ -2641,6 +2691,11 @@ def run(
     # 5) tts.synthesize (line-aligned)
     t_stage = time.perf_counter()
     try:
+        voice_ref_dir_eff = voice_ref_dir
+        if voice_ref_dir_eff is None:
+            cand = (analysis_dir / "voice_refs").resolve()
+            if cand.exists():
+                voice_ref_dir_eff = cand
         # TTS language: default to target language when translating; otherwise prefer source language.
         tts_lang = None
         if no_translate:
@@ -2655,7 +2710,7 @@ def run(
             wav_out=tts_wav,
             tts_lang=tts_lang,
             voice_mode=voice_mode,
-            voice_ref_dir=voice_ref_dir,
+            voice_ref_dir=voice_ref_dir_eff,
             voice_store_dir=voice_store_dir,
             voice_memory=(str(voice_memory).lower() == "on"),
             voice_memory_dir=Path(voice_memory_dir).resolve() if voice_memory_dir else None,

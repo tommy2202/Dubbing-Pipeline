@@ -125,6 +125,22 @@ Admin-only:
 
 ---
 
+## Map speakers to characters (Voices tab)
+
+From a job page (`/ui/jobs/<job_id>`):
+- Open the **Voices** tab.
+- Each speaker shows an extracted ref preview (if allowed by privacy settings).
+- Select a character from the dropdown and click **Save mapping** to lock it.
+- Click **Promote to series voice** to store the ref in the series voice store.
+
+Optional suggestions:
+- Enable `VOICE_AUTO_MATCH=1` to show **Suggested** mappings with confidence.
+
+Two-pass note:
+- If you update mappings and want them applied to cloning, rerun **pass 2** (admin button).
+
+---
+
 ## Playback (mobile-safe)
 
 The job page “Playback” section will select the best available option:

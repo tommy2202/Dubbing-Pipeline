@@ -30,7 +30,7 @@ Each diarization work segment contains (shape is created in `jobs/queue.py`):
 - `start`, `end`
 - `diar_label` (the diarizer speaker label)
 - `speaker_id` (the canonical speaker identity used for downstream TTS/translation)
-- `wav_path` (path to a representative utterance wav segment)
+- `wav_path` (path to an utterance wav segment)
 
 ### 1.2 Where speaker IDs are generated (label → speaker_id)
 
@@ -40,7 +40,7 @@ Speaker labels originate from `src/dubbing_pipeline/stages/diarization.py`:
 The job runner then converts diarizer labels into canonical `speaker_id` values in `src/dubbing_pipeline/jobs/queue.py`:
 - **If voice memory is enabled**: label → stable `character_id` from `dubbing_pipeline.voice_memory.store.VoiceMemoryStore`
   - This is the preferred cross-episode identity store.
-- **Otherwise**: label → `CharacterStore` match/create (legacy path).
+- **Otherwise**: label → diarization label (no cross-episode mapping).
 
 Result: `diarization.work.json` segments are written with `speaker_id` already “canonicalized”.
 
@@ -64,15 +64,14 @@ Inputs relevant to voice selection:
 - `VOICE_STORE` (always present): a persistent store where the stage may write `data/voices/<speaker_id>/ref.wav`.
 
 Current effective priority (simplified from `stages/tts.py`):
-- Per-job voice map JSON overrides (optional)
+- Per-job voice map overrides (optional)
+- Series character ref (when speaker → character mapping exists)
+- Per-job extracted ref (`VOICE_REF_DIR`)
 - `TTS_SPEAKER_WAV` (global override)
-- Representative wav from diarization segments (`speaker_rep_wav[speaker_id]`)
-- Voice memory `best_ref(character_id)` (can override `speaker_wav` if present)
-- `VOICE_REF_DIR` (only used if `speaker_wav` is still unset)
-- Legacy `CharacterStore` speaker wavs (only if voice memory is off)
+- Preset voices / basic/espeak fallback (handled later in TTS)
 
 Important consequence for this design:
-- A stable ref placed in `VOICE_REF_DIR` is **not currently preferred over** diarization’s representative wav. Two-pass requires a way to prefer “pass-2 refs” deterministically.
+- Job-local refs in `VOICE_REF_DIR` are the canonical speaker refs and are preferred over global overrides.
 
 ---
 
@@ -110,7 +109,7 @@ Insert a **reference extraction helper** in `src/dubbing_pipeline/jobs/queue.py`
 
 Why here:
 - We already have `speaker_id` canonicalized.
-- We already have per-speaker grouped wav segments (`by_label`) and a chosen representative wav.
+- We already have per-speaker grouped wav segments (`by_label`) and extracted speaker refs.
 - We can build a “ref bundle” once, then pass it into TTS for both pass 1 and pass 2.
 
 This helper should **not** be a new end-to-end pipeline. It is a small deterministic step inside the existing job runner.
@@ -139,8 +138,7 @@ Two-pass requires a deterministic preference order so that pass 2 uses the extra
 Proposed behavior (only when pass 2 is enabled/active):
 - Prefer **job-local extracted refs** first:
   - `Output/<job_id>/analysis/voice_refs/<speaker_id>.wav`
-- Then fall back to voice memory `best_ref(character_id)` (if enabled and present).
-- Then fall back to diarization representative wav (`diarization.work.json` `wav_path`).
+- Then fall back to series character refs (if mapping exists).
 - Then fall back to global `TTS_SPEAKER_WAV` / preset voices / espeak fallback (existing behavior).
 
 Implementation note:
@@ -184,7 +182,7 @@ Write:
 Safe fallbacks:
 - If extraction fails for a speaker:
   - leave the ref missing and log the reason
-  - pass 2 will fall back to voice memory or diarization representative wav.
+  - pass 2 will fall back to series refs or preset voices.
 
 ---
 
@@ -269,9 +267,9 @@ Pass 2 must be **best-effort**:
   - `Output/<job_id>/work/segments/` (per-utterance wavs)
 - **Where speaker IDs are generated**:
   - labels produced by `src/dubbing_pipeline/stages/diarization.py`
-  - canonical `speaker_id` assigned in `src/dubbing_pipeline/jobs/queue.py` via voice memory (preferred) or CharacterStore fallback
+  - canonical `speaker_id` assigned in `src/dubbing_pipeline/jobs/queue.py` via voice memory (preferred) or diarization label fallback
 - **Where TTS selects speaker refs**:
-  - `src/dubbing_pipeline/stages/tts.py` (speaker_wav selection logic; voice memory `best_ref` and diarization `wav_path`)
+  - `src/dubbing_pipeline/stages/tts.py` (speaker_wav selection logic; series refs + job refs + global override)
 - **Which stage to insert reference extraction**:
   - inside `src/dubbing_pipeline/jobs/queue.py` immediately after diarization mapping (`lab_to_char`) and per-speaker segment grouping is available
 - **How to trigger pass 2 rerun**:

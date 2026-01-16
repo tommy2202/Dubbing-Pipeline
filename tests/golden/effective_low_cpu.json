@@ -33,10 +33,12 @@
     "stream_context_seconds": "mode:low",
     "timing_fit": "mode:low",
     "voice_memory": "mode:low",
-    "voice_mode": "mode:low"
+    "voice_mode": "mode:low",
+    "voice_clone_two_pass": "mode:low"
   },
   "speaker_smoothing": false,
   "timing_fit": false,
   "voice_memory": false,
-  "voice_mode": "single"
+  "voice_mode": "single",
+  "voice_clone_two_pass": false
 }

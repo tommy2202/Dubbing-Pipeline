@@ -424,6 +424,7 @@
                         <option :value="c.character_slug" x-text="(c.display_name || c.character_slug)"></option>
                       </template>
                     </select>
+                    <div class="mt-2 text-xs text-amber-200" x-show="isSuggestedMapping(sid)" x-text="suggestedLabel(sid)"></div>
                     <div class="mt-2 text-xs text-slate-500 break-all"
                          x-text="(voiceRefs.items[sid]||{}).character_ref_path ? ('character ref: ' + (voiceRefs.items[sid]||{}).character_ref_path) : ''"></div>
                   </div>
@@ -710,11 +711,25 @@
       seriesCharacters: [],
       speakerMappingsLoaded: false,
       speakerToCharacter: {},
+      speakerMappingMeta: {},
       newCharacterName: "",
       get canEditVoices() {
         if (!this.job) return false;
         if (String(this.currentUserRole||"") === "admin") return true;
         return String(this.job.owner_id||"") === String(this.currentUserId||"");
+      },
+      isSuggestedMapping(sid) {
+        const meta = this.speakerMappingMeta[sid];
+        return !!(meta && meta.locked === false);
+      },
+      suggestedLabel(sid) {
+        const meta = this.speakerMappingMeta[sid];
+        if (!meta) return "";
+        const conf = Number(meta.confidence || 0);
+        if (Number.isFinite(conf) && conf > 0) {
+          return "Suggested (" + Math.round(conf * 100) + "%)";
+        }
+        return "Suggested";
       },
       files: null,
       qaLoaded: false,
@@ -797,13 +812,22 @@
           const data = await r.json();
           const items = Array.isArray(data.items) ? data.items : [];
           const m = {};
+          const meta = {};
           for (const it of items) {
             if (!it) continue;
             const sid = String(it.speaker_id||"").trim();
             const cslug = String(it.character_slug||"").trim();
             if (sid && cslug) m[sid] = cslug;
+            if (sid) {
+              meta[sid] = {
+                locked: !!it.locked,
+                confidence: Number(it.confidence || 0),
+                character_slug: cslug,
+              };
+            }
           }
           this.speakerToCharacter = { ...this.speakerToCharacter, ...m };
+          this.speakerMappingMeta = { ...this.speakerMappingMeta, ...meta };
         } catch (e) {}
       },
 

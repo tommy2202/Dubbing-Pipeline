@@ -37,10 +37,12 @@
     "timing_fit": "mode:high",
     "stream_context_seconds": "mode:high",
     "voice_memory": "mode:high",
-    "voice_mode": "mode:high"
+    "voice_mode": "mode:high",
+    "voice_clone_two_pass": "mode:high"
   },
   "speaker_smoothing": true,
   "timing_fit": true,
   "voice_memory": true,
-  "voice_mode": "clone"
+  "voice_mode": "clone",
+  "voice_clone_two_pass": true
 }

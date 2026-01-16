@@ -31,14 +31,12 @@ from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.security.crypto import CryptoConfigError, decrypt_file, is_encrypted_path
 from dubbing_pipeline.stages import audio_extractor, mkv_export, tts
 from dubbing_pipeline.ops import audit
-from dubbing_pipeline.stages.character_store import CharacterStore
 from dubbing_pipeline.stages.diarization import DiarizeConfig
 from dubbing_pipeline.stages.diarization import diarize as diarize_v2
 from dubbing_pipeline.stages.mixing import MixConfig, mix
 from dubbing_pipeline.stages.transcription import transcribe
 from dubbing_pipeline.stages.translation import TranslationConfig, translate_segments
 from dubbing_pipeline.utils.circuit import Circuit
-from dubbing_pipeline.utils.embeds import ecapa_embedding
 from dubbing_pipeline.utils.ffmpeg_safe import extract_audio_mono_16k
 from dubbing_pipeline.utils.hashio import hash_audio_from_video
 from dubbing_pipeline.utils.log import logger
@@ -552,6 +550,7 @@ class JobQueue:
                         progress=1.0,
                         message="Done (pass2 skipped: missing audio checkpoint)",
                     )
+                    _auto_match_speakers_best_effort()
                     self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
                     return
                 if wav_guess.exists() and stage_is_done(ckpt, "audio"):
@@ -945,6 +944,94 @@ class JobQueue:
                 except Exception as ex:
                     self.store.append_log(job_id, f"[{now_utc()}] voice_refs skipped: {ex}")
 
+            def _auto_match_speakers_best_effort() -> None:
+                try:
+                    settings = get_settings()
+                    if not bool(getattr(settings, "voice_auto_match", False)):
+                        return
+                    series_slug = str(getattr(job, "series_slug", "") or "").strip()
+                    if not series_slug:
+                        return
+                    man_path = (base_dir / "analysis" / "voice_refs" / "manifest.json").resolve()
+                    if not man_path.exists():
+                        return
+                    from dubbing_pipeline.utils.io import read_json
+
+                    man = read_json(man_path, default={})
+                    items = man.get("items") if isinstance(man, dict) else None
+                    if not isinstance(items, dict) or not items:
+                        return
+                    speaker_refs: dict[str, Path] = {}
+                    for sid, rec in items.items():
+                        if not isinstance(rec, dict):
+                            continue
+                        safe_sid = Path(str(sid or "")).name.strip()
+                        if not safe_sid:
+                            continue
+                        ref_raw = str(rec.get("job_ref_path") or rec.get("ref_path") or "").strip()
+                        if not ref_raw:
+                            continue
+                        ref_path = Path(ref_raw).resolve()
+                        if not ref_path.exists() or not ref_path.is_file():
+                            continue
+                        speaker_refs[safe_sid] = ref_path
+                    if not speaker_refs:
+                        return
+                    from dubbing_pipeline.voice_store.embeddings import suggest_matches
+
+                    matches = suggest_matches(
+                        series_slug=series_slug,
+                        speaker_refs=speaker_refs,
+                        threshold=float(
+                            getattr(settings, "voice_match_threshold", 0.75) or 0.75
+                        ),
+                        device=_select_device(job.device),
+                    )
+                    if not matches:
+                        return
+                    existing = {
+                        str(rec.get("speaker_id") or ""): rec
+                        for rec in self.store.list_speaker_mappings(str(job_id))
+                        if isinstance(rec, dict)
+                    }
+                    suggested = 0
+                    for rec in matches:
+                        sid = str(rec.get("speaker_id") or "").strip()
+                        cslug = str(rec.get("character_slug") or "").strip()
+                        if not sid or not cslug:
+                            continue
+                        prev = existing.get(sid)
+                        if prev is not None and bool(prev.get("locked")):
+                            continue
+                        try:
+                            conf = float(rec.get("similarity") or 0.0)
+                        except Exception:
+                            conf = 0.0
+                        if prev is not None:
+                            try:
+                                prev_conf = float(prev.get("confidence") or 0.0)
+                            except Exception:
+                                prev_conf = 0.0
+                            if str(prev.get("character_slug") or "") == cslug and prev_conf >= conf:
+                                continue
+                        self.store.upsert_speaker_mapping(
+                            job_id=str(job_id),
+                            speaker_id=sid,
+                            character_slug=cslug,
+                            confidence=float(conf),
+                            locked=False,
+                            created_by="auto_match",
+                        )
+                        suggested += 1
+                    if suggested:
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] voice_auto_match suggested={suggested}"
+                        )
+                except Exception as ex:
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] voice_auto_match skipped: {ex}"
+                    )
+
             try:
                 if is_pass2_outer:
                     # Pass B must NOT redo diarization or ref extraction.
@@ -1107,8 +1194,6 @@ class JobQueue:
                     by_label.setdefault(lab, []).append((s, e, seg_wav))
 
                 show = str(settings.show_id) if settings.show_id else stem
-                sim = float(settings.char_sim_thresh)
-                thresholds = {"sim": sim}
                 lab_to_char: dict[str, str] = {}
                 # Tier-2A voice memory (optional, opt-in)
                 vm_store = None
@@ -1149,7 +1234,7 @@ class JobQueue:
                         vm_store = None
                         episode_key = ""
 
-                # Replace "representative wav" selection with canonical ref extractor (per diar label).
+                # Canonical speaker refs: use the ref extractor output per diar label.
                 label_refs: dict[str, Path] = {}
                 try:
                     from dubbing_pipeline.voice_refs.extract_refs import ExtractRefsConfig, extract_speaker_refs
@@ -1199,10 +1284,14 @@ class JobQueue:
                 except Exception:
                     label_refs = {}
 
-                for lab, segs in by_label.items():
+                for lab, _segs in by_label.items():
                     rep_wav = label_refs.get(str(lab))
                     if rep_wav is None:
-                        rep_wav = sorted(segs, key=lambda t: (t[1] - t[0]), reverse=True)[0][2]
+                        lab_to_char[lab] = lab
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] voice_ref missing for diar_label={lab}"
+                        )
+                        continue
                     if vm_store is not None:
                         # voice memory path (offline-first; falls back if embeddings unavailable)
                         try:
@@ -1233,25 +1322,7 @@ class JobQueue:
                             )
                             lab_to_char[lab] = lab
                     else:
-                        # legacy path (CharacterStore)
-                        store_chars = None
-                        try:
-                            store_chars = CharacterStore.default()
-                            store_chars.load()
-                        except Exception:
-                            store_chars = None
-                        if store_chars is None:
-                            lab_to_char[lab] = lab
-                            continue
-                        emb = ecapa_embedding(rep_wav, device=_select_device(job.device))
-                        if emb is None:
-                            lab_to_char[lab] = lab
-                            continue
-                        cid = store_chars.match_or_create(emb, show_id=show, thresholds=thresholds)
-                        store_chars.link_speaker_wav(cid, str(rep_wav))
-                        lab_to_char[lab] = cid
-                        with suppress(Exception):
-                            store_chars.save()
+                        lab_to_char[lab] = lab
 
                 # Persist episode mapping (best-effort)
                 if vm_store is not None and episode_key:
@@ -1429,6 +1500,7 @@ class JobQueue:
                             progress=1.0,
                             message="Done (pass2 skipped: missing transcribe checkpoint)",
                         )
+                        _auto_match_speakers_best_effort()
                         self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
                         return
                     if srt_out.exists() and srt_meta.exists() and stage_is_done(ckpt, "transcribe"):
@@ -2082,6 +2154,7 @@ class JobQueue:
                     progress=1.0,
                     message="Done (pass2 skipped: missing translate checkpoint)",
                 )
+                _auto_match_speakers_best_effort()
                 self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
                 return
             if is_pass2_outer and not do_translate:
@@ -2475,6 +2548,10 @@ class JobQueue:
                         else:
                             voice_mode_eff = str(settings.voice_mode)
                             voice_ref_dir_eff = settings.voice_ref_dir
+                            if not voice_ref_dir_eff:
+                                refs_dir = (base_dir / "analysis" / "voice_refs").resolve()
+                                if refs_dir.exists():
+                                    voice_ref_dir_eff = refs_dir
                             no_clone_eff = False
                         try:
                             curj = self.store.get(job_id)
@@ -3430,6 +3507,7 @@ class JobQueue:
                 output_srt=str(subs_srt_path) if subs_srt_path else "",
                 work_dir=str(base_dir),
             )
+            _auto_match_speakers_best_effort()
             if is_pass2_outer:
                 self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
                 with suppress(Exception):

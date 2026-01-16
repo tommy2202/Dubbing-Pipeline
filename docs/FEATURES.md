@@ -116,6 +116,25 @@ These are normalized and stored as:
   - `--voice-ref-dir <path>` (reference WAVs by speaker id)
   - `--voice-store <path>` (persistent storage for voice refs, if used)
 
+### Two-pass voice cloning (optional)
+- **What it does**: pass 1 runs without cloning to build per-speaker refs; pass 2 re-runs TTS+mix using those refs.
+- **Controls**:
+  - `VOICE_CLONE_TWO_PASS=1` (env)
+  - CLI: `--two-pass on`
+  - Web (admin): “Rerun pass 2” on the job page
+- **Outputs**:
+  - `Output/<stem>/analysis/voice_refs/` (per-speaker refs + manifest)
+  - `Output/<stem>/analysis/tts_manifest.json` (clone status + fallback reasons)
+
+### Series voice store + character mapping (optional)
+- **What it does**: map episode speakers to series characters and persist character refs across episodes.
+- **Controls**:
+  - Job page “Voices” tab (map speaker → character, promote ref)
+  - Optional suggestions: `VOICE_AUTO_MATCH=1`, `VOICE_MATCH_THRESHOLD=0.75`
+- **Outputs**:
+  - `VOICE_STORE/<series_slug>/characters/<character_slug>/ref.wav`
+  - DB-backed speaker mappings for each job (locked vs suggested)
+
 ### Character voice memory (optional; cross-episode consistency)
 - **What it does**: keeps a persistent “character → voice identity” map across jobs to reduce drift.
 - **Controls**:
