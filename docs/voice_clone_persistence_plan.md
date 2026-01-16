@@ -254,7 +254,7 @@ This refactor should be done in a backwards-compatible way:
     - instantiate the series-scoped store when enabled:
       - `series_slug = job.series_slug` (fallback to slug derived from series_title)
       - `store = VoiceMemoryStore(root=voice_store/<series_slug>/...)`
-    - for each diar label, compute representative wav (from dialogue stem segments), then:
+    - for each diar label, use the extracted **speaker ref wav** (canonical), then:
       - if UI has explicit mapping: `job.runtime.voice_map` mapping `SPEAKER_XX -> <character_id>`
       - else call `match_or_create_from_wav(...)` to pick/create a character id
     - persist `episodes/<episode_key>.json`:
@@ -306,8 +306,7 @@ Privacy rules:
 
 For each diarization cluster label (e.g. `SPEAKER_01`):
 
-1. Pick a representative sample:
-   - Prefer the best “clean” segment (from dialogue stem) or the extracted **speaker ref wav** once built.
+1. Use the extracted **speaker ref wav** (from `Output/<stem>/analysis/voice_refs/`).
 2. If job has explicit assignment (`job.runtime.voice_map`):
    - Use the assigned `character_id` directly.
 3. Else if voice memory is enabled:

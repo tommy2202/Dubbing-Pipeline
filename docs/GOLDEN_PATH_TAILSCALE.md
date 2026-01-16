@@ -120,6 +120,11 @@ Notes:
 - The server writes outputs under `Output/` and logs under `logs/` (the scripts print exact paths).
 - You can stop the server at any time; unfinished jobs are recovered on restart.
 
+Voice cloning note:
+- Jobs extract per-speaker refs automatically.
+- Map speakers to characters in the **Voices** tab; rerun **pass 2** (admin) to apply new mappings.
+- Optional suggestions show up when `VOICE_AUTO_MATCH=1`.
+
 ---
 
 ## Troubleshooting (quick)

@@ -89,6 +89,72 @@ dubbing-pipeline Input/Test.mp4 --diarizer off
 
 ---
 
+## Why cloning fell back
+
+Symptoms:
+- voices sound generic or not cloned
+- job “Voices” tab shows `fallback` or a fallback reason
+
+Where to check:
+- `Output/<stem>/analysis/tts_manifest.json` (see `speaker_report`)
+- Job page → **Voices** tab (clone status + fallback reason)
+
+Common causes:
+- XTTS not available (`xtts_unavailable`)
+- no usable speaker ref (`no_ref`)
+- pass 1 of two-pass (cloning intentionally disabled)
+- voice mode set to `preset` or `single`
+
+Fix:
+- ensure `VOICE_MODE=clone`
+- verify speaker refs exist under `Output/<stem>/analysis/voice_refs/`
+- if using two-pass, rerun **pass 2** after mapping voices
+
+---
+
+## Not enough clean speech
+
+Symptoms:
+- voice ref manifest warns `no_good_candidates` or `insufficient_audio`
+- cloning fails or uses fallbacks
+
+Where to check:
+- `Output/<stem>/analysis/voice_refs/manifest.json`
+
+Fix:
+- provide cleaner input audio
+- adjust `VOICE_REF_*` thresholds
+- upload a manual ref override in the job **Voices** tab
+
+---
+
+## Diarization on wrong stem
+
+Symptoms:
+- diarization uses the full mix instead of dialogue-only audio
+
+Where to check:
+- Job log line: `diarize input=<dialogue_stem|original> path=...`
+- CLI `diarization.json` fields: `diarization_input` and `diarization_input_rel`
+
+Fix:
+- enable separation: `MIX=enhanced` and `SEPARATION=demucs`
+- disable separation to force original audio
+
+---
+
+## Reset series voices
+
+If character refs drift or are wrong, reset the series voice store:
+
+```bash
+rm -rf data/voices/<series_slug>
+```
+
+See `docs/PRIVACY.md` for full voice data deletion.
+
+---
+
 ## Web login works but POST actions fail (CSRF)
 
 Symptoms:
