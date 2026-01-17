@@ -57,6 +57,17 @@ def _get_rl(request: Request) -> RateLimiter:
     return rl
 
 
+def _rate_limit_identity_ip(
+    request: Request, *, user_id: str, bucket: str, limit: int, per_seconds: int
+) -> None:
+    rl = _get_rl(request)
+    ip = request.client.host if request.client else "unknown"
+    if not rl.allow(f"{bucket}:user:{user_id}", limit=limit, per_seconds=per_seconds):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if not rl.allow(f"{bucket}:ip:{ip}", limit=limit, per_seconds=per_seconds):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+
 def _resolve_job_media_path(job, video_path: str | None = None) -> Path:
     # Allow explicit video_path only when it stays under this job's output roots.
     if video_path:
@@ -191,10 +202,14 @@ async def webrtc_offer(
     media_path = _resolve_job_media_path(job, video_path=str(video_path) if video_path else None)
 
     ip = request.client.host if request.client else "unknown"
-    # Rate limit offers (per IP) to avoid resource exhaustion.
-    rl = _get_rl(request)
-    if not rl.allow(f"webrtc:offer:ip:{ip}", limit=10, per_seconds=60):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    # Rate limit offers (per user + IP) to avoid resource exhaustion.
+    _rate_limit_identity_ip(
+        request,
+        user_id=str(ident.user.id),
+        bucket="webrtc:offer",
+        limit=10,
+        per_seconds=60,
+    )
 
     async with _peers_lock:
         active_for_ip = sum(1 for p in _peers.values() if p.ip == ip)

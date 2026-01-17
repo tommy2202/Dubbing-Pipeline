@@ -363,6 +363,20 @@ async def _global_queue_counts(request: Request, store) -> dict[str, int]:
     return {"running": int(running), "queued": int(queued)}
 
 
+def _rate_limit_identity_ip(
+    request: Request, ident: Identity, *, bucket: str, limit: int, per_seconds: int
+) -> None:
+    _enforce_rate_limit(
+        request, key=f"{bucket}:user:{ident.user.id}", limit=limit, per_seconds=per_seconds
+    )
+    _enforce_rate_limit(
+        request,
+        key=f"{bucket}:ip:{_client_ip_for_limits(request)}",
+        limit=limit,
+        per_seconds=per_seconds,
+    )
+
+
 def _client_ip_for_limits(request: Request) -> str:
     """
     Proxy-safe client IP for rate limiting.
@@ -612,6 +626,7 @@ async def uploads_status(
     request: Request, upload_id: str, ident: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
+    _rate_limit_identity_ip(request, ident, bucket="upload:status", limit=60, per_seconds=60)
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
@@ -2385,6 +2400,7 @@ async def list_jobs(
     ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
+    _rate_limit_identity_ip(request, ident, bucket="jobs:list", limit=60, per_seconds=60)
     st = status or state
     limit_i = max(1, min(200, int(limit)))
     offset_i = max(0, int(offset))
@@ -2676,6 +2692,7 @@ async def get_job(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
+    _rate_limit_identity_ip(request, _, bucket="jobs:status", limit=120, per_seconds=60)
     job = _require_job_access(store.get(id), _, allow_public=True)
     d = job.to_dict()
     # Attach checkpoint (best-effort) for stage breakdown.
@@ -2845,6 +2862,7 @@ async def rerun_two_pass_admin(
 @router.get("/api/jobs/events")
 async def jobs_events(request: Request, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
+    _rate_limit_identity_ip(request, _, bucket="jobs:events", limit=30, per_seconds=60)
 
     async def gen():
         last: dict[str, str] = {}
@@ -2986,6 +3004,7 @@ async def tail_logs(
     request: Request, id: str, n: int = 200, _: Identity = Depends(require_scope("read:job"))
 ) -> PlainTextResponse:
     store = _get_store(request)
+    _rate_limit_identity_ip(request, _, bucket="jobs:logs:tail", limit=120, per_seconds=60)
     _require_job_access(store.get(id), _)
     return PlainTextResponse(store.tail_log(id, n=n))
 
@@ -3001,6 +3020,7 @@ async def logs_alias(
 @router.get("/api/jobs/{id}/logs/stream")
 async def stream_logs(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
+    _rate_limit_identity_ip(request, _, bucket="jobs:logs:stream", limit=60, per_seconds=60)
     job = _require_job_access(store.get(id), _)
     log_path = Path(job.log_path) if job.log_path else None
     if log_path is None:
@@ -4833,6 +4853,7 @@ async def ws_job(websocket: WebSocket, id: str):
 @router.get("/events/jobs/{id}")
 async def sse_job(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
+    _rate_limit_identity_ip(request, _, bucket="jobs:event", limit=30, per_seconds=60)
     _require_job_access(store.get(id), _)
 
     async def gen():

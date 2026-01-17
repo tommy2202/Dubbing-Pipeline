@@ -70,13 +70,27 @@ def _get_rl(request: Request) -> RateLimiter:
     return rl
 
 
-@router.post("/login")
-async def login(request: Request) -> Response:
+def _rate_limit(
+    request: Request,
+    *,
+    bucket: str,
+    limit: int,
+    per_seconds: int,
+    user_key: str | None = None,
+    include_ip: bool = True,
+) -> None:
     rl = _get_rl(request)
     ip = _client_ip(request)
-    if not rl.allow(f"auth:login:ip:{ip}", limit=5, per_seconds=60):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if include_ip:
+        if not rl.allow(f"{bucket}:ip:{ip}", limit=limit, per_seconds=per_seconds):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if user_key:
+        if not rl.allow(f"{bucket}:user:{user_key}", limit=limit, per_seconds=per_seconds):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
+
+@router.post("/login")
+async def login(request: Request) -> Response:
     body: dict[str, Any] = {}
     ctype = (request.headers.get("content-type") or "").lower()
     if "application/json" in ctype:
@@ -107,8 +121,10 @@ async def login(request: Request) -> Response:
         session = bool(session_val)
 
     # Brute-force protection: also limit by username (best-effort, avoids user enumeration by using same error msg).
-    if username and not rl.allow(f"auth:login:user:{username.lower()}", limit=5, per_seconds=60):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if username:
+        _rate_limit(request, bucket="auth:login", limit=5, per_seconds=60, user_key=username.lower())
+    else:
+        _rate_limit(request, bucket="auth:login", limit=5, per_seconds=60)
 
     store = _get_store(request)
     user = store.get_user_by_username(username)
@@ -279,10 +295,7 @@ async def login(request: Request) -> Response:
 
 @router.post("/refresh")
 async def refresh(request: Request) -> Response:
-    rl = _get_rl(request)
-    ip = _client_ip(request)
-    if not rl.allow(f"auth:refresh:ip:{ip}", limit=5, per_seconds=60):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    _rate_limit(request, bucket="auth:refresh", limit=10, per_seconds=60)
 
     rt = request.cookies.get("refresh")
     if not rt:
@@ -313,6 +326,14 @@ async def refresh(request: Request) -> Response:
                 meta={"reason": "unknown_user"},
             )
             raise HTTPException(status_code=401, detail="Unknown user")
+        _rate_limit(
+            request,
+            bucket="auth:refresh",
+            limit=10,
+            per_seconds=60,
+            user_key=str(user.id),
+            include_ip=False,
+        )
     except RefreshTokenError as ex:
         audit_event(
             "auth.refresh_failed",
