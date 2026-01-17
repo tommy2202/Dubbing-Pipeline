@@ -116,5 +116,7 @@ jobs:
           python scripts/e2e_ffmpeg_cases.py
           python scripts/e2e_upload_resume.py
           python scripts/e2e_gpu_sanity.py
+          python scripts/e2e_concurrency_two_users.py
+          python scripts/e2e_job_recovery.py
           python scripts/collect_diagnostics.py
 

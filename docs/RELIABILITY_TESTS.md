@@ -19,6 +19,8 @@ python3 scripts/e2e_smoke_web.py
 python3 scripts/e2e_ffmpeg_cases.py
 python3 scripts/e2e_upload_resume.py
 python3 scripts/e2e_gpu_sanity.py
+python3 scripts/e2e_concurrency_two_users.py
+python3 scripts/e2e_job_recovery.py
 python3 scripts/collect_diagnostics.py
 ```
 
@@ -84,12 +86,14 @@ python3 scripts/collect_diagnostics.py
 - Disk fills up during output generation.
 - Worker crash while a job is running.
 
-**What to verify (manual / operator runbook)**
-- Start a job, then:
-  - Restart the server process.
-  - Confirm the job returns to **QUEUED** (recovery) and can be resumed.
-  - Confirm job logs include a clear “Recovered after restart” message.
-- Confirm the output directory has enough free space and is writable.
+**Tests**
+- `scripts/e2e_job_recovery.py` (automated, lightweight)
+- Optional manual: restart the server during a real job
+
+**Pass criteria**
+- `e2e_job_recovery.py` reports OK and shows queued recovery state.
+- Manual: job returns to **QUEUED** after restart and logs “Recovered after restart”.
+  - Output dir remains writable and has free space.
 
 **Pass criteria**
 - No “stuck RUNNING forever” after restart.
@@ -103,11 +107,25 @@ python3 scripts/collect_diagnostics.py
 
 **Test**
 - `scripts/e2e_upload_resume.py`
+  - Set `SIMULATE_NETWORK_LOSS=1` to enable flaky upload retries.
 
 **Pass criteria**
 - Upload session can be resumed after interruption (new client/session).
 - Re-sending a previously uploaded chunk is **idempotent** (server accepts and does not double-count bytes).
 - Finalization succeeds with a correct SHA256.
+
+## Scenario: multi-user concurrency sanity
+
+**Why it fails in the real world**
+- Dispatch logic can ignore global caps or user limits under load.
+- Two users submitting at the same time can expose scheduler race bugs.
+
+**Test**
+- `scripts/e2e_concurrency_two_users.py`
+
+**Pass criteria**
+- Only one job dispatches at a time when `MAX_CONCURRENCY_GLOBAL=1`.
+- Second job dispatches only after the first is marked done.
 
 ## CI integration (nightly)
 
