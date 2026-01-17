@@ -212,6 +212,11 @@ class AutoQueueBackend(QueueBackend):
             user_id=user_id, max_running=max_running, max_queued=max_queued
         )
 
+    async def global_counts(self) -> dict[str, int]:
+        if self._redis_allowed() and self._redis is not None and self._redis_active():
+            return await self._redis.global_counts()
+        return await self._fallback.global_counts()
+
     async def before_job_run(self, *, job_id: str, user_id: str | None) -> bool:
         if self._redis_allowed() and self._redis is not None and self._redis_active():
             return await self._redis.before_job_run(job_id=job_id, user_id=user_id)

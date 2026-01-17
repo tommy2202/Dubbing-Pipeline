@@ -90,6 +90,9 @@ def _resolve_limits_for_user(*, user_role: Role, user_quota: dict[str, int] | No
     """
     s = get_settings()
     max_active = max(0, int(getattr(s, "max_active_jobs_per_user", 1)))
+    max_running_cfg = max(0, int(getattr(s, "max_running_jobs_per_user", 0) or 0))
+    if max_running_cfg > 0:
+        max_active = max_running_cfg
     max_queued = max(0, int(getattr(s, "max_queued_jobs_per_user", 5)))
     if user_role == Role.admin and not user_quota:
         # Admin default: allow (policy safety remains for high-mode admin-only and global caps).
@@ -112,6 +115,7 @@ def evaluate_dispatch(
     # Current counters from the queue backend (Redis in L2, local scan in fallback).
     running: int,
     queued: int,
+    global_running: int | None = None,
     # Global counters (Redis in L2). Only required for enforcing global high-mode cap.
     global_high_running: int | None = None,
     # Optional per-user quota overrides (admin-controlled).
@@ -134,8 +138,13 @@ def evaluate_dispatch(
 
     max_active, max_queued = _resolve_limits_for_user(user_role=user_role, user_quota=user_quota)
     # Safety net: do not start running if user already at max_active.
-    if user_role != Role.admin and max_active > 0 and int(running) >= int(max_active):
+    if (user_role != Role.admin or user_quota) and max_active > 0 and int(running) >= int(max_active):
         reasons.append("user_running_cap")
+        return DispatchDecision(ok=False, reasons=reasons, retry_after_s=5.0)
+
+    max_running_global = max(0, int(getattr(s, "max_running_jobs_global", 0) or 0))
+    if max_running_global > 0 and int(global_running or 0) >= max_running_global:
+        reasons.append("global_running_cap")
         return DispatchDecision(ok=False, reasons=reasons, retry_after_s=5.0)
 
     # Global high-mode running cap (cross-instance, Redis-backed).
@@ -160,6 +169,8 @@ def evaluate_submission(
     job_id: str | None = None,
     # Optional: override counts from a queue backend (Redis L2) to avoid stale per-process counts.
     counts_override: dict[str, int] | None = None,
+    # Optional: global counts for queue depth/global caps.
+    global_counts: dict[str, int] | None = None,
     # Optional: per-user quota overrides (admin-controlled; queue backend stores these).
     user_quota: dict[str, int] | None = None,
 ) -> PolicyResult:
@@ -183,9 +194,23 @@ def evaluate_submission(
         today = int(counts["today"])
     inflight = running + queued
 
+    if isinstance(global_counts, dict):
+        running_global = int(global_counts.get("running") or 0)
+        queued_global = int(global_counts.get("queued") or 0)
+    else:
+        running_global = 0
+        queued_global = 0
+        for j in jobs:
+            if j.state == JobState.RUNNING:
+                running_global += 1
+            if j.state == JobState.QUEUED:
+                queued_global += 1
+
     max_active, max_queued = _resolve_limits_for_user(user_role=user_role, user_quota=user_quota)
     daily_cap = max(0, int(getattr(s, "daily_job_cap", 0)))
     high_admin_only = bool(getattr(s, "high_mode_admin_only", True))
+    max_running_global = max(0, int(getattr(s, "max_running_jobs_global", 0) or 0))
+    max_queue_depth_global = max(0, int(getattr(s, "max_queue_depth_global", 0) or 0))
 
     reasons: list[str] = []
 
@@ -248,8 +273,75 @@ def evaluate_submission(
             counts={"running": running, "queued": queued, "inflight": inflight},
         )
 
+    # Per-user running cap (submission guard).
+    if (user_role != Role.admin or user_quota) and max_active > 0 and running >= max_active:
+        reasons.append("user_running_cap")
+        _audit_policy(
+            "policy.job_rejected",
+            user_id=user_id,
+            job_id=job_id,
+            meta={
+                "reason": "user_running_cap",
+                "running": running,
+                "max_running": max_active,
+                "requested_mode": requested_mode,
+            },
+        )
+        return PolicyResult(
+            ok=False,
+            status_code=429,
+            detail=f"Too many running jobs (running={running}, limit={max_active})",
+            effective_mode=mode,
+            effective_device=device,
+            reasons=reasons,
+            counts={"running": running, "queued": queued, "inflight": inflight},
+        )
+
+    if max_running_global > 0 and running_global >= max_running_global:
+        reasons.append("global_running_cap")
+        _audit_policy(
+            "policy.job_rejected",
+            user_id=user_id,
+            job_id=job_id,
+            meta={
+                "reason": "global_running_cap",
+                "running_global": running_global,
+                "max_running_global": max_running_global,
+            },
+        )
+        return PolicyResult(
+            ok=False,
+            status_code=503,
+            detail="Server busy: running jobs limit reached",
+            effective_mode=mode,
+            effective_device=device,
+            reasons=reasons,
+            counts={"running": running, "queued": queued, "inflight": inflight},
+        )
+
+    if max_queue_depth_global > 0 and queued_global >= max_queue_depth_global:
+        reasons.append("global_queue_depth")
+        _audit_policy(
+            "policy.job_rejected",
+            user_id=user_id,
+            job_id=job_id,
+            meta={
+                "reason": "global_queue_depth",
+                "queued_global": queued_global,
+                "max_queue_depth_global": max_queue_depth_global,
+            },
+        )
+        return PolicyResult(
+            ok=False,
+            status_code=429,
+            detail="Server busy: queue depth limit reached",
+            effective_mode=mode,
+            effective_device=device,
+            reasons=reasons,
+            counts={"running": running, "queued": queued, "inflight": inflight},
+        )
+
     # Per-user queued cap: safe default for unknown concurrency.
-    # Note: running cap is enforced at dispatch time (safety net) so users can queue while one runs.
     if user_role != Role.admin and max_queued > 0 and queued >= max_queued:
         reasons.append("user_queued_cap")
         _audit_policy(

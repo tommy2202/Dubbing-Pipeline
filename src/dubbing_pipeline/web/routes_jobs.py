@@ -5,6 +5,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import math
 import re
 import time
 from contextlib import suppress
@@ -32,7 +33,7 @@ from dubbing_pipeline.jobs.limits import get_limits, used_minutes_today
 from dubbing_pipeline.jobs.models import Job, JobState, new_id, now_utc
 from dubbing_pipeline.jobs.policy import evaluate_submission
 from dubbing_pipeline.ops.metrics import jobs_queued, pipeline_job_total
-from dubbing_pipeline.ops.storage import ensure_free_space
+from dubbing_pipeline.ops.storage import ensure_free_space, ensure_free_space_bytes
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.runtime.scheduler import JobRecord, Scheduler
 from dubbing_pipeline.security.crypto import (
@@ -42,9 +43,14 @@ from dubbing_pipeline.security.crypto import (
     is_encrypted_path,
     materialize_decrypted,
 )
+from dubbing_pipeline.security.ownership import (
+    require_file_owner_or_admin,
+    require_job_owner_or_admin,
+    require_library_owner_or_admin,
+)
 from dubbing_pipeline.utils.crypto import verify_secret
 from dubbing_pipeline.utils.ffmpeg_safe import FFmpegError, ffprobe_media_info
-from dubbing_pipeline.utils.log import request_id_var
+from dubbing_pipeline.utils.log import logger, request_id_var
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 
 router = APIRouter()
@@ -97,14 +103,25 @@ def _can_access_series(store, *, ident: Identity, series_slug: str) -> bool:
     try:
         row = con.execute(
             """
-            SELECT 1 FROM job_library
+            SELECT owner_user_id, visibility FROM job_library
             WHERE series_slug = ?
               AND (owner_user_id = ? OR visibility = 'public')
             LIMIT 1;
             """,
             (slug, str(ident.user.id)),
         ).fetchone()
-        return row is not None
+        if row is None:
+            return False
+        require_library_owner_or_admin(
+            ident.user,
+            {
+                "owner_user_id": row["owner_user_id"],
+                "visibility": row["visibility"],
+                "series_slug": slug,
+            },
+            allow_public=True,
+        )
+        return True
     finally:
         con.close()
 
@@ -123,19 +140,33 @@ def _can_edit_series(store, *, ident: Identity, series_slug: str) -> bool:
     con = store._conn()
     try:
         row = con.execute(
-            "SELECT 1 FROM job_library WHERE series_slug = ? AND owner_user_id = ? LIMIT 1;",
+            """
+            SELECT owner_user_id, visibility FROM job_library
+            WHERE series_slug = ? AND owner_user_id = ?
+            LIMIT 1;
+            """,
             (slug, str(ident.user.id)),
         ).fetchone()
-        return row is not None
+        if row is None:
+            return False
+        require_library_owner_or_admin(
+            ident.user,
+            {
+                "owner_user_id": row["owner_user_id"],
+                "visibility": row["visibility"],
+                "series_slug": slug,
+            },
+            allow_public=False,
+        )
+        return True
     finally:
         con.close()
 
 
-def _assert_job_owner_or_admin(job: Job, ident: Identity) -> None:
-    if str(getattr(job, "owner_id", "") or "") != str(ident.user.id) and str(
-        getattr(ident.user.role, "value", ident.user.role)
-    ) != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
+def _require_job_access(job: Job | None, ident: Identity, *, allow_public: bool = False) -> Job:
+    require_job_owner_or_admin(ident.user, job, allow_public=allow_public)
+    assert job is not None
+    return job
 
 _MAX_IMPORT_TEXT_BYTES = 2 * 1024 * 1024  # 2MB per imported text file (SRT/JSON)
 
@@ -208,14 +239,142 @@ def _upload_lock(upload_id: str) -> asyncio.Lock:
     return lk
 
 
-def _safe_filename(name: str) -> str:
-    base = Path(str(name or "")).name.strip() or "upload.mp4"
+def _allowed_upload_exts() -> set[str]:
+    s = get_settings()
+    raw = str(getattr(s, "allowed_upload_exts", "") or "").strip()
+    if not raw:
+        return set(_ALLOWED_UPLOAD_EXTS)
+    out: set[str] = set()
+    for part in re.split(r"[,\s]+", raw):
+        p = str(part or "").strip().lower()
+        if not p:
+            continue
+        if not p.startswith("."):
+            p = f".{p}"
+        out.add(p)
+    return out or set(_ALLOWED_UPLOAD_EXTS)
+
+
+def _sanitize_upload_filename(name: str, allowed_exts: set[str]) -> str:
+    raw = str(name or "").strip()
+    raw = raw.replace("\\", "/")
+    if raw and ".." in Path(raw).parts:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    base = Path(raw).name.strip() or "upload.mp4"
     base = base.replace("\x00", "")
-    # Keep it simple; allow common chars.
-    base = re.sub(r"[^A-Za-z0-9._-]+", "_", base)
-    if len(base) > 160:
-        base = base[:160]
-    return base
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._")
+    if not base:
+        base = "upload.mp4"
+    ext = Path(base).suffix.lower()
+    stem = Path(base).stem.strip("._")
+    if not stem:
+        stem = "upload"
+    if not ext:
+        if ".mp4" in allowed_exts:
+            ext = ".mp4"
+        else:
+            raise HTTPException(status_code=400, detail="Missing file extension")
+    if allowed_exts and ext not in allowed_exts:
+        raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
+    max_len = 160
+    trim_len = max(1, max_len - len(ext))
+    stem = stem[:trim_len]
+    return f"{stem}{ext}"
+
+
+def _safe_filename(name: str) -> str:
+    return _sanitize_upload_filename(name, _allowed_upload_exts())
+
+
+def _max_upload_bytes(limits) -> int:
+    s = get_settings()
+    try:
+        cap = int(getattr(s, "max_upload_bytes", 0) or 0)
+    except Exception:
+        cap = 0
+    if cap > 0:
+        return cap
+    try:
+        return int(limits.max_upload_mb) * 1024 * 1024
+    except Exception:
+        return 0
+
+
+def _max_upload_bytes_per_user() -> int:
+    s = get_settings()
+    try:
+        cap = int(getattr(s, "max_upload_bytes_per_user", 0) or 0)
+    except Exception:
+        cap = 0
+    return cap if cap > 0 else 0
+
+
+def _inflight_upload_bytes(store, user_id: str, *, mode: str) -> int:
+    total = 0
+    for rec in store.list_uploads(owner_id=str(user_id), include_completed=False):
+        try:
+            if mode == "received":
+                total += int(rec.get("received_bytes") or 0)
+            else:
+                total += int(rec.get("total_bytes") or 0)
+        except Exception:
+            continue
+    return int(total)
+
+
+def _log_upload_reject(
+    *,
+    request: Request,
+    upload_id: str,
+    user_id: str,
+    bytes_received: int,
+    reason: str,
+    detail: str,
+) -> None:
+    try:
+        logger.warning(
+            "upload_rejected",
+            upload_id=str(upload_id),
+            user_id=str(user_id),
+            request_id=str(request_id_var.get() or ""),
+            bytes_received=int(bytes_received),
+            reason=str(reason),
+            detail=str(detail),
+        )
+    except Exception:
+        return
+
+
+async def _global_queue_counts(request: Request, store) -> dict[str, int]:
+    qb = getattr(request.app.state, "queue_backend", None)
+    if qb is not None:
+        with suppress(Exception):
+            return await qb.global_counts()
+    running = 0
+    queued = 0
+    try:
+        for j in store.list(limit=5000):
+            if j.state == JobState.RUNNING:
+                running += 1
+            if j.state == JobState.QUEUED:
+                queued += 1
+    except Exception:
+        return {"running": 0, "queued": 0}
+    return {"running": int(running), "queued": int(queued)}
+
+
+def _rate_limit_identity_ip(
+    request: Request, ident: Identity, *, bucket: str, limit: int, per_seconds: int
+) -> None:
+    _enforce_rate_limit(
+        request, key=f"{bucket}:user:{ident.user.id}", limit=limit, per_seconds=per_seconds
+    )
+    _enforce_rate_limit(
+        request,
+        key=f"{bucket}:ip:{_client_ip_for_limits(request)}",
+        limit=limit,
+        per_seconds=per_seconds,
+    )
 
 
 def _client_ip_for_limits(request: Request) -> str:
@@ -343,27 +502,72 @@ async def uploads_init(
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
-    filename = _safe_filename(str(body.get("filename") or "upload.mp4"))
+    allowed_exts = _allowed_upload_exts()
+    filename = _sanitize_upload_filename(str(body.get("filename") or "upload.mp4"), allowed_exts)
     ext = Path(filename).suffix.lower()
-    if ext not in _ALLOWED_UPLOAD_EXTS:
-        raise HTTPException(
-            status_code=400, detail=f"Unsupported file extension: {ext or '(none)'}"
-        )
     try:
         total = int(body.get("total_bytes") or 0)
     except Exception:
         total = 0
     if total <= 0:
         raise HTTPException(status_code=400, detail="total_bytes required")
-    max_bytes = int(limits.max_upload_mb) * 1024 * 1024
-    if total > max_bytes:
-        raise HTTPException(status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)")
+    max_bytes = _max_upload_bytes(limits)
+    if max_bytes and total > max_bytes:
+        with suppress(Exception):
+            audit_event(
+                "upload.reject",
+                request=request,
+                user_id=ident.user.id,
+                meta={"upload_id": "", "reason": "max_upload_bytes", "total_bytes": int(total)},
+            )
+        _log_upload_reject(
+            request=request,
+            upload_id="",
+            user_id=str(ident.user.id),
+            bytes_received=0,
+            reason="max_upload_bytes",
+            detail=f"Upload too large (>{max_bytes} bytes)",
+        )
+        raise HTTPException(status_code=413, detail="Upload too large")
+    per_user_cap = _max_upload_bytes_per_user()
+    if per_user_cap:
+        inflight_total = _inflight_upload_bytes(store, ident.user.id, mode="total")
+        if inflight_total + total > per_user_cap:
+            with suppress(Exception):
+                audit_event(
+                    "upload.reject",
+                    request=request,
+                    user_id=ident.user.id,
+                    meta={
+                        "upload_id": "",
+                        "reason": "max_upload_bytes_per_user",
+                        "total_bytes": int(total),
+                        "inflight_bytes": int(inflight_total),
+                    },
+                )
+            _log_upload_reject(
+                request=request,
+                upload_id="",
+                user_id=str(ident.user.id),
+                bytes_received=int(inflight_total),
+                reason="max_upload_bytes_per_user",
+                detail="Per-user upload bytes exceeded",
+            )
+            raise HTTPException(status_code=413, detail="Per-user upload bytes exceeded")
     mime = str(body.get("mime") or "").lower().strip()
     if mime and mime not in _ALLOWED_UPLOAD_MIME:
         raise HTTPException(status_code=400, detail=f"Unsupported upload content-type: {mime}")
 
     up_dir = _input_uploads_dir()
     up_dir.mkdir(parents=True, exist_ok=True)
+    s = get_settings()
+    min_bytes = int(getattr(s, "min_free_disk_bytes", 0) or 0)
+    if min_bytes > 0:
+        ensure_free_space_bytes(min_bytes=min_bytes, path=up_dir)
+    else:
+        min_gb = int(getattr(s, "min_free_gb", 0) or 0)
+        if min_gb > 0:
+            ensure_free_space(min_gb=min_gb, path=up_dir)
     upload_id = _new_short_id("up_")
     part_path = (up_dir / f"{upload_id}.part").resolve()
     final_name = f"{upload_id}_{filename}"
@@ -400,10 +604,20 @@ async def uploads_init(
         user_id=ident.user.id,
         meta={"upload_id": upload_id, "total_bytes": int(total), "filename": filename},
     )
+    with suppress(Exception):
+        logger.info(
+            "upload_init",
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            request_id=str(request_id_var.get() or ""),
+            bytes_received=0,
+        )
     return {
         "upload_id": upload_id,
         "chunk_bytes": int(chunk_bytes),
         "max_upload_mb": int(limits.max_upload_mb),
+        "max_upload_bytes": int(max_bytes),
+        "max_upload_bytes_per_user": int(per_user_cap),
     }
 
 
@@ -412,14 +626,21 @@ async def uploads_status(
     request: Request, upload_id: str, ident: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
+    _rate_limit_identity_ip(request, ident, bucket="upload:status", limit=60, per_seconds=60)
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
-    if (
-        str(rec.get("owner_id") or "") != str(ident.user.id)
-        and str(ident.user.role.value) != "admin"
-    ):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    require_file_owner_or_admin(
+        ident.user,
+        {
+            "owner_id": rec.get("owner_id"),
+            "visibility": "private",
+            "job_id": None,
+            "path": rec.get("final_path") or rec.get("part_path") or "",
+            "rel_path": f"upload:{upload_id}",
+        },
+        allow_public=False,
+    )
     return {
         "upload_id": str(rec.get("id") or upload_id),
         "total_bytes": int(rec.get("total_bytes") or 0),
@@ -466,18 +687,47 @@ async def uploads_chunk(
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
-    if (
-        str(rec.get("owner_id") or "") != str(ident.user.id)
-        and str(ident.user.role.value) != "admin"
-    ):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    require_file_owner_or_admin(
+        ident.user,
+        {
+            "owner_id": rec.get("owner_id"),
+            "visibility": "private",
+            "job_id": None,
+            "path": rec.get("final_path") or rec.get("part_path") or "",
+            "rel_path": f"upload:{upload_id}",
+        },
+        allow_public=False,
+    )
     if bool(rec.get("completed")):
         return {"ok": True, "already_completed": True}
 
     total = int(rec.get("total_bytes") or 0)
     part_path = Path(str(rec.get("part_path") or "")).resolve()
+    up_root = _input_uploads_dir().resolve()
+    try:
+        part_path.relative_to(up_root)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid upload path") from None
     if total <= 0 or not str(part_path):
         raise HTTPException(status_code=400, detail="Invalid upload session")
+    max_bytes = _max_upload_bytes(get_limits())
+    if max_bytes and total > max_bytes:
+        with suppress(Exception):
+            audit_event(
+                "upload.reject",
+                request=request,
+                user_id=ident.user.id,
+                meta={"upload_id": upload_id, "reason": "max_upload_bytes", "total_bytes": int(total)},
+            )
+        _log_upload_reject(
+            request=request,
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            bytes_received=int(rec.get("received_bytes") or 0),
+            reason="max_upload_bytes",
+            detail="Upload too large",
+        )
+        raise HTTPException(status_code=413, detail="Upload too large")
 
     body = await request.body()
     sha = (request.headers.get("x-chunk-sha256") or "").strip().lower()
@@ -508,6 +758,17 @@ async def uploads_chunk(
         received = rec2.get("received")
         if not isinstance(received, dict):
             received = {}
+        try:
+            chunk_bytes = int(rec2.get("chunk_bytes") or 0)
+        except Exception:
+            chunk_bytes = 0
+        if chunk_bytes > 0:
+            expected_offset = int(idx) * int(chunk_bytes)
+            if int(offset) != expected_offset:
+                raise HTTPException(status_code=409, detail="chunk offset does not match index")
+            expected_size = min(int(chunk_bytes), int(total) - expected_offset)
+            if len(body) != expected_size:
+                raise HTTPException(status_code=400, detail="chunk size mismatch")
 
         prev = received.get(str(idx))
         if (
@@ -521,6 +782,40 @@ async def uploads_chunk(
                 "received_bytes": int(rec2.get("received_bytes") or 0),
                 "dedup": True,
             }
+        if isinstance(prev, dict):
+            raise HTTPException(status_code=409, detail="chunk already received with different data")
+        expected_next = 0
+        while str(expected_next) in received:
+            expected_next += 1
+        if int(idx) != expected_next:
+            raise HTTPException(
+                status_code=409,
+                detail=f"chunk out of order (expected index {expected_next})",
+            )
+        per_user_cap = _max_upload_bytes_per_user()
+        if per_user_cap:
+            inflight_received = _inflight_upload_bytes(store, ident.user.id, mode="received")
+            if inflight_received + len(body) > per_user_cap:
+                with suppress(Exception):
+                    audit_event(
+                        "upload.reject",
+                        request=request,
+                        user_id=ident.user.id,
+                        meta={
+                            "upload_id": upload_id,
+                            "reason": "max_upload_bytes_per_user",
+                            "received_bytes": int(inflight_received),
+                        },
+                    )
+                _log_upload_reject(
+                    request=request,
+                    upload_id=str(upload_id),
+                    user_id=str(ident.user.id),
+                    bytes_received=int(inflight_received),
+                    reason="max_upload_bytes_per_user",
+                    detail="Per-user upload bytes exceeded",
+                )
+                raise HTTPException(status_code=413, detail="Per-user upload bytes exceeded")
 
         part_path.parent.mkdir(parents=True, exist_ok=True)
         # random-access write
@@ -545,6 +840,14 @@ async def uploads_chunk(
             request=request,
             user_id=ident.user.id,
             meta={"upload_id": upload_id, "index": int(idx), "size": int(len(body))},
+        )
+    with suppress(Exception):
+        logger.info(
+            "upload_chunk",
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            request_id=str(request_id_var.get() or ""),
+            bytes_received=int(received_bytes),
         )
     return {"ok": True, "received_bytes": int(received_bytes)}
 
@@ -575,11 +878,17 @@ async def uploads_complete(
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
-    if (
-        str(rec.get("owner_id") or "") != str(ident.user.id)
-        and str(ident.user.role.value) != "admin"
-    ):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    require_file_owner_or_admin(
+        ident.user,
+        {
+            "owner_id": rec.get("owner_id"),
+            "visibility": "private",
+            "job_id": None,
+            "path": rec.get("final_path") or rec.get("part_path") or "",
+            "rel_path": f"upload:{upload_id}",
+        },
+        allow_public=False,
+    )
 
     body = await request.json()
     if not isinstance(body, dict):
@@ -595,8 +904,34 @@ async def uploads_complete(
         total = int(rec2.get("total_bytes") or 0)
         part_path = Path(str(rec2.get("part_path") or "")).resolve()
         final_path = Path(str(rec2.get("final_path") or "")).resolve()
+        up_root = _input_uploads_dir().resolve()
+        try:
+            part_path.relative_to(up_root)
+            final_path.relative_to(up_root)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid upload path") from None
         if total <= 0 or not part_path.exists():
             raise HTTPException(status_code=400, detail="Upload missing data")
+
+        received = rec2.get("received")
+        if not isinstance(received, dict):
+            raise HTTPException(status_code=400, detail="Upload missing chunks")
+        try:
+            chunk_bytes = int(rec2.get("chunk_bytes") or 0)
+        except Exception:
+            chunk_bytes = 0
+        if chunk_bytes > 0:
+            expected_count = int(math.ceil(float(total) / float(chunk_bytes)))
+            for idx in range(expected_count):
+                rec_i = received.get(str(idx))
+                if not isinstance(rec_i, dict):
+                    raise HTTPException(status_code=400, detail="Upload incomplete (missing chunk)")
+                expected_offset = int(idx) * int(chunk_bytes)
+                expected_size = min(int(chunk_bytes), int(total) - expected_offset)
+                if int(rec_i.get("offset") or -1) != expected_offset:
+                    raise HTTPException(status_code=400, detail="Upload chunk offset mismatch")
+                if int(rec_i.get("size") or -1) != expected_size:
+                    raise HTTPException(status_code=400, detail="Upload chunk size mismatch")
 
         # Verify file size
         st = part_path.stat()
@@ -669,6 +1004,14 @@ async def uploads_complete(
         user_id=ident.user.id,
         meta={"upload_id": upload_id, "final_path": str(final_path.name)},
     )
+    with suppress(Exception):
+        logger.info(
+            "upload_complete",
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            request_id=str(request_id_var.get() or ""),
+            bytes_received=int(rec.get("received_bytes") or total),
+        )
     return {"ok": True, "video_path": str(final_path)}
 
 
@@ -709,7 +1052,7 @@ async def list_server_files(
                     }
                 )
             elif p.is_file():
-                if p.suffix.lower() not in {".mp4", ".mkv", ".mov", ".webm", ".m4v"}:
+                if p.suffix.lower() not in _allowed_upload_exts():
                     continue
                 st = p.stat()
                 items.append(
@@ -1092,7 +1435,11 @@ async def create_job(
     s = get_settings()
     out_root = Path(str(getattr(store, "db_path", Path(s.output_dir)))).resolve().parent
     out_root.mkdir(parents=True, exist_ok=True)
-    ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
+    min_bytes = int(getattr(s, "min_free_disk_bytes", 0) or 0)
+    if min_bytes > 0:
+        ensure_free_space_bytes(min_bytes=min_bytes, path=out_root)
+    else:
+        ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
 
     scheduler = _get_scheduler(request)
     limits = get_limits()
@@ -1166,6 +1513,17 @@ async def create_job(
             urec = store.get_upload(upload_id)
             if not urec or not bool(urec.get("completed")):
                 raise HTTPException(status_code=400, detail="upload_id not completed")
+            require_file_owner_or_admin(
+                ident.user,
+                {
+                    "owner_id": urec.get("owner_id"),
+                    "visibility": "private",
+                    "job_id": None,
+                    "path": urec.get("final_path") or urec.get("part_path") or "",
+                    "rel_path": f"upload:{upload_id}",
+                },
+                allow_public=False,
+            )
             vp = str(urec.get("final_path") or "")
             up_root = _input_uploads_dir().resolve()
             video_path = Path(vp).resolve()
@@ -1300,13 +1658,19 @@ async def create_job(
                 )
             up_dir = _input_uploads_dir()
             up_dir.mkdir(parents=True, exist_ok=True)
+            min_bytes = int(getattr(get_settings(), "min_free_disk_bytes", 0) or 0)
+            if min_bytes > 0:
+                ensure_free_space_bytes(min_bytes=min_bytes, path=up_dir)
+            else:
+                min_gb = int(getattr(get_settings(), "min_free_gb", 0) or 0)
+                if min_gb > 0:
+                    ensure_free_space(min_gb=min_gb, path=up_dir)
             jid = new_id()
             name = getattr(upload, "filename", "") or ""
-            ext = (("." + name.rsplit(".", 1)[-1]) if "." in name else ".mp4").lower()[:8]
-            if ext not in _ALLOWED_UPLOAD_EXTS:
-                raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
+            safe_name = _sanitize_upload_filename(name, _allowed_upload_exts())
+            ext = Path(safe_name).suffix.lower()
             dest = up_dir / f"{jid}{ext}"
-            max_bytes = int(limits.max_upload_mb) * 1024 * 1024
+            max_bytes = _max_upload_bytes(limits)
             written = 0
             try:
                 with dest.open("wb") as f:
@@ -1315,11 +1679,16 @@ async def create_job(
                         if not chunk:
                             break
                         written += len(chunk)
-                        if written > max_bytes:
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Upload too large (>{limits.max_upload_mb}MB)",
+                        if max_bytes and written > max_bytes:
+                            _log_upload_reject(
+                                request=request,
+                                upload_id=str(jid),
+                                user_id=str(ident.user.id),
+                                bytes_received=int(written),
+                                reason="max_upload_bytes",
+                                detail="Upload too large",
                             )
+                            raise HTTPException(status_code=413, detail="Upload too large")
                         f.write(chunk)
             except HTTPException:
                 with suppress(Exception):
@@ -1329,7 +1698,7 @@ async def create_job(
 
     assert video_path is not None
     # Extension allowlist (defense-in-depth). Encrypted-at-rest inputs are allowed (validated via ffprobe after decrypt).
-    if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
+    if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _allowed_upload_exts():
         raise HTTPException(status_code=400, detail="Unsupported file type")
     # Validate using ffprobe (no user-controlled args).
     try:
@@ -1351,11 +1720,16 @@ async def create_job(
     qb = getattr(request.app.state, "queue_backend", None)
     counts_override = None
     user_quota = None
+    global_counts = None
     if qb is not None:
         with suppress(Exception):
             counts_override = await qb.user_counts(user_id=str(ident.user.id))
         with suppress(Exception):
             user_quota = await qb.user_quota(user_id=str(ident.user.id))
+        with suppress(Exception):
+            global_counts = await qb.global_counts()
+    if global_counts is None:
+        global_counts = await _global_queue_counts(request, store)
     pol = evaluate_submission(
         jobs=all_jobs,
         user_id=str(ident.user.id),
@@ -1364,6 +1738,7 @@ async def create_job(
         requested_device=device,
         job_id=jid,
         counts_override=counts_override,
+        global_counts=global_counts,
         user_quota=user_quota,
     )
     if not pol.ok:
@@ -1757,11 +2132,16 @@ async def create_jobs_batch(
         qb = getattr(request.app.state, "queue_backend", None)
         counts_override = None
         user_quota = None
+        global_counts = None
         if qb is not None:
             with suppress(Exception):
                 counts_override = await qb.user_counts(user_id=str(ident.user.id))
             with suppress(Exception):
                 user_quota = await qb.user_quota(user_id=str(ident.user.id))
+            with suppress(Exception):
+                global_counts = await qb.global_counts()
+        if global_counts is None:
+            global_counts = await _global_queue_counts(request, store)
         pol = evaluate_submission(
             jobs=all_jobs,
             user_id=str(ident.user.id),
@@ -1770,6 +2150,7 @@ async def create_jobs_batch(
             requested_device=str(body.get("device") or "auto"),
             job_id=None,
             counts_override=counts_override,
+            global_counts=global_counts,
             user_quota=user_quota,
         )
         if not pol.ok:
@@ -1808,6 +2189,7 @@ async def create_jobs_batch(
                 requested_device=device,
                 job_id=None,
                 counts_override=counts_override,
+                global_counts=global_counts,
                 user_quota=user_quota,
             )
             if not pol2.ok:
@@ -1879,11 +2261,16 @@ async def create_jobs_batch(
         qb = getattr(request.app.state, "queue_backend", None)
         counts_override = None
         user_quota = None
+        global_counts = None
         if qb is not None:
             with suppress(Exception):
                 counts_override = await qb.user_counts(user_id=str(ident.user.id))
             with suppress(Exception):
                 user_quota = await qb.user_quota(user_id=str(ident.user.id))
+            with suppress(Exception):
+                global_counts = await qb.global_counts()
+        if global_counts is None:
+            global_counts = await _global_queue_counts(request, store)
         pol = evaluate_submission(
             jobs=all_jobs,
             user_id=str(ident.user.id),
@@ -1892,6 +2279,7 @@ async def create_jobs_batch(
             requested_device=str(form.get("device") or "auto"),
             job_id=None,
             counts_override=counts_override,
+            global_counts=global_counts,
             user_quota=user_quota,
         )
         if not pol.ok:
@@ -1914,6 +2302,7 @@ async def create_jobs_batch(
             requested_device=device,
             job_id=None,
             counts_override=counts_override,
+            global_counts=global_counts,
             user_quota=user_quota,
         )
         if not pol2.ok:
@@ -1933,6 +2322,13 @@ async def create_jobs_batch(
 
         up_dir = _input_uploads_dir()
         up_dir.mkdir(parents=True, exist_ok=True)
+        min_bytes = int(getattr(get_settings(), "min_free_disk_bytes", 0) or 0)
+        if min_bytes > 0:
+            ensure_free_space_bytes(min_bytes=min_bytes, path=up_dir)
+        else:
+            min_gb = int(getattr(get_settings(), "min_free_gb", 0) or 0)
+            if min_gb > 0:
+                ensure_free_space(min_gb=min_gb, path=up_dir)
         for upload in files:
             ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()
             if ctype_u and ctype_u not in _ALLOWED_UPLOAD_MIME:
@@ -1940,12 +2336,11 @@ async def create_jobs_batch(
                     status_code=400, detail=f"Unsupported upload content-type: {ctype_u}"
                 )
             name = getattr(upload, "filename", "") or ""
-            ext = (("." + name.rsplit(".", 1)[-1]) if "." in name else ".mp4").lower()[:8]
-            if ext not in _ALLOWED_UPLOAD_EXTS:
-                raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
+            safe_name = _sanitize_upload_filename(name, _allowed_upload_exts())
+            ext = Path(safe_name).suffix.lower()
             tmp_id = new_id()
             dest = up_dir / f"{tmp_id}{ext}"
-            max_bytes = int(limits.max_upload_mb) * 1024 * 1024
+            max_bytes = _max_upload_bytes(limits)
             written = 0
             with dest.open("wb") as f:
                 while True:
@@ -1953,12 +2348,18 @@ async def create_jobs_batch(
                     if not chunk:
                         break
                     written += len(chunk)
-                    if written > max_bytes:
+                    if max_bytes and written > max_bytes:
                         with suppress(Exception):
                             dest.unlink(missing_ok=True)
-                        raise HTTPException(
-                            status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)"
+                        _log_upload_reject(
+                            request=request,
+                            upload_id=str(tmp_id),
+                            user_id=str(ident.user.id),
+                            bytes_received=int(written),
+                            reason="max_upload_bytes",
+                            detail="Upload too large",
                         )
+                        raise HTTPException(status_code=413, detail="Upload too large")
                     f.write(chunk)
             idx = int(len(created_ids))
             created_ids.append(
@@ -1996,13 +2397,16 @@ async def list_jobs(
     include_archived: int = 0,
     limit: int = 25,
     offset: int = 0,
-    _: Identity = Depends(require_scope("read:job")),
+    ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
+    _rate_limit_identity_ip(request, ident, bucket="jobs:list", limit=60, per_seconds=60)
     st = status or state
     limit_i = max(1, min(200, int(limit)))
     offset_i = max(0, int(offset))
     jobs_all = store.list(limit=1000, state=st)
+    if ident.user.role != Role.admin:
+        jobs_all = [j for j in jobs_all if str(j.owner_id or "") == str(ident.user.id)]
     # Default: hide archived unless explicitly included.
     if not bool(int(include_archived or 0)):
         jobs_all = [
@@ -2090,9 +2494,7 @@ async def set_job_tags(
     request: Request, id: str, ident: Identity = Depends(require_role(Role.operator))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), ident)
     body = await request.json()
     tags_in = body.get("tags") if isinstance(body, dict) else None
     if not isinstance(tags_in, list):
@@ -2119,9 +2521,7 @@ async def archive_job(
     request: Request, id: str, ident: Identity = Depends(require_role(Role.operator))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), ident)
     rt = dict(job.runtime or {})
     rt["archived"] = True
     rt["archived_at"] = now_utc()
@@ -2135,9 +2535,7 @@ async def unarchive_job(
     request: Request, id: str, ident: Identity = Depends(require_role(Role.operator))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), ident)
     rt = dict(job.runtime or {})
     rt["archived"] = False
     rt["archived_at"] = None
@@ -2151,9 +2549,7 @@ async def delete_job_admin(
     request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), ident)
     # Only allow deleting inside OUTPUT_ROOT.
     out_root = _output_root()
     base_dir = _job_base_dir(job)
@@ -2210,9 +2606,7 @@ async def get_job_overrides(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     try:
         from dubbing_pipeline.review.overrides import load_overrides
@@ -2236,9 +2630,7 @@ async def get_job_music_regions_effective(
     Returns the *effective* regions after applying overrides to base detection output.
     """
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     from dubbing_pipeline.review.overrides import effective_music_regions_for_job, load_overrides
 
@@ -2263,9 +2655,7 @@ async def put_job_overrides(
     request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     body = await request.json()
     if not isinstance(body, dict):
@@ -2285,9 +2675,7 @@ async def apply_job_overrides(
     request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     try:
         from dubbing_pipeline.review.overrides import apply_overrides
@@ -2304,9 +2692,8 @@ async def get_job(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    _rate_limit_identity_ip(request, _, bucket="jobs:status", limit=120, per_seconds=60)
+    job = _require_job_access(store.get(id), _, allow_public=True)
     d = job.to_dict()
     # Attach checkpoint (best-effort) for stage breakdown.
     with suppress(Exception):
@@ -2340,9 +2727,8 @@ async def cancel_job(
         if qb is not None:
             await qb.cancel_job(job_id=str(id), user_id=str(_.user.id))
     await queue.cancel(id)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
+    audit_event("job.cancel", request=request, user_id=_.user.id, meta={"job_id": id})
     return job.to_dict()
 
 
@@ -2357,9 +2743,7 @@ async def kill_job_admin(
     store = _get_store(request)
     queue = _get_queue(request)
     await queue.kill(id, reason="Killed by admin")
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     audit_event("job.kill", request=request, user_id=_.user.id, meta={"job_id": id})
     return job.to_dict()
 
@@ -2370,9 +2754,7 @@ async def pause_job(
 ) -> dict[str, Any]:
     store = _get_store(request)
     queue = _get_queue(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     if job.state != JobState.QUEUED:
         raise HTTPException(status_code=409, detail="Can only pause QUEUED jobs")
     j2 = await queue.pause(id)
@@ -2389,9 +2771,7 @@ async def resume_job(
     queue = _get_queue(request)
     scheduler = _get_scheduler(request)
     qb = getattr(request.app.state, "queue_backend", None)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     if job.state != JobState.PAUSED:
         raise HTTPException(status_code=409, detail="Can only resume PAUSED jobs")
     j2 = await queue.resume(id)
@@ -2432,9 +2812,7 @@ async def rerun_two_pass_admin(
     store = _get_store(request)
     scheduler = _get_scheduler(request)
     qb = getattr(request.app.state, "queue_backend", None)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
 
     # Mark runtime so the worker can detect this is a pass-2-only rerun.
     rt = dict(job.runtime or {})
@@ -2478,13 +2856,14 @@ async def rerun_two_pass_admin(
                 )
             )
     audit_event("two_pass.rerun", request=request, user_id=_.user.id, meta={"job_id": id})
-    job2 = store.get(id)
-    return (job2.to_dict() if job2 is not None else {"ok": True})
+    job2 = _require_job_access(store.get(id), _)
+    return job2.to_dict()
 
 
 @router.get("/api/jobs/events")
 async def jobs_events(request: Request, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
+    _rate_limit_identity_ip(request, _, bucket="jobs:events", limit=30, per_seconds=60)
 
     async def gen():
         last: dict[str, str] = {}
@@ -2495,6 +2874,8 @@ async def jobs_events(request: Request, _: Identity = Depends(require_scope("rea
                 if await request.is_disconnected():
                     return
                 jobs = store.list(limit=200)
+                if _.user.role != Role.admin:
+                    jobs = [j for j in jobs if str(j.owner_id or "") == str(_.user.id)]
                 for j in jobs:
                     key = f"{j.state.value}:{j.updated_at}:{j.progress:.4f}:{j.message}"
                     if last.get(j.id) == key:
@@ -2624,6 +3005,8 @@ async def tail_logs(
     request: Request, id: str, n: int = 200, _: Identity = Depends(require_scope("read:job"))
 ) -> PlainTextResponse:
     store = _get_store(request)
+    _rate_limit_identity_ip(request, _, bucket="jobs:logs:tail", limit=120, per_seconds=60)
+    _require_job_access(store.get(id), _)
     return PlainTextResponse(store.tail_log(id, n=n))
 
 
@@ -2638,9 +3021,8 @@ async def logs_alias(
 @router.get("/api/jobs/{id}/logs/stream")
 async def stream_logs(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    _rate_limit_identity_ip(request, _, bucket="jobs:logs:stream", limit=60, per_seconds=60)
+    job = _require_job_access(store.get(id), _)
     log_path = Path(job.log_path) if job.log_path else None
     if log_path is None:
         raise HTTPException(status_code=404, detail="No logs for job")
@@ -2683,9 +3065,7 @@ async def get_job_characters(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     rt = dict(job.runtime or {})
     items = rt.get("voice_map", [])
     if not isinstance(items, list):
@@ -2698,9 +3078,7 @@ async def put_job_characters(
     request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
 
     ctype = (request.headers.get("content-type") or "").lower()
     items: list[dict[str, Any]] = []
@@ -2774,9 +3152,7 @@ async def get_job_transcript(
     _: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     stem = Path(job.video_path).stem if job.video_path else base_dir.name
 
@@ -2859,9 +3235,7 @@ async def put_job_transcript(
     request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
 
     body = await request.json()
@@ -2935,9 +3309,7 @@ async def set_speaker_overrides_from_ui(
     Body: { updates: [{ index: <int>, speaker_override: <str> }, ...] }
     """
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     body = await request.json()
     if not isinstance(body, dict) or not isinstance(body.get("updates"), list):
@@ -2986,9 +3358,7 @@ async def synthesize_from_approved(
     store = _get_store(request)
     scheduler = _get_scheduler(request)
     qb = getattr(request.app.state, "queue_backend", None)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     st = _load_transcript_store(base_dir)
     # Mark job to re-synthesize only approved segments.
@@ -3033,9 +3403,7 @@ async def get_job_review_segments(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     rsp = _review_state_path(base_dir)
     if not rsp.exists():
@@ -3127,9 +3495,7 @@ async def post_job_review_helper(
         limit=120,
         per_seconds=60,
     )
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     body = await request.json()
     if not isinstance(body, dict):
@@ -3220,9 +3586,7 @@ async def post_job_review_edit(
         limit=120,
         per_seconds=60,
     )
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     body = await request.json()
     text = str(body.get("text") or "")
@@ -3255,9 +3619,7 @@ async def post_job_review_regen(
         limit=60,
         per_seconds=60,
     )
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     from dubbing_pipeline.review.ops import regen_segment
 
@@ -3288,9 +3650,7 @@ async def post_job_review_lock(
         limit=120,
         per_seconds=60,
     )
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     from dubbing_pipeline.review.ops import lock_segment
 
@@ -3321,9 +3681,7 @@ async def post_job_review_unlock(
         limit=120,
         per_seconds=60,
     )
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     from dubbing_pipeline.review.ops import unlock_segment
 
@@ -3348,9 +3706,7 @@ async def get_job_review_audio(
     _: Identity = Depends(require_scope("read:job")),
 ) -> Response:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     p = _review_audio_path(base_dir, int(segment_id))
     if p is None:
@@ -3432,11 +3788,7 @@ async def get_job_voice_refs(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
-    # Enforce object-level job auth (owner/admin) consistent with other endpoints.
-    _assert_job_owner_or_admin(job, _)
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     man_path = _voice_refs_manifest_path(base_dir)
     if not man_path.exists():
@@ -3559,9 +3911,7 @@ async def get_job_voice_ref_audio(
     _: Identity = Depends(require_scope("read:job")),
 ) -> Response:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     if _privacy_blocks_voice_refs(job):
         raise HTTPException(status_code=403, detail="Voice refs not available in privacy/minimal mode")
     base_dir = _job_base_dir(job)
@@ -3596,9 +3946,7 @@ async def post_job_voice_ref_override(
     Stored under Output/<job>/analysis/voice_refs/<speaker_id>.wav (job-local).
     """
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     if _privacy_blocks_voice_refs(job):
         raise HTTPException(status_code=403, detail="Voice refs not available in privacy/minimal mode")
@@ -3943,10 +4291,7 @@ async def post_job_speaker_mapping(
     ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(str(job_id))
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
-    _assert_job_owner_or_admin(job, ident)
+    job = _require_job_access(store.get(str(job_id)), ident)
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
@@ -3984,10 +4329,7 @@ async def get_job_speaker_mapping(
     ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(str(job_id))
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
-    _assert_job_owner_or_admin(job, ident)
+    _require_job_access(store.get(str(job_id)), ident)
     items = store.list_speaker_mappings(str(job_id))
     return {"ok": True, "items": items}
 
@@ -4013,10 +4355,7 @@ async def promote_series_character_ref_from_job(
     speaker_id = Path(str(body.get("speaker_id") or "")).name.strip()
     if not job_id or not speaker_id:
         raise HTTPException(status_code=422, detail="job_id and speaker_id required")
-    job = store.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    _assert_job_owner_or_admin(job, ident)
+    job = _require_job_access(store.get(job_id), ident)
     if str(getattr(job, "series_slug", "") or "").strip() != slug:
         raise HTTPException(status_code=400, detail="Job series_slug does not match")
     if _privacy_blocks_voice_refs(job):
@@ -4092,9 +4431,7 @@ async def job_files(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _, allow_public=True)
     base_dir = _job_base_dir(job)
     stem = Path(job.video_path).stem if job.video_path else base_dir.name
 
@@ -4339,9 +4676,7 @@ async def job_stream_manifest(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _, allow_public=True)
     base_dir = _job_base_dir(job)
     p = _stream_manifest_path(base_dir)
     if not p.exists():
@@ -4362,9 +4697,7 @@ async def job_stream_chunk(
     _: Identity = Depends(require_scope("read:job")),
 ) -> Response:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _, allow_public=True)
     base_dir = _job_base_dir(job)
     p = _stream_chunk_mp4_path(base_dir, int(chunk_idx))
     if p is None:
@@ -4375,9 +4708,7 @@ async def job_stream_chunk(
 @router.get("/api/jobs/{id}/qrcode")
 async def job_qrcode(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    _require_job_access(store.get(id), _)
     # Absolute URL to the UI job page.
     base = str(request.base_url).rstrip("/")
     url = f"{base}/ui/jobs/{id}"
@@ -4407,6 +4738,7 @@ async def ws_job(websocket: WebSocket, id: str):
         await websocket.close(code=1011)
         return
     ok = False
+    user = None
     try:
         token = ""
         # 1) Authorization header bearer
@@ -4459,24 +4791,34 @@ async def ws_job(websocket: WebSocket, id: str):
                     if verify_secret(k.key_hash, token):
                         scopes = set(k.scopes or [])
                         if "admin:*" in scopes or "read:job" in scopes:
-                            ok = True
+                            user = auth_store.get_user(k.user_id)
+                            ok = user is not None
                         break
         else:
             data = decode_token(token, expected_typ="access")
+            sub = str(data.get("sub") or "")
+            if sub:
+                user = auth_store.get_user(sub)
             scopes = data.get("scopes") if isinstance(data.get("scopes"), list) else []
             scopes = {str(s) for s in scopes}
-            if "admin:*" in scopes or "read:job" in scopes:
+            if user is not None and ("admin:*" in scopes or "read:job" in scopes):
                 ok = True
     except Exception:
         ok = False
 
-    if not ok:
+    if not ok or user is None:
         await websocket.close(code=1008)
         return
 
     store = getattr(websocket.app.state, "job_store", None)
     if store is None:
         await websocket.close(code=1011)
+        return
+
+    try:
+        require_job_owner_or_admin(user, store.get(id), allow_public=False)
+    except HTTPException:
+        await websocket.close(code=1008)
         return
 
     last_updated = None
@@ -4512,6 +4854,8 @@ async def ws_job(websocket: WebSocket, id: str):
 @router.get("/events/jobs/{id}")
 async def sse_job(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
+    _rate_limit_identity_ip(request, _, bucket="jobs:event", limit=30, per_seconds=60)
+    _require_job_access(store.get(id), _)
 
     async def gen():
         last_updated = None

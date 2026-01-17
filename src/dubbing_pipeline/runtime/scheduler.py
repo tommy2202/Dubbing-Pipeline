@@ -105,6 +105,9 @@ class Scheduler:
 
         s = get_settings()
         self._max_global = max(1, int(s.max_concurrency_global))
+        max_running_global = int(getattr(s, "max_running_jobs_global", 0) or 0)
+        if max_running_global > 0:
+            self._max_global = max(1, int(max_running_global))
         self._max_transcribe = max(1, int(s.max_concurrency_transcribe))
         self._max_tts = max(1, int(s.max_concurrency_tts))
         # Optional per-mode caps (0 => fall back to MAX_CONCURRENCY_GLOBAL)

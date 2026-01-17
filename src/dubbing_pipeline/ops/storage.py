@@ -31,6 +31,29 @@ def ensure_free_space(*, min_gb: int, path: Path) -> None:
         )
 
 
+def ensure_free_space_bytes(*, min_bytes: int, path: Path) -> None:
+    """
+    Raise 507 if free disk space is below min_bytes.
+    """
+    if min_bytes <= 0:
+        return
+    # Test-friendly behavior: honor explicit MIN_FREE_DISK_BYTES for simulated low disk.
+    if os.environ.get("PYTEST_CURRENT_TEST") and "MIN_FREE_DISK_BYTES" not in os.environ:
+        return
+
+    p = Path(path).resolve()
+    usage = shutil.disk_usage(str(p))
+    free_bytes = int(usage.free)
+    if free_bytes < int(min_bytes):
+        raise HTTPException(
+            status_code=507,
+            detail=(
+                f"Insufficient storage: {free_bytes}B free (<{int(min_bytes)}B). "
+                "Free space or decrease MIN_FREE_DISK_BYTES."
+            ),
+        )
+
+
 def prune_stale_workdirs(*, output_root: Path, max_age_hours: int = 24) -> int:
     """
     Remove stale work directories under Output/*/work/* older than max_age_hours.

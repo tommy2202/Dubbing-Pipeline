@@ -9,13 +9,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
 from dubbing_pipeline.api.deps import current_identity
+from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.api.routes_settings import UserSettingsStore
 from dubbing_pipeline.api.security import issue_csrf_token
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import Job
 from dubbing_pipeline.library.paths import get_job_output_root
 from dubbing_pipeline.utils.io import read_json
-from dubbing_pipeline.ops import audit
+from dubbing_pipeline.api.middleware import audit_event
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
@@ -40,11 +41,14 @@ def _current_user_optional(request: Request):
 
 def _with_csrf_cookie(resp, csrf_token: str) -> None:
     s = get_settings()
+    samesite = str(getattr(s, "cookie_samesite", "lax") or "lax").strip().lower()
+    if samesite not in {"lax", "none", "strict"}:
+        samesite = "lax"
     resp.set_cookie(
         "csrf",
         csrf_token,
         httponly=False,
-        samesite="lax",
+        samesite=samesite,
         secure=bool(s.cookie_secure),
         max_age=int(s.refresh_token_days) * 86400,
         path="/",
@@ -85,9 +89,9 @@ def _audit_ui_page_view(request: Request, *, user_id: str, page: str, meta: dict
     if not bool(getattr(s, "ui_audit_page_views", False)):
         return
     try:
-        audit.emit(
+        audit_event(
             "ui.page_view",
-            request_id=None,
+            request=request,
             user_id=str(user_id),
             meta={"page": str(page), "path": str(request.url.path), **(meta or {})},
         )
@@ -244,6 +248,8 @@ async def ui_jobs_table(
     # mirror API defaults
     limit_i = max(1, min(200, int(limit)))
     jobs = store.list(limit=1000, state=(status or None))
+    if user.role != Role.admin:
+        jobs = [j for j in jobs if str(j.owner_id or "") == str(user.id)]
     if not bool(int(include_archived or 0)):
         jobs = [
             j

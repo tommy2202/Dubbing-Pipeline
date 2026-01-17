@@ -59,6 +59,13 @@ class PublicConfig(BaseSettings):
     input_dir: Path | None = Field(default=None, alias="INPUT_DIR")
     input_uploads_dir: Path | None = Field(default=None, alias="INPUT_UPLOADS_DIR")
     upload_chunk_bytes: int = Field(default=5 * 1024 * 1024, alias="UPLOAD_CHUNK_BYTES")
+    max_upload_bytes: int = Field(default=0, alias="MAX_UPLOAD_BYTES")
+    max_upload_bytes_per_user: int = Field(default=0, alias="MAX_UPLOAD_BYTES_PER_USER")
+    allowed_upload_exts: str = Field(default="", alias="ALLOWED_UPLOAD_EXTS")
+    max_running_jobs_global: int = Field(default=0, alias="MAX_RUNNING_JOBS_GLOBAL")
+    max_running_jobs_per_user: int = Field(default=0, alias="MAX_RUNNING_JOBS_PER_USER")
+    max_queue_depth_global: int = Field(default=0, alias="MAX_QUEUE_DEPTH_GLOBAL")
+    min_free_disk_bytes: int = Field(default=0, alias="MIN_FREE_DISK_BYTES")
 
     # --- legacy (root `main.py`) paths ---
     uploads_dir: Path = Field(
@@ -181,6 +188,7 @@ class PublicConfig(BaseSettings):
     refresh_token_days: int = Field(default=7, alias="REFRESH_TOKEN_DAYS")
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")
     cookie_secure: bool = Field(default=False, alias="COOKIE_SECURE")
+    cookie_samesite: str = Field(default="lax", alias="COOKIE_SAMESITE")
     allow_legacy_token_login: bool = Field(
         default=False, alias="ALLOW_LEGACY_TOKEN_LOGIN"
     )  # UNSAFE on public networks

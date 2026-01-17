@@ -6,7 +6,14 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from fastapi import HTTPException
+from pathlib import Path
+
+from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.api.models import Role
+from dubbing_pipeline.jobs.policy import evaluate_dispatch
 from dubbing_pipeline.ops import audit
+from dubbing_pipeline.ops.storage import ensure_free_space, ensure_free_space_bytes
 from dubbing_pipeline.runtime.scheduler import JobRecord, Scheduler
 from dubbing_pipeline.utils.log import logger
 
@@ -167,8 +174,95 @@ class FallbackLocalQueue(QueueBackend):
         # Not persisted in fallback mode.
         return {}
 
+    async def global_counts(self) -> dict[str, int]:
+        try:
+            store = self._get_store()
+            jobs = store.list(limit=5000)
+            running = 0
+            queued = 0
+            for j in jobs:
+                st = getattr(getattr(j, "state", None), "value", "") or ""
+                if str(st).upper() == "RUNNING":
+                    running += 1
+                if str(st).upper() == "QUEUED":
+                    queued += 1
+            return {"running": int(running), "queued": int(queued)}
+        except Exception:
+            return {"running": 0, "queued": 0}
+
     async def before_job_run(self, *, job_id: str, user_id: str | None) -> bool:
-        # No distributed lock in fallback mode.
+        # Best-effort disk guard before running.
+        s = get_settings()
+        out_root = Path(str(getattr(s, "output_dir", ""))).resolve()
+        min_bytes = int(getattr(s, "min_free_disk_bytes", 0) or 0)
+        try:
+            if min_bytes > 0:
+                ensure_free_space_bytes(min_bytes=min_bytes, path=out_root)
+            else:
+                min_gb = int(getattr(s, "min_free_gb", 0) or 0)
+                if min_gb > 0:
+                    ensure_free_space(min_gb=min_gb, path=out_root)
+        except HTTPException as ex:
+            logger.warning("queue_low_disk", queue_mode="fallback", job_id=str(job_id), error=str(ex.detail))
+            audit.emit(
+                "queue.low_disk",
+                request_id=None,
+                user_id=str(user_id) if user_id else None,
+                meta={"mode": "fallback", "job_id": str(job_id), "detail": str(ex.detail)},
+                job_id=str(job_id),
+            )
+            with suppress(Exception):
+                self._scheduler.submit(
+                    JobRecord(
+                        job_id=str(job_id),
+                        mode="medium",
+                        device_pref="auto",
+                        created_at=time.time(),
+                        priority=100,
+                    )
+                )
+            return False
+
+        # Best-effort policy safety net for running caps.
+        store = self._get_store()
+        job = store.get(str(job_id)) if store is not None else None
+        if job is None:
+            return False
+        uid = str(getattr(job, "owner_id", "") or "")
+        mode = str(getattr(job, "mode", "") or "medium")
+        counts = await self.user_counts(user_id=uid)
+        global_counts = await self.global_counts()
+        dec = evaluate_dispatch(
+            user_id=uid,
+            user_role=Role.operator,
+            requested_mode=mode,
+            running=int(counts.get("running") or 0),
+            queued=int(counts.get("queued") or 0),
+            global_running=int(global_counts.get("running") or 0),
+            global_high_running=None,
+            user_quota=None,
+            job_id=str(job_id),
+        )
+        if not dec.ok:
+            logger.info(
+                "queue_dispatch_denied",
+                queue_mode="fallback",
+                job_id=str(job_id),
+                user_id=str(uid),
+                reasons=",".join(dec.reasons),
+            )
+            # Requeue for later retry.
+            with suppress(Exception):
+                self._scheduler.submit(
+                    JobRecord(
+                        job_id=str(job_id),
+                        mode=str(mode or "medium"),
+                        device_pref=str(getattr(job, "device", "auto") or "auto"),
+                        created_at=time.time(),
+                        priority=100,
+                    )
+                )
+            return False
         return True
 
     async def after_job_run(

@@ -35,7 +35,7 @@ _API_KEY_RE = re.compile(r"\bdp_[a-z0-9]{6,}_[A-Za-z0-9_\-]{10,}\b", re.IGNORECA
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9_\-\.=]+)")
 _BASIC_RE = re.compile(r"(?i)\bBasic\s+([A-Za-z0-9_\-+/=]+)")
 _KV_RE = re.compile(
-    r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|token|secret|password|api_key)\b\s*=\s*([^\s,;]+)"
+    r"(?i)\b(jwt_secret|csrf_secret|session_secret|api_token|admin_password|turn_password|artifacts_key|char_store_key|huggingface_token|hf_token|redis_url|token|secret|password|api_key)\b\s*=\s*([^\s,;]+)"
 )
 
 
@@ -105,6 +105,8 @@ def _redact_str(s: str) -> str:
         for lit in _secret_literals():
             if lit and lit in s:
                 s = s.replace(lit, "***REDACTED***")
+    # Redact URL credentials (scheme://user:pass@host)
+    s = re.sub(r"(?i)([a-z][a-z0-9+\-.]*://)([^:@/]+):([^@/]+)@", r"\1***REDACTED***@", s)
     s = _JWT_RE.sub("***REDACTED***", s)
     s = _API_KEY_RE.sub("***REDACTED***", s)
     s = _BEARER_RE.sub("Bearer ***REDACTED***", s)
