@@ -5,6 +5,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import math
 import re
 import time
 from contextlib import suppress
@@ -49,7 +50,7 @@ from dubbing_pipeline.security.ownership import (
 )
 from dubbing_pipeline.utils.crypto import verify_secret
 from dubbing_pipeline.utils.ffmpeg_safe import FFmpegError, ffprobe_media_info
-from dubbing_pipeline.utils.log import request_id_var
+from dubbing_pipeline.utils.log import logger, request_id_var
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 
 router = APIRouter()
@@ -238,14 +239,110 @@ def _upload_lock(upload_id: str) -> asyncio.Lock:
     return lk
 
 
-def _safe_filename(name: str) -> str:
-    base = Path(str(name or "")).name.strip() or "upload.mp4"
+def _allowed_upload_exts() -> set[str]:
+    s = get_settings()
+    raw = str(getattr(s, "allowed_upload_exts", "") or "").strip()
+    if not raw:
+        return set(_ALLOWED_UPLOAD_EXTS)
+    out: set[str] = set()
+    for part in re.split(r"[,\s]+", raw):
+        p = str(part or "").strip().lower()
+        if not p:
+            continue
+        if not p.startswith("."):
+            p = f".{p}"
+        out.add(p)
+    return out or set(_ALLOWED_UPLOAD_EXTS)
+
+
+def _sanitize_upload_filename(name: str, allowed_exts: set[str]) -> str:
+    raw = str(name or "").strip()
+    raw = raw.replace("\\", "/")
+    if raw and ".." in Path(raw).parts:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    base = Path(raw).name.strip() or "upload.mp4"
     base = base.replace("\x00", "")
-    # Keep it simple; allow common chars.
-    base = re.sub(r"[^A-Za-z0-9._-]+", "_", base)
-    if len(base) > 160:
-        base = base[:160]
-    return base
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._")
+    if not base:
+        base = "upload.mp4"
+    ext = Path(base).suffix.lower()
+    stem = Path(base).stem.strip("._")
+    if not stem:
+        stem = "upload"
+    if not ext:
+        if ".mp4" in allowed_exts:
+            ext = ".mp4"
+        else:
+            raise HTTPException(status_code=400, detail="Missing file extension")
+    if allowed_exts and ext not in allowed_exts:
+        raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
+    max_len = 160
+    trim_len = max(1, max_len - len(ext))
+    stem = stem[:trim_len]
+    return f"{stem}{ext}"
+
+
+def _safe_filename(name: str) -> str:
+    return _sanitize_upload_filename(name, _allowed_upload_exts())
+
+
+def _max_upload_bytes(limits) -> int:
+    s = get_settings()
+    try:
+        cap = int(getattr(s, "max_upload_bytes", 0) or 0)
+    except Exception:
+        cap = 0
+    if cap > 0:
+        return cap
+    try:
+        return int(limits.max_upload_mb) * 1024 * 1024
+    except Exception:
+        return 0
+
+
+def _max_upload_bytes_per_user() -> int:
+    s = get_settings()
+    try:
+        cap = int(getattr(s, "max_upload_bytes_per_user", 0) or 0)
+    except Exception:
+        cap = 0
+    return cap if cap > 0 else 0
+
+
+def _inflight_upload_bytes(store, user_id: str, *, mode: str) -> int:
+    total = 0
+    for rec in store.list_uploads(owner_id=str(user_id), include_completed=False):
+        try:
+            if mode == "received":
+                total += int(rec.get("received_bytes") or 0)
+            else:
+                total += int(rec.get("total_bytes") or 0)
+        except Exception:
+            continue
+    return int(total)
+
+
+def _log_upload_reject(
+    *,
+    request: Request,
+    upload_id: str,
+    user_id: str,
+    bytes_received: int,
+    reason: str,
+    detail: str,
+) -> None:
+    try:
+        logger.warning(
+            "upload_rejected",
+            upload_id=str(upload_id),
+            user_id=str(user_id),
+            request_id=str(request_id_var.get() or ""),
+            bytes_received=int(bytes_received),
+            reason=str(reason),
+            detail=str(detail),
+        )
+    except Exception:
+        return
 
 
 def _client_ip_for_limits(request: Request) -> str:
@@ -373,21 +470,58 @@ async def uploads_init(
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
-    filename = _safe_filename(str(body.get("filename") or "upload.mp4"))
+    allowed_exts = _allowed_upload_exts()
+    filename = _sanitize_upload_filename(str(body.get("filename") or "upload.mp4"), allowed_exts)
     ext = Path(filename).suffix.lower()
-    if ext not in _ALLOWED_UPLOAD_EXTS:
-        raise HTTPException(
-            status_code=400, detail=f"Unsupported file extension: {ext or '(none)'}"
-        )
     try:
         total = int(body.get("total_bytes") or 0)
     except Exception:
         total = 0
     if total <= 0:
         raise HTTPException(status_code=400, detail="total_bytes required")
-    max_bytes = int(limits.max_upload_mb) * 1024 * 1024
-    if total > max_bytes:
-        raise HTTPException(status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)")
+    max_bytes = _max_upload_bytes(limits)
+    if max_bytes and total > max_bytes:
+        with suppress(Exception):
+            audit_event(
+                "upload.reject",
+                request=request,
+                user_id=ident.user.id,
+                meta={"upload_id": "", "reason": "max_upload_bytes", "total_bytes": int(total)},
+            )
+        _log_upload_reject(
+            request=request,
+            upload_id="",
+            user_id=str(ident.user.id),
+            bytes_received=0,
+            reason="max_upload_bytes",
+            detail=f"Upload too large (>{max_bytes} bytes)",
+        )
+        raise HTTPException(status_code=413, detail="Upload too large")
+    per_user_cap = _max_upload_bytes_per_user()
+    if per_user_cap:
+        inflight_total = _inflight_upload_bytes(store, ident.user.id, mode="total")
+        if inflight_total + total > per_user_cap:
+            with suppress(Exception):
+                audit_event(
+                    "upload.reject",
+                    request=request,
+                    user_id=ident.user.id,
+                    meta={
+                        "upload_id": "",
+                        "reason": "max_upload_bytes_per_user",
+                        "total_bytes": int(total),
+                        "inflight_bytes": int(inflight_total),
+                    },
+                )
+            _log_upload_reject(
+                request=request,
+                upload_id="",
+                user_id=str(ident.user.id),
+                bytes_received=int(inflight_total),
+                reason="max_upload_bytes_per_user",
+                detail="Per-user upload bytes exceeded",
+            )
+            raise HTTPException(status_code=413, detail="Per-user upload bytes exceeded")
     mime = str(body.get("mime") or "").lower().strip()
     if mime and mime not in _ALLOWED_UPLOAD_MIME:
         raise HTTPException(status_code=400, detail=f"Unsupported upload content-type: {mime}")
@@ -430,10 +564,20 @@ async def uploads_init(
         user_id=ident.user.id,
         meta={"upload_id": upload_id, "total_bytes": int(total), "filename": filename},
     )
+    with suppress(Exception):
+        logger.info(
+            "upload_init",
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            request_id=str(request_id_var.get() or ""),
+            bytes_received=0,
+        )
     return {
         "upload_id": upload_id,
         "chunk_bytes": int(chunk_bytes),
         "max_upload_mb": int(limits.max_upload_mb),
+        "max_upload_bytes": int(max_bytes),
+        "max_upload_bytes_per_user": int(per_user_cap),
     }
 
 
@@ -518,8 +662,31 @@ async def uploads_chunk(
 
     total = int(rec.get("total_bytes") or 0)
     part_path = Path(str(rec.get("part_path") or "")).resolve()
+    up_root = _input_uploads_dir().resolve()
+    try:
+        part_path.relative_to(up_root)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid upload path") from None
     if total <= 0 or not str(part_path):
         raise HTTPException(status_code=400, detail="Invalid upload session")
+    max_bytes = _max_upload_bytes(get_limits())
+    if max_bytes and total > max_bytes:
+        with suppress(Exception):
+            audit_event(
+                "upload.reject",
+                request=request,
+                user_id=ident.user.id,
+                meta={"upload_id": upload_id, "reason": "max_upload_bytes", "total_bytes": int(total)},
+            )
+        _log_upload_reject(
+            request=request,
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            bytes_received=int(rec.get("received_bytes") or 0),
+            reason="max_upload_bytes",
+            detail="Upload too large",
+        )
+        raise HTTPException(status_code=413, detail="Upload too large")
 
     body = await request.body()
     sha = (request.headers.get("x-chunk-sha256") or "").strip().lower()
@@ -550,6 +717,17 @@ async def uploads_chunk(
         received = rec2.get("received")
         if not isinstance(received, dict):
             received = {}
+        try:
+            chunk_bytes = int(rec2.get("chunk_bytes") or 0)
+        except Exception:
+            chunk_bytes = 0
+        if chunk_bytes > 0:
+            expected_offset = int(idx) * int(chunk_bytes)
+            if int(offset) != expected_offset:
+                raise HTTPException(status_code=409, detail="chunk offset does not match index")
+            expected_size = min(int(chunk_bytes), int(total) - expected_offset)
+            if len(body) != expected_size:
+                raise HTTPException(status_code=400, detail="chunk size mismatch")
 
         prev = received.get(str(idx))
         if (
@@ -563,6 +741,40 @@ async def uploads_chunk(
                 "received_bytes": int(rec2.get("received_bytes") or 0),
                 "dedup": True,
             }
+        if isinstance(prev, dict):
+            raise HTTPException(status_code=409, detail="chunk already received with different data")
+        expected_next = 0
+        while str(expected_next) in received:
+            expected_next += 1
+        if int(idx) != expected_next:
+            raise HTTPException(
+                status_code=409,
+                detail=f"chunk out of order (expected index {expected_next})",
+            )
+        per_user_cap = _max_upload_bytes_per_user()
+        if per_user_cap:
+            inflight_received = _inflight_upload_bytes(store, ident.user.id, mode="received")
+            if inflight_received + len(body) > per_user_cap:
+                with suppress(Exception):
+                    audit_event(
+                        "upload.reject",
+                        request=request,
+                        user_id=ident.user.id,
+                        meta={
+                            "upload_id": upload_id,
+                            "reason": "max_upload_bytes_per_user",
+                            "received_bytes": int(inflight_received),
+                        },
+                    )
+                _log_upload_reject(
+                    request=request,
+                    upload_id=str(upload_id),
+                    user_id=str(ident.user.id),
+                    bytes_received=int(inflight_received),
+                    reason="max_upload_bytes_per_user",
+                    detail="Per-user upload bytes exceeded",
+                )
+                raise HTTPException(status_code=413, detail="Per-user upload bytes exceeded")
 
         part_path.parent.mkdir(parents=True, exist_ok=True)
         # random-access write
@@ -587,6 +799,14 @@ async def uploads_chunk(
             request=request,
             user_id=ident.user.id,
             meta={"upload_id": upload_id, "index": int(idx), "size": int(len(body))},
+        )
+    with suppress(Exception):
+        logger.info(
+            "upload_chunk",
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            request_id=str(request_id_var.get() or ""),
+            bytes_received=int(received_bytes),
         )
     return {"ok": True, "received_bytes": int(received_bytes)}
 
@@ -643,8 +863,34 @@ async def uploads_complete(
         total = int(rec2.get("total_bytes") or 0)
         part_path = Path(str(rec2.get("part_path") or "")).resolve()
         final_path = Path(str(rec2.get("final_path") or "")).resolve()
+        up_root = _input_uploads_dir().resolve()
+        try:
+            part_path.relative_to(up_root)
+            final_path.relative_to(up_root)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid upload path") from None
         if total <= 0 or not part_path.exists():
             raise HTTPException(status_code=400, detail="Upload missing data")
+
+        received = rec2.get("received")
+        if not isinstance(received, dict):
+            raise HTTPException(status_code=400, detail="Upload missing chunks")
+        try:
+            chunk_bytes = int(rec2.get("chunk_bytes") or 0)
+        except Exception:
+            chunk_bytes = 0
+        if chunk_bytes > 0:
+            expected_count = int(math.ceil(float(total) / float(chunk_bytes)))
+            for idx in range(expected_count):
+                rec_i = received.get(str(idx))
+                if not isinstance(rec_i, dict):
+                    raise HTTPException(status_code=400, detail="Upload incomplete (missing chunk)")
+                expected_offset = int(idx) * int(chunk_bytes)
+                expected_size = min(int(chunk_bytes), int(total) - expected_offset)
+                if int(rec_i.get("offset") or -1) != expected_offset:
+                    raise HTTPException(status_code=400, detail="Upload chunk offset mismatch")
+                if int(rec_i.get("size") or -1) != expected_size:
+                    raise HTTPException(status_code=400, detail="Upload chunk size mismatch")
 
         # Verify file size
         st = part_path.stat()
@@ -717,6 +963,14 @@ async def uploads_complete(
         user_id=ident.user.id,
         meta={"upload_id": upload_id, "final_path": str(final_path.name)},
     )
+    with suppress(Exception):
+        logger.info(
+            "upload_complete",
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            request_id=str(request_id_var.get() or ""),
+            bytes_received=int(rec.get("received_bytes") or total),
+        )
     return {"ok": True, "video_path": str(final_path)}
 
 
@@ -757,7 +1011,7 @@ async def list_server_files(
                     }
                 )
             elif p.is_file():
-                if p.suffix.lower() not in {".mp4", ".mkv", ".mov", ".webm", ".m4v"}:
+                if p.suffix.lower() not in _allowed_upload_exts():
                     continue
                 st = p.stat()
                 items.append(
@@ -1361,11 +1615,10 @@ async def create_job(
             up_dir.mkdir(parents=True, exist_ok=True)
             jid = new_id()
             name = getattr(upload, "filename", "") or ""
-            ext = (("." + name.rsplit(".", 1)[-1]) if "." in name else ".mp4").lower()[:8]
-            if ext not in _ALLOWED_UPLOAD_EXTS:
-                raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
+            safe_name = _sanitize_upload_filename(name, _allowed_upload_exts())
+            ext = Path(safe_name).suffix.lower()
             dest = up_dir / f"{jid}{ext}"
-            max_bytes = int(limits.max_upload_mb) * 1024 * 1024
+            max_bytes = _max_upload_bytes(limits)
             written = 0
             try:
                 with dest.open("wb") as f:
@@ -1374,11 +1627,16 @@ async def create_job(
                         if not chunk:
                             break
                         written += len(chunk)
-                        if written > max_bytes:
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Upload too large (>{limits.max_upload_mb}MB)",
+                        if max_bytes and written > max_bytes:
+                            _log_upload_reject(
+                                request=request,
+                                upload_id=str(jid),
+                                user_id=str(ident.user.id),
+                                bytes_received=int(written),
+                                reason="max_upload_bytes",
+                                detail="Upload too large",
                             )
+                            raise HTTPException(status_code=413, detail="Upload too large")
                         f.write(chunk)
             except HTTPException:
                 with suppress(Exception):
@@ -1388,7 +1646,7 @@ async def create_job(
 
     assert video_path is not None
     # Extension allowlist (defense-in-depth). Encrypted-at-rest inputs are allowed (validated via ffprobe after decrypt).
-    if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
+    if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _allowed_upload_exts():
         raise HTTPException(status_code=400, detail="Unsupported file type")
     # Validate using ffprobe (no user-controlled args).
     try:
@@ -1999,12 +2257,11 @@ async def create_jobs_batch(
                     status_code=400, detail=f"Unsupported upload content-type: {ctype_u}"
                 )
             name = getattr(upload, "filename", "") or ""
-            ext = (("." + name.rsplit(".", 1)[-1]) if "." in name else ".mp4").lower()[:8]
-            if ext not in _ALLOWED_UPLOAD_EXTS:
-                raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
+            safe_name = _sanitize_upload_filename(name, _allowed_upload_exts())
+            ext = Path(safe_name).suffix.lower()
             tmp_id = new_id()
             dest = up_dir / f"{tmp_id}{ext}"
-            max_bytes = int(limits.max_upload_mb) * 1024 * 1024
+            max_bytes = _max_upload_bytes(limits)
             written = 0
             with dest.open("wb") as f:
                 while True:
@@ -2012,12 +2269,18 @@ async def create_jobs_batch(
                     if not chunk:
                         break
                     written += len(chunk)
-                    if written > max_bytes:
+                    if max_bytes and written > max_bytes:
                         with suppress(Exception):
                             dest.unlink(missing_ok=True)
-                        raise HTTPException(
-                            status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)"
+                        _log_upload_reject(
+                            request=request,
+                            upload_id=str(tmp_id),
+                            user_id=str(ident.user.id),
+                            bytes_received=int(written),
+                            reason="max_upload_bytes",
+                            detail="Upload too large",
                         )
+                        raise HTTPException(status_code=413, detail="Upload too large")
                     f.write(chunk)
             idx = int(len(created_ids))
             created_ids.append(

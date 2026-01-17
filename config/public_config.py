@@ -59,6 +59,9 @@ class PublicConfig(BaseSettings):
     input_dir: Path | None = Field(default=None, alias="INPUT_DIR")
     input_uploads_dir: Path | None = Field(default=None, alias="INPUT_UPLOADS_DIR")
     upload_chunk_bytes: int = Field(default=5 * 1024 * 1024, alias="UPLOAD_CHUNK_BYTES")
+    max_upload_bytes: int = Field(default=0, alias="MAX_UPLOAD_BYTES")
+    max_upload_bytes_per_user: int = Field(default=0, alias="MAX_UPLOAD_BYTES_PER_USER")
+    allowed_upload_exts: str = Field(default="", alias="ALLOWED_UPLOAD_EXTS")
 
     # --- legacy (root `main.py`) paths ---
     uploads_dir: Path = Field(

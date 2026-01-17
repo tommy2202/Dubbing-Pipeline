@@ -632,6 +632,21 @@ class JobStore:
             db[str(upload_id)] = raw
             return dict(raw)
 
+    def list_uploads(
+        self, *, owner_id: str | None = None, include_completed: bool = True
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        with self._lock, self._uploads() as db:
+            for _, rec in db.items():
+                if not isinstance(rec, dict):
+                    continue
+                if owner_id and str(rec.get("owner_id") or "") != str(owner_id):
+                    continue
+                if not include_completed and bool(rec.get("completed")):
+                    continue
+                out.append(dict(rec))
+        return out
+
     def delete_upload(self, upload_id: str) -> None:
         with self._lock, self._uploads() as db, suppress(Exception):
             del db[str(upload_id)]
