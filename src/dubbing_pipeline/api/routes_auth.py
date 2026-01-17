@@ -55,6 +55,14 @@ def _device_name_guess(request: Request) -> str:
     return "browser"
 
 
+def _cookie_samesite() -> str:
+    s = get_settings()
+    val = str(getattr(s, "cookie_samesite", "lax") or "lax").strip().lower()
+    if val not in {"lax", "none", "strict"}:
+        return "lax"
+    return val
+
+
 def _get_store(request: Request) -> AuthStore:
     s = getattr(request.app.state, "auth_store", None)
     if s is None:
@@ -244,7 +252,7 @@ async def login(request: Request) -> Response:
             user_agent=_ua(request),
         ),
         httponly=True,
-        samesite="lax",
+        samesite=_cookie_samesite(),
         secure=s.cookie_secure,
         max_age=s.refresh_token_days * 86400,
         path="/",
@@ -253,7 +261,7 @@ async def login(request: Request) -> Response:
         "csrf",
         csrf,
         httponly=False,
-        samesite="lax",
+        samesite=_cookie_samesite(),
         secure=s.cookie_secure,
         max_age=s.refresh_token_days * 86400,
         path="/",
@@ -269,7 +277,7 @@ async def login(request: Request) -> Response:
                 "session",
                 signed,
                 httponly=True,
-                samesite="lax",
+                samesite=_cookie_samesite(),
                 secure=s.cookie_secure,
                 max_age=s.refresh_token_days * 86400,
                 path="/",
@@ -362,7 +370,7 @@ async def refresh(request: Request) -> Response:
         "csrf",
         csrf,
         httponly=False,
-        samesite="lax",
+        samesite=_cookie_samesite(),
         secure=s.cookie_secure,
         max_age=s.refresh_token_days * 86400,
         path="/",
@@ -371,7 +379,7 @@ async def refresh(request: Request) -> Response:
         "refresh",
         rot.new_refresh_token,
         httponly=True,
-        samesite="lax",
+        samesite=_cookie_samesite(),
         secure=s.cookie_secure,
         max_age=s.refresh_token_days * 86400,
         path="/",
@@ -590,7 +598,7 @@ async def qr_redeem(request: Request) -> Response:
             user_agent=_ua(request),
         ),
         httponly=True,
-        samesite="lax",
+        samesite=_cookie_samesite(),
         secure=s.cookie_secure,
         max_age=s.refresh_token_days * 86400,
         path="/",
@@ -599,7 +607,7 @@ async def qr_redeem(request: Request) -> Response:
         "csrf",
         csrf,
         httponly=False,
-        samesite="lax",
+        samesite=_cookie_samesite(),
         secure=s.cookie_secure,
         max_age=s.refresh_token_days * 86400,
         path="/",
@@ -613,7 +621,7 @@ async def qr_redeem(request: Request) -> Response:
             "session",
             signed,
             httponly=True,
-            samesite="lax",
+            samesite=_cookie_samesite(),
             secure=s.cookie_secure,
             max_age=s.refresh_token_days * 86400,
             path="/",

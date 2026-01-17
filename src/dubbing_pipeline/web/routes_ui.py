@@ -41,11 +41,14 @@ def _current_user_optional(request: Request):
 
 def _with_csrf_cookie(resp, csrf_token: str) -> None:
     s = get_settings()
+    samesite = str(getattr(s, "cookie_samesite", "lax") or "lax").strip().lower()
+    if samesite not in {"lax", "none", "strict"}:
+        samesite = "lax"
     resp.set_cookie(
         "csrf",
         csrf_token,
         httponly=False,
-        samesite="lax",
+        samesite=samesite,
         secure=bool(s.cookie_secure),
         max_age=int(s.refresh_token_days) * 86400,
         path="/",

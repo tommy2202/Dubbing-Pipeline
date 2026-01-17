@@ -26,6 +26,25 @@ You can override the state directory (recommended for production) with:
   - any `.zip` under the repo contains `*.db` / `*.sqlite*`, or
   - any `*.db` / `*.sqlite*` is tracked by git.
 
+### CORS + CSRF production hardening
+
+Production requires an explicit allowlist for browser origins and secure cookies.
+
+Set your allowlist with `CORS_ORIGINS` (comma-separated):
+
+- Example (single UI origin):
+  - `CORS_ORIGINS=https://ui.example.com`
+- Example (multiple origins):
+  - `CORS_ORIGINS=https://ui.example.com,https://admin.example.com`
+
+**Do not** use `*` or wildcard patterns in production.
+
+Cookie settings:
+
+- `COOKIE_SECURE=1` in production.
+- `COOKIE_SAMESITE=lax` for same-site UI (Tailscale, direct access).
+- `COOKIE_SAMESITE=none` **only** when you must use cross-site cookies (tunnel + separate UI domain) and TLS is enabled.
+
 ### How to reset auth safely
 
 Resetting auth deletes all users/sessions/API keys and forces re-bootstrap.

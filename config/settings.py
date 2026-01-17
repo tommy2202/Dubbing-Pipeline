@@ -112,10 +112,27 @@ def _validate_secrets(s: Settings) -> None:
     if apw and apw.strip().lower() in {"change-me", "admin", "adminpass", "password", "123456"}:
         weak.append("ADMIN_PASSWORD")
 
+    # Production hardening: require CORS allowlist + secure cookie flags.
+    if prod:
+        origins = s.public.cors_origin_list()
+        if not origins:
+            weak.append("CORS_ORIGINS")
+        for o in origins:
+            if "*" in str(o):
+                weak.append("CORS_ORIGINS")
+                break
+        if not bool(getattr(s.public, "cookie_secure", False)):
+            weak.append("COOKIE_SECURE")
+        samesite = str(getattr(s.public, "cookie_samesite", "lax") or "lax").strip().lower()
+        if samesite not in {"lax", "none"}:
+            weak.append("COOKIE_SAMESITE")
+        if samesite == "none" and not bool(getattr(s.public, "cookie_secure", False)):
+            weak.append("COOKIE_SECURE")
+
     if weak:
         if prod or strict:
             raise ConfigError(
-                "Weak/insecure secrets detected: "
+                "Unsafe security configuration detected: "
                 + ", ".join(sorted(set(weak)))
                 + ". Set them via environment variables or `.env.secrets`."
             )
