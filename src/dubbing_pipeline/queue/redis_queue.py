@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import suppress
+from fastapi import HTTPException
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -10,6 +12,7 @@ from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.policy import evaluate_dispatch
 from dubbing_pipeline.ops import audit
+from dubbing_pipeline.ops.storage import ensure_free_space, ensure_free_space_bytes
 from dubbing_pipeline.utils.log import logger
 
 from .interfaces import QueueBackend, QueueStatus
@@ -282,6 +285,36 @@ class RedisQueue(QueueBackend):
         except Exception:
             pass
 
+        # Disk guard before acquiring a running slot.
+        s = get_settings()
+        out_root = Path(str(getattr(s, "output_dir", ""))).resolve()
+        min_bytes = int(getattr(s, "min_free_disk_bytes", 0) or 0)
+        try:
+            if min_bytes > 0:
+                ensure_free_space_bytes(min_bytes=min_bytes, path=out_root)
+            else:
+                min_gb = int(getattr(s, "min_free_gb", 0) or 0)
+                if min_gb > 0:
+                    ensure_free_space(min_gb=min_gb, path=out_root)
+        except HTTPException as ex:
+            logger.warning(
+                "queue_low_disk",
+                queue_mode="redis",
+                job_id=job_id,
+                user_id=str(user_id or ""),
+                error=str(ex.detail),
+            )
+            audit.emit(
+                "queue.low_disk",
+                request_id=None,
+                user_id=str(user_id or "") or None,
+                meta={"mode": "redis", "job_id": job_id, "detail": str(ex.detail)},
+                job_id=job_id,
+            )
+            await self._defer(job_id, reason="low_disk")
+            await self._release_and_cleanup(job_id, reason="low_disk")
+            return False
+
         # Dispatch-time policy safety net (canonical policy module).
         meta = await self._read_meta(job_id)
         uid = str(meta.get("user_id") or (user_id or "")).strip()
@@ -291,6 +324,7 @@ class RedisQueue(QueueBackend):
 
         counts = await self.user_counts(user_id=uid)
         high_running = int(await r.scard(self._running_high_set_key()) or 0)
+        running_global = int(await r.scard(self._running_set_key()) or 0)
         quota = await self.user_quota(user_id=uid)
         dec = evaluate_dispatch(
             user_id=uid,
@@ -298,11 +332,19 @@ class RedisQueue(QueueBackend):
             requested_mode=mode,
             running=int(counts.get("running") or 0),
             queued=int(counts.get("queued") or 0),
+            global_running=running_global,
             global_high_running=high_running,
             user_quota=quota,
             job_id=job_id,
         )
         if not dec.ok:
+            logger.info(
+                "queue_dispatch_denied",
+                queue_mode="redis",
+                job_id=job_id,
+                user_id=uid,
+                reasons=",".join(dec.reasons),
+            )
             # If this specific job is already marked RUNNING for the user, do not defer it.
             # This can occur when another worker/process already started it (lock held elsewhere).
             # Deferring here would incorrectly move an in-flight job back to delayed/pending.
@@ -554,6 +596,18 @@ class RedisQueue(QueueBackend):
             return {}
         await r.hset(self._user_quota_key(uid), mapping=m)
         return {k: int(v) for k, v in m.items()}
+
+    async def global_counts(self) -> dict[str, int]:
+        r = self._redis()
+        if r is None:
+            return {"running": 0, "queued": 0}
+        try:
+            pending = int(await r.zcard(self._pending_key()) or 0)
+            delayed = int(await r.zcard(self._delayed_key()) or 0)
+            running = int(await r.scard(self._running_set_key()) or 0)
+            return {"running": running, "queued": pending + delayed}
+        except Exception:
+            return {"running": 0, "queued": 0}
 
     async def _health_loop(self) -> None:
         try:

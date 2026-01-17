@@ -33,7 +33,7 @@ from dubbing_pipeline.jobs.limits import get_limits, used_minutes_today
 from dubbing_pipeline.jobs.models import Job, JobState, new_id, now_utc
 from dubbing_pipeline.jobs.policy import evaluate_submission
 from dubbing_pipeline.ops.metrics import jobs_queued, pipeline_job_total
-from dubbing_pipeline.ops.storage import ensure_free_space
+from dubbing_pipeline.ops.storage import ensure_free_space, ensure_free_space_bytes
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.runtime.scheduler import JobRecord, Scheduler
 from dubbing_pipeline.security.crypto import (
@@ -345,6 +345,24 @@ def _log_upload_reject(
         return
 
 
+async def _global_queue_counts(request: Request, store) -> dict[str, int]:
+    qb = getattr(request.app.state, "queue_backend", None)
+    if qb is not None:
+        with suppress(Exception):
+            return await qb.global_counts()
+    running = 0
+    queued = 0
+    try:
+        for j in store.list(limit=5000):
+            if j.state == JobState.RUNNING:
+                running += 1
+            if j.state == JobState.QUEUED:
+                queued += 1
+    except Exception:
+        return {"running": 0, "queued": 0}
+    return {"running": int(running), "queued": int(queued)}
+
+
 def _client_ip_for_limits(request: Request) -> str:
     """
     Proxy-safe client IP for rate limiting.
@@ -528,6 +546,14 @@ async def uploads_init(
 
     up_dir = _input_uploads_dir()
     up_dir.mkdir(parents=True, exist_ok=True)
+    s = get_settings()
+    min_bytes = int(getattr(s, "min_free_disk_bytes", 0) or 0)
+    if min_bytes > 0:
+        ensure_free_space_bytes(min_bytes=min_bytes, path=up_dir)
+    else:
+        min_gb = int(getattr(s, "min_free_gb", 0) or 0)
+        if min_gb > 0:
+            ensure_free_space(min_gb=min_gb, path=up_dir)
     upload_id = _new_short_id("up_")
     part_path = (up_dir / f"{upload_id}.part").resolve()
     final_name = f"{upload_id}_{filename}"
@@ -1394,7 +1420,11 @@ async def create_job(
     s = get_settings()
     out_root = Path(str(getattr(store, "db_path", Path(s.output_dir)))).resolve().parent
     out_root.mkdir(parents=True, exist_ok=True)
-    ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
+    min_bytes = int(getattr(s, "min_free_disk_bytes", 0) or 0)
+    if min_bytes > 0:
+        ensure_free_space_bytes(min_bytes=min_bytes, path=out_root)
+    else:
+        ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
 
     scheduler = _get_scheduler(request)
     limits = get_limits()
@@ -1613,6 +1643,13 @@ async def create_job(
                 )
             up_dir = _input_uploads_dir()
             up_dir.mkdir(parents=True, exist_ok=True)
+            min_bytes = int(getattr(get_settings(), "min_free_disk_bytes", 0) or 0)
+            if min_bytes > 0:
+                ensure_free_space_bytes(min_bytes=min_bytes, path=up_dir)
+            else:
+                min_gb = int(getattr(get_settings(), "min_free_gb", 0) or 0)
+                if min_gb > 0:
+                    ensure_free_space(min_gb=min_gb, path=up_dir)
             jid = new_id()
             name = getattr(upload, "filename", "") or ""
             safe_name = _sanitize_upload_filename(name, _allowed_upload_exts())
@@ -1668,11 +1705,16 @@ async def create_job(
     qb = getattr(request.app.state, "queue_backend", None)
     counts_override = None
     user_quota = None
+    global_counts = None
     if qb is not None:
         with suppress(Exception):
             counts_override = await qb.user_counts(user_id=str(ident.user.id))
         with suppress(Exception):
             user_quota = await qb.user_quota(user_id=str(ident.user.id))
+        with suppress(Exception):
+            global_counts = await qb.global_counts()
+    if global_counts is None:
+        global_counts = await _global_queue_counts(request, store)
     pol = evaluate_submission(
         jobs=all_jobs,
         user_id=str(ident.user.id),
@@ -1681,6 +1723,7 @@ async def create_job(
         requested_device=device,
         job_id=jid,
         counts_override=counts_override,
+        global_counts=global_counts,
         user_quota=user_quota,
     )
     if not pol.ok:
@@ -2074,11 +2117,16 @@ async def create_jobs_batch(
         qb = getattr(request.app.state, "queue_backend", None)
         counts_override = None
         user_quota = None
+        global_counts = None
         if qb is not None:
             with suppress(Exception):
                 counts_override = await qb.user_counts(user_id=str(ident.user.id))
             with suppress(Exception):
                 user_quota = await qb.user_quota(user_id=str(ident.user.id))
+            with suppress(Exception):
+                global_counts = await qb.global_counts()
+        if global_counts is None:
+            global_counts = await _global_queue_counts(request, store)
         pol = evaluate_submission(
             jobs=all_jobs,
             user_id=str(ident.user.id),
@@ -2087,6 +2135,7 @@ async def create_jobs_batch(
             requested_device=str(body.get("device") or "auto"),
             job_id=None,
             counts_override=counts_override,
+            global_counts=global_counts,
             user_quota=user_quota,
         )
         if not pol.ok:
@@ -2125,6 +2174,7 @@ async def create_jobs_batch(
                 requested_device=device,
                 job_id=None,
                 counts_override=counts_override,
+                global_counts=global_counts,
                 user_quota=user_quota,
             )
             if not pol2.ok:
@@ -2196,11 +2246,16 @@ async def create_jobs_batch(
         qb = getattr(request.app.state, "queue_backend", None)
         counts_override = None
         user_quota = None
+        global_counts = None
         if qb is not None:
             with suppress(Exception):
                 counts_override = await qb.user_counts(user_id=str(ident.user.id))
             with suppress(Exception):
                 user_quota = await qb.user_quota(user_id=str(ident.user.id))
+            with suppress(Exception):
+                global_counts = await qb.global_counts()
+        if global_counts is None:
+            global_counts = await _global_queue_counts(request, store)
         pol = evaluate_submission(
             jobs=all_jobs,
             user_id=str(ident.user.id),
@@ -2209,6 +2264,7 @@ async def create_jobs_batch(
             requested_device=str(form.get("device") or "auto"),
             job_id=None,
             counts_override=counts_override,
+            global_counts=global_counts,
             user_quota=user_quota,
         )
         if not pol.ok:
@@ -2231,6 +2287,7 @@ async def create_jobs_batch(
             requested_device=device,
             job_id=None,
             counts_override=counts_override,
+            global_counts=global_counts,
             user_quota=user_quota,
         )
         if not pol2.ok:
@@ -2250,6 +2307,13 @@ async def create_jobs_batch(
 
         up_dir = _input_uploads_dir()
         up_dir.mkdir(parents=True, exist_ok=True)
+        min_bytes = int(getattr(get_settings(), "min_free_disk_bytes", 0) or 0)
+        if min_bytes > 0:
+            ensure_free_space_bytes(min_bytes=min_bytes, path=up_dir)
+        else:
+            min_gb = int(getattr(get_settings(), "min_free_gb", 0) or 0)
+            if min_gb > 0:
+                ensure_free_space(min_gb=min_gb, path=up_dir)
         for upload in files:
             ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()
             if ctype_u and ctype_u not in _ALLOWED_UPLOAD_MIME:

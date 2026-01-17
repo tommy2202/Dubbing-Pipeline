@@ -62,6 +62,10 @@ class PublicConfig(BaseSettings):
     max_upload_bytes: int = Field(default=0, alias="MAX_UPLOAD_BYTES")
     max_upload_bytes_per_user: int = Field(default=0, alias="MAX_UPLOAD_BYTES_PER_USER")
     allowed_upload_exts: str = Field(default="", alias="ALLOWED_UPLOAD_EXTS")
+    max_running_jobs_global: int = Field(default=0, alias="MAX_RUNNING_JOBS_GLOBAL")
+    max_running_jobs_per_user: int = Field(default=0, alias="MAX_RUNNING_JOBS_PER_USER")
+    max_queue_depth_global: int = Field(default=0, alias="MAX_QUEUE_DEPTH_GLOBAL")
+    min_free_disk_bytes: int = Field(default=0, alias="MIN_FREE_DISK_BYTES")
 
     # --- legacy (root `main.py`) paths ---
     uploads_dir: Path = Field(
