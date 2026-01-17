@@ -50,9 +50,9 @@ The following repo hygiene fixes were applied with minimal impact to working cod
 - **Repo-internal junk deleted from disk (explicitly allowed)**:
   - Deleted `build/` and `__pycache__/` directories from the working tree after untracking (to reduce local noise). No runtime/user media or `_tmp_*` content was deleted from disk by the cleanup.
 
-Items intentionally **not changed yet** (need a separate decision/policy because they may be fixtures):
-- `data/reports/**`
-- `voices/embeddings/Speaker1.npy`
+Items resolved after initial cleanup:
+- `data/reports/**` (removed from git; ignored)
+- `voices/embeddings/Speaker1.npy` (removed from git; ignored)
 
 ## Inventory: tracked artifacts discovered (exact paths)
 

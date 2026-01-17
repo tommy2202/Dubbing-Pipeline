@@ -25,6 +25,10 @@ def _is_artifact(path: str) -> bool:
         return True
     if p.startswith("backups/"):
         return True
+    if p.startswith("data/reports/"):
+        return True
+    if p.startswith("voices/embeddings/"):
+        return True
     if p.startswith("_tmp") or "/_tmp" in p:
         return True
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import os
+import subprocess
 import threading
 import time
 from contextlib import suppress
@@ -11,9 +13,10 @@ from typing import Any
 
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState, now_utc
-from dubbing_pipeline.ops.storage import periodic_prune_tick
+from dubbing_pipeline.ops.storage import ensure_free_space, periodic_prune_tick
 from dubbing_pipeline.runtime.model_manager import ModelManager
 from dubbing_pipeline.utils.log import logger
+from dubbing_pipeline.utils.paths import default_paths
 
 _draining = threading.Event()
 _deadline_lock = threading.Lock()
@@ -141,6 +144,104 @@ async def _prune_loop(*, output_root: str, interval_s: float) -> None:
         return
 
 
+def _run_version(cmd: list[str]) -> str | None:
+    try:
+        p = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    if p.returncode != 0:
+        return None
+    out = (p.stdout or "").strip()
+    err = (p.stderr or "").strip()
+    return out.splitlines()[0] if out else (err.splitlines()[0] if err else None)
+
+
+def _ensure_writable_dir(path: Path, *, label: str) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if not path.exists() or not path.is_dir():
+        raise RuntimeError(f"{label} is not a directory: {path}")
+    if not os.access(str(path), os.W_OK):
+        raise RuntimeError(f"{label} is not writable: {path}")
+    test_path = path / ".write_check"
+    try:
+        test_path.write_text("ok\n", encoding="utf-8")
+    finally:
+        with suppress(Exception):
+            test_path.unlink()
+
+
+def _startup_self_check(app_state: Any) -> None:
+    s = get_settings()
+    logger.info("startup_self_check_begin")
+
+    ffmpeg_v = _run_version([str(s.ffmpeg_bin), "-version"])
+    if not ffmpeg_v:
+        logger.error("startup_self_check_failed", check="ffmpeg", hint="install ffmpeg")
+        raise RuntimeError("ffmpeg not found or not runnable")
+    logger.info("startup_check_ok", check="ffmpeg", version=ffmpeg_v)
+
+    ffprobe_v = _run_version([str(s.ffprobe_bin), "-version"])
+    if not ffprobe_v:
+        logger.error("startup_self_check_failed", check="ffprobe", hint="install ffprobe")
+        raise RuntimeError("ffprobe not found or not runnable")
+    logger.info("startup_check_ok", check="ffprobe", version=ffprobe_v)
+
+    paths = default_paths()
+    out_root = Path(s.output_dir).resolve()
+    input_root = (
+        Path(str(s.input_dir)).resolve()
+        if getattr(s, "input_dir", None)
+        else (Path(s.app_root).resolve() / "Input")
+    )
+    uploads_root = Path(paths.uploads_dir).resolve()
+    _ensure_writable_dir(out_root, label="Output dir")
+    _ensure_writable_dir(input_root, label="Input dir")
+    _ensure_writable_dir(uploads_root, label="Uploads dir")
+    logger.info(
+        "startup_check_ok",
+        check="paths",
+        output_dir=str(out_root),
+        input_dir=str(input_root),
+        uploads_dir=str(uploads_root),
+    )
+
+    min_free_gb = int(getattr(s, "min_free_gb", 0) or 0)
+    if min_free_gb > 0:
+        try:
+            ensure_free_space(min_gb=min_free_gb, path=out_root)
+            logger.info("startup_check_ok", check="disk_free", min_free_gb=int(min_free_gb))
+        except Exception as ex:
+            logger.error("startup_self_check_failed", check="disk_free", error=str(ex))
+            raise RuntimeError(f"insufficient free disk space: {ex}") from ex
+    else:
+        logger.info("startup_check_ok", check="disk_free", min_free_gb=0, note="check disabled")
+
+    max_upload_mb = int(getattr(s, "max_upload_mb", 0) or 0)
+    upload_chunk_bytes = int(getattr(s, "upload_chunk_bytes", 0) or 0)
+    if max_upload_mb <= 0:
+        logger.warning("startup_self_check_warn", check="upload_caps", max_upload_mb=max_upload_mb)
+    else:
+        logger.info(
+            "startup_check_ok",
+            check="upload_caps",
+            max_upload_mb=max_upload_mb,
+            upload_chunk_bytes=upload_chunk_bytes,
+        )
+
+    quotas = {
+        "max_active_jobs_per_user": int(getattr(s, "max_active_jobs_per_user", 0) or 0),
+        "max_queued_jobs_per_user": int(getattr(s, "max_queued_jobs_per_user", 0) or 0),
+        "daily_job_cap": int(getattr(s, "daily_job_cap", 0) or 0),
+        "max_concurrent_per_user": int(getattr(s, "max_concurrent_per_user", 0) or 0),
+    }
+    if any(v < 0 for v in quotas.values()):
+        logger.warning("startup_self_check_warn", check="quotas", quotas=quotas)
+    else:
+        logger.info("startup_check_ok", check="quotas", quotas=quotas)
+
+    logger.info("startup_self_check_end")
+
+
 def _append_shutdown_logs(app_state: Any, message: str) -> None:
     store = getattr(app_state, "job_store", None)
     if store is None:
@@ -165,6 +266,8 @@ async def start_all(app_state: Any) -> None:
     with suppress(Exception):
         end_draining()
     s = get_settings()
+
+    _startup_self_check(app_state)
 
     queue_backend = getattr(app_state, "queue_backend", None)
     if queue_backend is not None:
