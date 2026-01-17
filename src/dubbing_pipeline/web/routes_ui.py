@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
 from dubbing_pipeline.api.deps import current_identity
+from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.api.routes_settings import UserSettingsStore
 from dubbing_pipeline.api.security import issue_csrf_token
 from dubbing_pipeline.config import get_settings
@@ -244,6 +245,8 @@ async def ui_jobs_table(
     # mirror API defaults
     limit_i = max(1, min(200, int(limit)))
     jobs = store.list(limit=1000, state=(status or None))
+    if user.role != Role.admin:
+        jobs = [j for j in jobs if str(j.owner_id or "") == str(user.id)]
     if not bool(int(include_archived or 0)):
         jobs = [
             j

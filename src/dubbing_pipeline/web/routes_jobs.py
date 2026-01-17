@@ -42,6 +42,11 @@ from dubbing_pipeline.security.crypto import (
     is_encrypted_path,
     materialize_decrypted,
 )
+from dubbing_pipeline.security.ownership import (
+    require_file_owner_or_admin,
+    require_job_owner_or_admin,
+    require_library_owner_or_admin,
+)
 from dubbing_pipeline.utils.crypto import verify_secret
 from dubbing_pipeline.utils.ffmpeg_safe import FFmpegError, ffprobe_media_info
 from dubbing_pipeline.utils.log import request_id_var
@@ -97,14 +102,25 @@ def _can_access_series(store, *, ident: Identity, series_slug: str) -> bool:
     try:
         row = con.execute(
             """
-            SELECT 1 FROM job_library
+            SELECT owner_user_id, visibility FROM job_library
             WHERE series_slug = ?
               AND (owner_user_id = ? OR visibility = 'public')
             LIMIT 1;
             """,
             (slug, str(ident.user.id)),
         ).fetchone()
-        return row is not None
+        if row is None:
+            return False
+        require_library_owner_or_admin(
+            ident.user,
+            {
+                "owner_user_id": row["owner_user_id"],
+                "visibility": row["visibility"],
+                "series_slug": slug,
+            },
+            allow_public=True,
+        )
+        return True
     finally:
         con.close()
 
@@ -123,19 +139,33 @@ def _can_edit_series(store, *, ident: Identity, series_slug: str) -> bool:
     con = store._conn()
     try:
         row = con.execute(
-            "SELECT 1 FROM job_library WHERE series_slug = ? AND owner_user_id = ? LIMIT 1;",
+            """
+            SELECT owner_user_id, visibility FROM job_library
+            WHERE series_slug = ? AND owner_user_id = ?
+            LIMIT 1;
+            """,
             (slug, str(ident.user.id)),
         ).fetchone()
-        return row is not None
+        if row is None:
+            return False
+        require_library_owner_or_admin(
+            ident.user,
+            {
+                "owner_user_id": row["owner_user_id"],
+                "visibility": row["visibility"],
+                "series_slug": slug,
+            },
+            allow_public=False,
+        )
+        return True
     finally:
         con.close()
 
 
-def _assert_job_owner_or_admin(job: Job, ident: Identity) -> None:
-    if str(getattr(job, "owner_id", "") or "") != str(ident.user.id) and str(
-        getattr(ident.user.role, "value", ident.user.role)
-    ) != "admin":
-        raise HTTPException(status_code=403, detail="Forbidden")
+def _require_job_access(job: Job | None, ident: Identity, *, allow_public: bool = False) -> Job:
+    require_job_owner_or_admin(ident.user, job, allow_public=allow_public)
+    assert job is not None
+    return job
 
 _MAX_IMPORT_TEXT_BYTES = 2 * 1024 * 1024  # 2MB per imported text file (SRT/JSON)
 
@@ -415,11 +445,17 @@ async def uploads_status(
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
-    if (
-        str(rec.get("owner_id") or "") != str(ident.user.id)
-        and str(ident.user.role.value) != "admin"
-    ):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    require_file_owner_or_admin(
+        ident.user,
+        {
+            "owner_id": rec.get("owner_id"),
+            "visibility": "private",
+            "job_id": None,
+            "path": rec.get("final_path") or rec.get("part_path") or "",
+            "rel_path": f"upload:{upload_id}",
+        },
+        allow_public=False,
+    )
     return {
         "upload_id": str(rec.get("id") or upload_id),
         "total_bytes": int(rec.get("total_bytes") or 0),
@@ -466,11 +502,17 @@ async def uploads_chunk(
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
-    if (
-        str(rec.get("owner_id") or "") != str(ident.user.id)
-        and str(ident.user.role.value) != "admin"
-    ):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    require_file_owner_or_admin(
+        ident.user,
+        {
+            "owner_id": rec.get("owner_id"),
+            "visibility": "private",
+            "job_id": None,
+            "path": rec.get("final_path") or rec.get("part_path") or "",
+            "rel_path": f"upload:{upload_id}",
+        },
+        allow_public=False,
+    )
     if bool(rec.get("completed")):
         return {"ok": True, "already_completed": True}
 
@@ -575,11 +617,17 @@ async def uploads_complete(
     rec = store.get_upload(upload_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
-    if (
-        str(rec.get("owner_id") or "") != str(ident.user.id)
-        and str(ident.user.role.value) != "admin"
-    ):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    require_file_owner_or_admin(
+        ident.user,
+        {
+            "owner_id": rec.get("owner_id"),
+            "visibility": "private",
+            "job_id": None,
+            "path": rec.get("final_path") or rec.get("part_path") or "",
+            "rel_path": f"upload:{upload_id}",
+        },
+        allow_public=False,
+    )
 
     body = await request.json()
     if not isinstance(body, dict):
@@ -1166,6 +1214,17 @@ async def create_job(
             urec = store.get_upload(upload_id)
             if not urec or not bool(urec.get("completed")):
                 raise HTTPException(status_code=400, detail="upload_id not completed")
+            require_file_owner_or_admin(
+                ident.user,
+                {
+                    "owner_id": urec.get("owner_id"),
+                    "visibility": "private",
+                    "job_id": None,
+                    "path": urec.get("final_path") or urec.get("part_path") or "",
+                    "rel_path": f"upload:{upload_id}",
+                },
+                allow_public=False,
+            )
             vp = str(urec.get("final_path") or "")
             up_root = _input_uploads_dir().resolve()
             video_path = Path(vp).resolve()
@@ -2003,6 +2062,8 @@ async def list_jobs(
     limit_i = max(1, min(200, int(limit)))
     offset_i = max(0, int(offset))
     jobs_all = store.list(limit=1000, state=st)
+    if ident.user.role != Role.admin:
+        jobs_all = [j for j in jobs_all if str(j.owner_id or "") == str(ident.user.id)]
     # Default: hide archived unless explicitly included.
     if not bool(int(include_archived or 0)):
         jobs_all = [
@@ -2090,9 +2151,7 @@ async def set_job_tags(
     request: Request, id: str, ident: Identity = Depends(require_role(Role.operator))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), ident)
     body = await request.json()
     tags_in = body.get("tags") if isinstance(body, dict) else None
     if not isinstance(tags_in, list):
@@ -2119,9 +2178,7 @@ async def archive_job(
     request: Request, id: str, ident: Identity = Depends(require_role(Role.operator))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), ident)
     rt = dict(job.runtime or {})
     rt["archived"] = True
     rt["archived_at"] = now_utc()
@@ -2135,9 +2192,7 @@ async def unarchive_job(
     request: Request, id: str, ident: Identity = Depends(require_role(Role.operator))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), ident)
     rt = dict(job.runtime or {})
     rt["archived"] = False
     rt["archived_at"] = None
@@ -2151,9 +2206,7 @@ async def delete_job_admin(
     request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), ident)
     # Only allow deleting inside OUTPUT_ROOT.
     out_root = _output_root()
     base_dir = _job_base_dir(job)
@@ -2210,9 +2263,7 @@ async def get_job_overrides(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     try:
         from dubbing_pipeline.review.overrides import load_overrides
@@ -2236,9 +2287,7 @@ async def get_job_music_regions_effective(
     Returns the *effective* regions after applying overrides to base detection output.
     """
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     from dubbing_pipeline.review.overrides import effective_music_regions_for_job, load_overrides
 
@@ -2263,9 +2312,7 @@ async def put_job_overrides(
     request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     body = await request.json()
     if not isinstance(body, dict):
@@ -2285,9 +2332,7 @@ async def apply_job_overrides(
     request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     try:
         from dubbing_pipeline.review.overrides import apply_overrides
@@ -2304,9 +2349,7 @@ async def get_job(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _, allow_public=True)
     d = job.to_dict()
     # Attach checkpoint (best-effort) for stage breakdown.
     with suppress(Exception):
@@ -2340,9 +2383,7 @@ async def cancel_job(
         if qb is not None:
             await qb.cancel_job(job_id=str(id), user_id=str(_.user.id))
     await queue.cancel(id)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     return job.to_dict()
 
 
@@ -2357,9 +2398,7 @@ async def kill_job_admin(
     store = _get_store(request)
     queue = _get_queue(request)
     await queue.kill(id, reason="Killed by admin")
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     audit_event("job.kill", request=request, user_id=_.user.id, meta={"job_id": id})
     return job.to_dict()
 
@@ -2370,9 +2409,7 @@ async def pause_job(
 ) -> dict[str, Any]:
     store = _get_store(request)
     queue = _get_queue(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     if job.state != JobState.QUEUED:
         raise HTTPException(status_code=409, detail="Can only pause QUEUED jobs")
     j2 = await queue.pause(id)
@@ -2389,9 +2426,7 @@ async def resume_job(
     queue = _get_queue(request)
     scheduler = _get_scheduler(request)
     qb = getattr(request.app.state, "queue_backend", None)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     if job.state != JobState.PAUSED:
         raise HTTPException(status_code=409, detail="Can only resume PAUSED jobs")
     j2 = await queue.resume(id)
@@ -2432,9 +2467,7 @@ async def rerun_two_pass_admin(
     store = _get_store(request)
     scheduler = _get_scheduler(request)
     qb = getattr(request.app.state, "queue_backend", None)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
 
     # Mark runtime so the worker can detect this is a pass-2-only rerun.
     rt = dict(job.runtime or {})
@@ -2478,8 +2511,8 @@ async def rerun_two_pass_admin(
                 )
             )
     audit_event("two_pass.rerun", request=request, user_id=_.user.id, meta={"job_id": id})
-    job2 = store.get(id)
-    return (job2.to_dict() if job2 is not None else {"ok": True})
+    job2 = _require_job_access(store.get(id), _)
+    return job2.to_dict()
 
 
 @router.get("/api/jobs/events")
@@ -2495,6 +2528,8 @@ async def jobs_events(request: Request, _: Identity = Depends(require_scope("rea
                 if await request.is_disconnected():
                     return
                 jobs = store.list(limit=200)
+                if _.user.role != Role.admin:
+                    jobs = [j for j in jobs if str(j.owner_id or "") == str(_.user.id)]
                 for j in jobs:
                     key = f"{j.state.value}:{j.updated_at}:{j.progress:.4f}:{j.message}"
                     if last.get(j.id) == key:
@@ -2624,6 +2659,7 @@ async def tail_logs(
     request: Request, id: str, n: int = 200, _: Identity = Depends(require_scope("read:job"))
 ) -> PlainTextResponse:
     store = _get_store(request)
+    _require_job_access(store.get(id), _)
     return PlainTextResponse(store.tail_log(id, n=n))
 
 
@@ -2638,9 +2674,7 @@ async def logs_alias(
 @router.get("/api/jobs/{id}/logs/stream")
 async def stream_logs(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     log_path = Path(job.log_path) if job.log_path else None
     if log_path is None:
         raise HTTPException(status_code=404, detail="No logs for job")
@@ -2683,9 +2717,7 @@ async def get_job_characters(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     rt = dict(job.runtime or {})
     items = rt.get("voice_map", [])
     if not isinstance(items, list):
@@ -2698,9 +2730,7 @@ async def put_job_characters(
     request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
 
     ctype = (request.headers.get("content-type") or "").lower()
     items: list[dict[str, Any]] = []
@@ -2774,9 +2804,7 @@ async def get_job_transcript(
     _: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     stem = Path(job.video_path).stem if job.video_path else base_dir.name
 
@@ -2859,9 +2887,7 @@ async def put_job_transcript(
     request: Request, id: str, _: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
 
     body = await request.json()
@@ -2935,9 +2961,7 @@ async def set_speaker_overrides_from_ui(
     Body: { updates: [{ index: <int>, speaker_override: <str> }, ...] }
     """
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     body = await request.json()
     if not isinstance(body, dict) or not isinstance(body.get("updates"), list):
@@ -2986,9 +3010,7 @@ async def synthesize_from_approved(
     store = _get_store(request)
     scheduler = _get_scheduler(request)
     qb = getattr(request.app.state, "queue_backend", None)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     st = _load_transcript_store(base_dir)
     # Mark job to re-synthesize only approved segments.
@@ -3033,9 +3055,7 @@ async def get_job_review_segments(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     rsp = _review_state_path(base_dir)
     if not rsp.exists():
@@ -3127,9 +3147,7 @@ async def post_job_review_helper(
         limit=120,
         per_seconds=60,
     )
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     body = await request.json()
     if not isinstance(body, dict):
@@ -3220,9 +3238,7 @@ async def post_job_review_edit(
         limit=120,
         per_seconds=60,
     )
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     body = await request.json()
     text = str(body.get("text") or "")
@@ -3255,9 +3271,7 @@ async def post_job_review_regen(
         limit=60,
         per_seconds=60,
     )
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     from dubbing_pipeline.review.ops import regen_segment
 
@@ -3288,9 +3302,7 @@ async def post_job_review_lock(
         limit=120,
         per_seconds=60,
     )
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     from dubbing_pipeline.review.ops import lock_segment
 
@@ -3321,9 +3333,7 @@ async def post_job_review_unlock(
         limit=120,
         per_seconds=60,
     )
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     from dubbing_pipeline.review.ops import unlock_segment
 
@@ -3348,9 +3358,7 @@ async def get_job_review_audio(
     _: Identity = Depends(require_scope("read:job")),
 ) -> Response:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     p = _review_audio_path(base_dir, int(segment_id))
     if p is None:
@@ -3432,11 +3440,7 @@ async def get_job_voice_refs(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
-    # Enforce object-level job auth (owner/admin) consistent with other endpoints.
-    _assert_job_owner_or_admin(job, _)
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     man_path = _voice_refs_manifest_path(base_dir)
     if not man_path.exists():
@@ -3559,9 +3563,7 @@ async def get_job_voice_ref_audio(
     _: Identity = Depends(require_scope("read:job")),
 ) -> Response:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     if _privacy_blocks_voice_refs(job):
         raise HTTPException(status_code=403, detail="Voice refs not available in privacy/minimal mode")
     base_dir = _job_base_dir(job)
@@ -3596,9 +3598,7 @@ async def post_job_voice_ref_override(
     Stored under Output/<job>/analysis/voice_refs/<speaker_id>.wav (job-local).
     """
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _)
     base_dir = _job_base_dir(job)
     if _privacy_blocks_voice_refs(job):
         raise HTTPException(status_code=403, detail="Voice refs not available in privacy/minimal mode")
@@ -3943,10 +3943,7 @@ async def post_job_speaker_mapping(
     ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(str(job_id))
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
-    _assert_job_owner_or_admin(job, ident)
+    job = _require_job_access(store.get(str(job_id)), ident)
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
@@ -3984,10 +3981,7 @@ async def get_job_speaker_mapping(
     ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(str(job_id))
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
-    _assert_job_owner_or_admin(job, ident)
+    _require_job_access(store.get(str(job_id)), ident)
     items = store.list_speaker_mappings(str(job_id))
     return {"ok": True, "items": items}
 
@@ -4013,10 +4007,7 @@ async def promote_series_character_ref_from_job(
     speaker_id = Path(str(body.get("speaker_id") or "")).name.strip()
     if not job_id or not speaker_id:
         raise HTTPException(status_code=422, detail="job_id and speaker_id required")
-    job = store.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    _assert_job_owner_or_admin(job, ident)
+    job = _require_job_access(store.get(job_id), ident)
     if str(getattr(job, "series_slug", "") or "").strip() != slug:
         raise HTTPException(status_code=400, detail="Job series_slug does not match")
     if _privacy_blocks_voice_refs(job):
@@ -4092,9 +4083,7 @@ async def job_files(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _, allow_public=True)
     base_dir = _job_base_dir(job)
     stem = Path(job.video_path).stem if job.video_path else base_dir.name
 
@@ -4339,9 +4328,7 @@ async def job_stream_manifest(
     request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _, allow_public=True)
     base_dir = _job_base_dir(job)
     p = _stream_manifest_path(base_dir)
     if not p.exists():
@@ -4362,9 +4349,7 @@ async def job_stream_chunk(
     _: Identity = Depends(require_scope("read:job")),
 ) -> Response:
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    job = _require_job_access(store.get(id), _, allow_public=True)
     base_dir = _job_base_dir(job)
     p = _stream_chunk_mp4_path(base_dir, int(chunk_idx))
     if p is None:
@@ -4375,9 +4360,7 @@ async def job_stream_chunk(
 @router.get("/api/jobs/{id}/qrcode")
 async def job_qrcode(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
-    job = store.get(id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    _require_job_access(store.get(id), _)
     # Absolute URL to the UI job page.
     base = str(request.base_url).rstrip("/")
     url = f"{base}/ui/jobs/{id}"
@@ -4407,6 +4390,7 @@ async def ws_job(websocket: WebSocket, id: str):
         await websocket.close(code=1011)
         return
     ok = False
+    user = None
     try:
         token = ""
         # 1) Authorization header bearer
@@ -4459,24 +4443,34 @@ async def ws_job(websocket: WebSocket, id: str):
                     if verify_secret(k.key_hash, token):
                         scopes = set(k.scopes or [])
                         if "admin:*" in scopes or "read:job" in scopes:
-                            ok = True
+                            user = auth_store.get_user(k.user_id)
+                            ok = user is not None
                         break
         else:
             data = decode_token(token, expected_typ="access")
+            sub = str(data.get("sub") or "")
+            if sub:
+                user = auth_store.get_user(sub)
             scopes = data.get("scopes") if isinstance(data.get("scopes"), list) else []
             scopes = {str(s) for s in scopes}
-            if "admin:*" in scopes or "read:job" in scopes:
+            if user is not None and ("admin:*" in scopes or "read:job" in scopes):
                 ok = True
     except Exception:
         ok = False
 
-    if not ok:
+    if not ok or user is None:
         await websocket.close(code=1008)
         return
 
     store = getattr(websocket.app.state, "job_store", None)
     if store is None:
         await websocket.close(code=1011)
+        return
+
+    try:
+        require_job_owner_or_admin(user, store.get(id), allow_public=False)
+    except HTTPException:
+        await websocket.close(code=1008)
         return
 
     last_updated = None
@@ -4512,6 +4506,7 @@ async def ws_job(websocket: WebSocket, id: str):
 @router.get("/events/jobs/{id}")
 async def sse_job(request: Request, id: str, _: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
+    _require_job_access(store.get(id), _)
 
     async def gen():
         last_updated = None

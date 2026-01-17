@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
-from dubbing_pipeline.api.deps import require_role, require_scope
+from dubbing_pipeline.api.deps import Identity, require_role, require_scope
 from dubbing_pipeline.api.middleware import request_context_middleware
 from dubbing_pipeline.api.models import AuthStore, Role, User, now_ts
 from dubbing_pipeline.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
@@ -31,11 +31,13 @@ from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import Job
 from dubbing_pipeline.jobs.queue import JobQueue
 from dubbing_pipeline.jobs.store import JobStore
+from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
 from dubbing_pipeline.ops import audit
 from dubbing_pipeline.ops.metrics import REGISTRY
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.security.runtime_db import UnsafeRuntimeDbPath, assert_safe_runtime_db_path
+from dubbing_pipeline.security.ownership import require_file_owner_or_admin
 from dubbing_pipeline.utils.crypto import PasswordHasher, random_id
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.net import install_egress_policy
@@ -428,6 +430,59 @@ def _safe_output_path(rel: str) -> Path:
     return p
 
 
+def _get_job_store(request: Request) -> JobStore:
+    store = getattr(request.app.state, "job_store", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="Job store not initialized")
+    return store
+
+
+def _job_output_roots(job: Job) -> list[Path]:
+    roots: list[Path] = []
+    with suppress(Exception):
+        roots.append(get_job_output_root(job))
+    with suppress(Exception):
+        roots.append(get_library_root_for_job(job))
+    with suppress(Exception):
+        roots.append(_output_root() / "jobs" / str(job.id))
+    out: list[Path] = []
+    for r in roots:
+        try:
+            out.append(Path(r).resolve())
+        except Exception:
+            continue
+    return out
+
+
+def _job_for_output_path(store: JobStore, path: Path) -> Job | None:
+    p = Path(path).resolve()
+    out_root = _output_root()
+    try:
+        rel = p.relative_to(out_root)
+    except Exception:
+        return None
+    # Fast path: Output/jobs/<job_id>/...
+    parts = rel.parts
+    if len(parts) >= 2 and parts[0] == "jobs":
+        cand = store.get(str(parts[1]))
+        if cand is not None:
+            for root in _job_output_roots(cand):
+                try:
+                    p.relative_to(root)
+                    return cand
+                except Exception:
+                    continue
+    # Slow path: scan jobs for matching output roots.
+    for job in store.list(limit=5000):
+        for root in _job_output_roots(job):
+            try:
+                p.relative_to(root)
+                return job
+            except Exception:
+                continue
+    return None
+
+
 @app.get("/health")
 async def health():
     return {"ok": True}
@@ -486,8 +541,25 @@ async def login_redirect() -> Response:
 
 
 @app.get("/video/{job}")
-async def video(request: Request, job: str, _: object = Depends(require_scope("read:job"))):
+async def video(request: Request, job: str, ident: Identity = Depends(require_scope("read:job"))):
     p = _resolve_job(job)
+    store = _get_job_store(request)
+    j = _job_for_output_path(store, p)
+    require_file_owner_or_admin(
+        ident.user,
+        (
+            {
+                "owner_id": getattr(j, "owner_id", "") if j else "",
+                "visibility": getattr(j, "visibility", "private") if j else "private",
+                "job_id": getattr(j, "id", "") if j else "",
+                "path": str(p),
+                "rel_path": str(p.relative_to(_output_root())).replace("\\", "/"),
+            }
+            if j is not None
+            else None
+        ),
+        allow_public=True,
+    )
     ctype, _ = mimetypes.guess_type(str(p))
     ctype = ctype or ("video/mp4" if p.suffix.lower() == ".mp4" else "video/x-matroska")
 
@@ -501,8 +573,25 @@ async def video(request: Request, job: str, _: object = Depends(require_scope("r
 
 
 @app.get("/files/{path:path}")
-async def files(request: Request, path: str, _: object = Depends(require_scope("read:job"))):
+async def files(request: Request, path: str, ident: Identity = Depends(require_scope("read:job"))):
     p = _safe_output_path(path)
+    store = _get_job_store(request)
+    j = _job_for_output_path(store, p)
+    require_file_owner_or_admin(
+        ident.user,
+        (
+            {
+                "owner_id": getattr(j, "owner_id", "") if j else "",
+                "visibility": getattr(j, "visibility", "private") if j else "private",
+                "job_id": getattr(j, "id", "") if j else "",
+                "path": str(p),
+                "rel_path": str(p.relative_to(_output_root())).replace("\\", "/"),
+            }
+            if j is not None
+            else None
+        ),
+        allow_public=True,
+    )
     ctype, _ = mimetypes.guess_type(str(p))
     if not ctype:
         # HLS / TS

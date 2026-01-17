@@ -11,9 +11,11 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from dubbing_pipeline.api.deps import require_scope
+from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState
+from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
+from dubbing_pipeline.security.ownership import require_job_owner_or_admin
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 
@@ -55,18 +57,29 @@ def _get_rl(request: Request) -> RateLimiter:
     return rl
 
 
-def _resolve_job_media_path(request: Request, job_id: str, video_path: str | None = None) -> Path:
-    # Prefer explicit video_path if provided (still must exist).
+def _resolve_job_media_path(job, video_path: str | None = None) -> Path:
+    # Allow explicit video_path only when it stays under this job's output roots.
     if video_path:
         p = Path(video_path).expanduser().resolve()
+        roots = [get_job_output_root(job)]
+        try:
+            roots.append(get_library_root_for_job(job))
+        except Exception:
+            pass
+        allowed = False
+        for root in roots:
+            try:
+                p.relative_to(Path(root).resolve())
+                allowed = True
+                break
+            except Exception:
+                continue
+        if not allowed:
+            raise HTTPException(status_code=400, detail="video_path not allowed")
         if not p.exists() or not p.is_file():
             raise HTTPException(status_code=404, detail="video_path not found")
         return p
 
-    store = _get_store(request)
-    job = store.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
     if job.state != JobState.DONE or not job.output_mkv:
         raise HTTPException(status_code=409, detail="Job not done")
     p = Path(job.output_mkv)
@@ -149,7 +162,9 @@ async def shutdown_webrtc_peers() -> None:
 
 
 @router.post("/webrtc/offer")
-async def webrtc_offer(request: Request, _: object = Depends(require_scope("read:job"))) -> dict:
+async def webrtc_offer(
+    request: Request, ident: Identity = Depends(require_scope("read:job"))
+) -> dict:
     # auth required (cookie/bearer/api-key), CSRF enforced by require_scope for cookie flows.
 
     # Lazy import so local installs don't break if aiortc/av aren't installed.
@@ -170,9 +185,10 @@ async def webrtc_offer(request: Request, _: object = Depends(require_scope("read
     if not job_id or not isinstance(sdp, str) or not isinstance(typ, str):
         raise HTTPException(status_code=400, detail="Required: job_id, sdp, type")
 
-    media_path = _resolve_job_media_path(
-        request, job_id=job_id, video_path=str(video_path) if video_path else None
-    )
+    store = _get_store(request)
+    job = store.get(job_id)
+    require_job_owner_or_admin(ident.user, job, allow_public=True)
+    media_path = _resolve_job_media_path(job, video_path=str(video_path) if video_path else None)
 
     ip = request.client.host if request.client else "unknown"
     # Rate limit offers (per IP) to avoid resource exhaustion.
