@@ -13,12 +13,13 @@ def _venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
-def _run(cmd: list[str], *, cwd: Path) -> None:
+def _run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess:
     proc = subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True)
     if proc.returncode != 0:
         print(proc.stdout)
         print(proc.stderr, file=sys.stderr)
         raise RuntimeError(f"command failed: {' '.join(cmd)}")
+    return proc
 
 
 def main() -> int:
@@ -30,7 +31,13 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as td:
         venv_dir = Path(td) / "venv"
-        _run([sys.executable, "-m", "venv", str(venv_dir)], cwd=repo_root)
+        try:
+            _run([sys.executable, "-m", "venv", str(venv_dir)], cwd=repo_root)
+        except RuntimeError:
+            print("verify_dependency_resolve: FAIL", file=sys.stderr)
+            print("- error: python venv creation failed", file=sys.stderr)
+            print("- hint: install python3-venv and re-run", file=sys.stderr)
+            return 2
         py = _venv_python(venv_dir)
 
         try:
