@@ -2055,7 +2055,7 @@ async def list_jobs(
     include_archived: int = 0,
     limit: int = 25,
     offset: int = 0,
-    _: Identity = Depends(require_scope("read:job")),
+    ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     store = _get_store(request)
     st = status or state
