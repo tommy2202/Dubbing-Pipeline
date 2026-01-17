@@ -16,7 +16,7 @@ from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import Job
 from dubbing_pipeline.library.paths import get_job_output_root
 from dubbing_pipeline.utils.io import read_json
-from dubbing_pipeline.ops import audit
+from dubbing_pipeline.api.middleware import audit_event
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
@@ -89,9 +89,9 @@ def _audit_ui_page_view(request: Request, *, user_id: str, page: str, meta: dict
     if not bool(getattr(s, "ui_audit_page_views", False)):
         return
     try:
-        audit.emit(
+        audit_event(
             "ui.page_view",
-            request_id=None,
+            request=request,
             user_id=str(user_id),
             meta={"page": str(page), "path": str(request.url.path), **(meta or {})},
         )

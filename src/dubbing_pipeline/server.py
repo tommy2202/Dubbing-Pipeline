@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
 from dubbing_pipeline.api.deps import Identity, require_role, require_scope
-from dubbing_pipeline.api.middleware import request_context_middleware
+from dubbing_pipeline.api.middleware import audit_event, request_context_middleware
 from dubbing_pipeline.api.models import AuthStore, Role, User, now_ts
 from dubbing_pipeline.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
 from dubbing_pipeline.api.routes_audit import router as audit_router
@@ -560,6 +560,16 @@ async def video(request: Request, job: str, ident: Identity = Depends(require_sc
         ),
         allow_public=True,
     )
+    audit_event(
+        "file.download",
+        request=request,
+        user_id=ident.user.id,
+        meta={
+            "job_id": getattr(j, "id", "") if j else "",
+            "rel_path": str(p.relative_to(_output_root())).replace("\\", "/"),
+            "kind": "video",
+        },
+    )
     ctype, _ = mimetypes.guess_type(str(p))
     ctype = ctype or ("video/mp4" if p.suffix.lower() == ".mp4" else "video/x-matroska")
 
@@ -591,6 +601,16 @@ async def files(request: Request, path: str, ident: Identity = Depends(require_s
             else None
         ),
         allow_public=True,
+    )
+    audit_event(
+        "file.download",
+        request=request,
+        user_id=ident.user.id,
+        meta={
+            "job_id": getattr(j, "id", "") if j else "",
+            "rel_path": str(p.relative_to(_output_root())).replace("\\", "/"),
+            "kind": "file",
+        },
     )
     ctype, _ = mimetypes.guess_type(str(p))
     if not ctype:

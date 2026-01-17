@@ -2728,6 +2728,7 @@ async def cancel_job(
             await qb.cancel_job(job_id=str(id), user_id=str(_.user.id))
     await queue.cancel(id)
     job = _require_job_access(store.get(id), _)
+    audit_event("job.cancel", request=request, user_id=_.user.id, meta={"job_id": id})
     return job.to_dict()
 
 

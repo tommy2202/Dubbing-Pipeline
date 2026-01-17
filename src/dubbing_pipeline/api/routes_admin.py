@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from dubbing_pipeline.api.deps import Identity, require_role
 from dubbing_pipeline.api.models import Role
-from dubbing_pipeline.ops import audit
+from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.utils.log import logger
 
@@ -48,11 +48,14 @@ async def admin_queue(
     qb = _queue_backend(request)
     if qb is not None:
         snap = await qb.admin_snapshot(limit=int(limit))
-        logger.info(
-            "admin_queue_view",
-            user_id=str(ident.user.id),
-            count=int(len((snap or {}).get("pending") or []) + len((snap or {}).get("running") or [])),
+        count = int(len((snap or {}).get("pending") or []) + len((snap or {}).get("running") or []))
+        audit_event(
+            "admin.queue_view",
+            request=request,
+            user_id=ident.user.id,
+            meta={"count": count},
         )
+        logger.info("admin_queue_view", user_id=str(ident.user.id), count=count)
         return {"backend": snap}
 
     # Fallback to in-proc scheduler view (legacy).
@@ -98,11 +101,11 @@ async def admin_job_priority(
         ok = bool(sched.reprioritize(job_id=str(id), priority=int(priority)))
     if not ok:
         raise HTTPException(status_code=404, detail="Job not queued (or not found)")
-    audit.emit(
+    audit_event(
         "admin.job_priority",
-        user_id=str(ident.user.id),
-        job_id=str(id),
-        meta={"priority": int(priority)},
+        request=request,
+        user_id=ident.user.id,
+        meta={"job_id": str(id), "priority": int(priority)},
     )
     logger.info("admin_job_priority", user_id=str(ident.user.id), job_id=str(id), priority=int(priority))
     return {"ok": True, "job_id": str(id), "priority": int(priority)}
@@ -131,7 +134,12 @@ async def admin_job_cancel(
     except Exception:
         # kill is best-effort; cancellation may still happen via state update
         pass
-    audit.emit("admin.job_cancel", user_id=str(ident.user.id), job_id=str(id), meta={"removed": removed})
+    audit_event(
+        "admin.job_cancel",
+        request=request,
+        user_id=ident.user.id,
+        meta={"job_id": str(id), "removed": int(removed)},
+    )
     logger.info("admin_job_cancel", user_id=str(ident.user.id), job_id=str(id), removed=int(removed))
     return {"ok": True, "job_id": str(id), "removed_from_queue": int(removed)}
 
@@ -167,9 +175,10 @@ async def admin_user_quotas(
     if qb is None:
         raise HTTPException(status_code=400, detail="queue backend not available")
     out = await qb.admin_set_user_quotas(user_id=str(id), max_running=mr, max_queued=mq)
-    audit.emit(
+    audit_event(
         "admin.user_quotas",
-        user_id=str(ident.user.id),
+        request=request,
+        user_id=ident.user.id,
         meta={"target_user_id": str(id), **out},
     )
     return {"ok": True, "user_id": str(id), "quotas": out}
@@ -192,11 +201,11 @@ async def admin_job_visibility(
     if job is None:
         raise HTTPException(status_code=404, detail="Not found")
     store.update(str(id), visibility=vis)
-    audit.emit(
+    audit_event(
         "admin.job_visibility",
-        user_id=str(ident.user.id),
-        job_id=str(id),
-        meta={"visibility": vis},
+        request=request,
+        user_id=ident.user.id,
+        meta={"job_id": str(id), "visibility": vis},
     )
     logger.info("admin_job_visibility", user_id=str(ident.user.id), job_id=str(id), visibility=vis)
     return {"ok": True, "job_id": str(id), "visibility": vis}
