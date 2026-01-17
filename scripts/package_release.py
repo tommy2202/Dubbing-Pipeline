@@ -55,6 +55,14 @@ def is_forbidden_rel(rel: str) -> bool:
         return True
     if rel.startswith("Output/") and rel != "Output/.gitkeep":
         return True
+    if rel.startswith("data/reports/"):
+        return True
+    if rel.startswith("voices/embeddings/"):
+        return True
+    if rel.startswith("tests/"):
+        return True
+    if rel.startswith("src/dubbing_pipeline_legacy/") and not os.environ.get("INCLUDE_LEGACY", ""):
+        return True
 
     # Obvious runtime/build dirs
     for pref in FORBIDDEN_DIR_PREFIXES:

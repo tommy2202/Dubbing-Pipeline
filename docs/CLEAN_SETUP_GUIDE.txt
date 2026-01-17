@@ -1,0 +1,265 @@
+CLEAN SETUP GUIDE (brand-new computer)
+
+This is a plain text, step-by-step guide for a clean build and first run.
+All commands are copy/paste. Run them from the repository folder.
+
+------------------------------------------------------------
+PREREQUISITES CHECKLIST
+------------------------------------------------------------
+1) Python 3.10 or newer
+   - Check:
+     - macOS/Linux: python3 --version
+     - Windows: py -3 --version
+
+2) ffmpeg and ffprobe (required)
+   - Windows (PowerShell):
+     winget install Gyan.FFmpeg
+     Close and reopen PowerShell.
+     ffmpeg -version
+     ffprobe -version
+   - macOS:
+     brew install ffmpeg
+     ffmpeg -version
+     ffprobe -version
+   - Linux (Ubuntu/Debian):
+     sudo apt-get update
+     sudo apt-get install -y ffmpeg
+     ffmpeg -version
+     ffprobe -version
+
+3) Optional GPU (NVIDIA)
+   - Install the NVIDIA driver from the NVIDIA website.
+   - Reboot after install.
+   - Check:
+     nvidia-smi
+
+------------------------------------------------------------
+INSTALL STEPS (copy/paste commands)
+------------------------------------------------------------
+CORE INSTALL (minimum working, CLI only)
+macOS/Linux:
+  python3 -m pip install --upgrade pip
+  python3 -m pip install -e . -c docker/constraints.txt
+
+Windows (PowerShell):
+  py -3 -m pip install --upgrade pip
+  py -3 -m pip install -e . -c docker/constraints.txt
+
+WEB INSTALL (web UI, optional WebRTC)
+macOS/Linux:
+  python3 -m pip install -e ".[web]" -c docker/constraints.txt
+
+Windows (PowerShell):
+  py -3 -m pip install -e ".[web]" -c docker/constraints.txt
+
+FULL FEATURES INSTALL (extras)
+macOS/Linux:
+  python3 -m pip install -e ".[web,translation,tts,mixing,diarization,voice_embeddings,align,webrtc]" -c docker/constraints.txt
+
+Windows (PowerShell):
+  py -3 -m pip install -e ".[web,translation,tts,mixing,diarization,voice_embeddings,align,webrtc]" -c docker/constraints.txt
+
+Note:
+- These commands use constraints to avoid fresh-machine dependency conflicts.
+- If you want the simplest install without constraints:
+  python3 -m pip install -e .
+  python3 -m pip install -e ".[web]"
+
+------------------------------------------------------------
+CONFIGURATION STEPS
+------------------------------------------------------------
+1) Create config files (from examples)
+   macOS/Linux:
+     cp .env.example .env
+     cp .env.secrets.example .env.secrets
+   Windows (PowerShell):
+     copy .env.example .env
+     copy .env.secrets.example .env.secrets
+
+2) Required values (for Web UI)
+   Edit .env.secrets and set:
+   - JWT_SECRET
+   - SESSION_SECRET
+   - CSRF_SECRET
+
+   Quick way to generate a secret (macOS/Linux):
+     python3 -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"
+
+3) Recommended values
+   - ADMIN_USERNAME
+   - ADMIN_PASSWORD
+
+4) Optional values (set only if you need them)
+   - REDIS_URL (example: redis://localhost:6379/0)
+   - REMOTE_ACCESS_MODE (off or tailscale)
+   - HOST and PORT
+   - COQUI_TOS_AGREED (for XTTS)
+   - HUGGINGFACE_TOKEN (for gated models)
+   - NTFY_URL and NTFY_TOPIC (for notifications)
+
+------------------------------------------------------------
+RUNNING STEPS
+------------------------------------------------------------
+A) START REDIS (if you want the Redis queue)
+Option 1: Docker (recommended)
+  docker compose -f docker/compose/redis.yml up -d
+  Set REDIS_URL in .env: redis://localhost:6379/0
+
+Option 2: Local install (Linux)
+  sudo apt-get install -y redis-server
+  sudo systemctl start redis-server
+  redis-cli ping
+
+If Redis is not running:
+- The server falls back to the local queue.
+- Jobs still run on the same machine.
+
+B) START WEB SERVER (Web UI)
+macOS/Linux:
+  export HOST=0.0.0.0
+  export PORT=8000
+  export REMOTE_ACCESS_MODE=off
+  dubbing-web
+
+Windows (PowerShell):
+  setx HOST 0.0.0.0
+  setx PORT 8000
+  setx REMOTE_ACCESS_MODE off
+  dubbing-web
+
+Open:
+  http://localhost:8000/ui/login
+
+C) START WORKER
+- Single machine: no extra step. The web server starts workers automatically.
+- Multiple machines (optional):
+  - Run another "dubbing-web" on a worker machine.
+  - Point it at the same REDIS_URL.
+  - It will act as a worker that pulls jobs from the queue.
+
+D) CLI USE (local processing)
+1) Put a video file in Input/
+2) Run:
+   dubbing-pipeline Input/YourFile.mp4 --mode medium --device auto
+3) Output is saved under Output/<job>/
+
+E) WEB UI USE
+1) Open /ui/login and sign in.
+2) Go to /ui/upload.
+3) Upload a file or pick a server file.
+4) Submit the job and monitor progress.
+
+------------------------------------------------------------
+MOBILE ACCESS AND REMOTE JOB SUBMISSION (Tailscale)
+------------------------------------------------------------
+1) Install Tailscale on your computer and your phone.
+2) Sign in on both devices using the same tailnet.
+3) Start the server in Tailscale mode:
+   macOS/Linux:
+     export REMOTE_ACCESS_MODE=tailscale
+     export HOST=0.0.0.0
+     export PORT=8000
+     dubbing-web
+   Windows (PowerShell):
+     setx REMOTE_ACCESS_MODE tailscale
+     setx HOST 0.0.0.0
+     setx PORT 8000
+     dubbing-web
+4) Find the tailnet IP:
+   python3 scripts/remote/tailscale_check.py
+5) On your phone, open:
+   http://<tailnet-ip>:8000/ui/login
+6) Upload a file in /ui/upload and submit a job.
+7) Watch progress and playback on the job page.
+
+------------------------------------------------------------
+OPTIONAL FEATURES (enable as needed)
+------------------------------------------------------------
+1) Diarization
+   - Install extras:
+     python3 -m pip install -e ".[diarization]" -c docker/constraints.txt
+   - If you use pyannote, set HUGGINGFACE_TOKEN in .env.secrets.
+   - You can set DIARIZER=pyannote in .env for stronger diarization.
+
+2) Demucs separation (dialogue isolation)
+   - Install extras:
+     python3 -m pip install -e ".[mixing]" -c docker/constraints.txt
+   - Enable on CLI:
+     dubbing-pipeline Input/YourFile.mp4 --mix enhanced --separation demucs
+
+3) XTTS voice cloning
+   - Install extras:
+     python3 -m pip install -e ".[tts]" -c docker/constraints.txt
+   - Set in .env:
+     COQUI_TOS_AGREED=1
+   - Enable cloning in UI or CLI:
+     dubbing-pipeline Input/YourFile.mp4 --voice-mode clone
+
+4) Persistent character voices
+   - Set in .env:
+     VOICE_MEMORY=1
+   - Optional:
+     VOICE_AUTO_MATCH=1
+   - Data is stored under data/voice_memory/
+
+5) WebRTC preview
+   - Install extras:
+     python3 -m pip install -e ".[web]" -c docker/constraints.txt
+   - Open (after login):
+     /webrtc/demo
+
+6) Notifications via ntfy (private)
+   - Copy template:
+     cp docker/ntfy/server.yml.example docker/ntfy/server.yml
+   - Start ntfy (docker or your own server).
+   - Set in .env:
+     NTFY_URL and NTFY_TOPIC
+
+------------------------------------------------------------
+VERIFICATION STEPS (recommended)
+------------------------------------------------------------
+Run these from the repo root:
+  python3 scripts/verify_env.py
+  python3 scripts/smoke_import_all.py
+  python3 scripts/e2e_smoke_cli.py
+  python3 scripts/e2e_smoke_web.py
+
+------------------------------------------------------------
+TOP 10 COMMON ERRORS AND WHAT TO DO
+------------------------------------------------------------
+1) "ffmpeg not found" or "ffprobe not found"
+   - Install ffmpeg and reopen your terminal.
+   - Run: ffmpeg -version and ffprobe -version
+
+2) "ModuleNotFoundError: fastapi" (or similar)
+   - Re-run the install command with constraints.
+   - Make sure you are in the repo folder.
+
+3) "weak_secrets_detected"
+   - Set JWT_SECRET, SESSION_SECRET, and CSRF_SECRET in .env.secrets.
+
+4) "403 Forbidden" when opening the UI
+   - If using Tailscale, open the tailnet IP (not your LAN IP).
+   - Make sure REMOTE_ACCESS_MODE is correct.
+
+5) "CSRF token missing" or "CSRF token invalid"
+   - Log in through /ui/login first.
+   - If using an API client, include X-CSRF-Token.
+
+6) "Upload too large" or "Unsupported upload content-type"
+   - Use .mp4 or .mkv.
+   - Increase MAX_UPLOAD_MB in .env if needed.
+
+7) "Model download blocked" or "Egress disabled"
+   - Set OFFLINE_MODE=0 and ALLOW_EGRESS=1 during the first run.
+   - Then switch back if you want offline mode.
+
+8) "CUDA not available" or "torch.cuda.is_available() False"
+   - Install the NVIDIA driver and reboot.
+   - Ensure you have a CUDA-enabled torch build.
+
+9) "COQUI_TOS_AGREED is not set" or "TTS refused"
+   - Set COQUI_TOS_AGREED=1 in .env before using XTTS.
+
+10) "No space left on device" or "Output not writable"
+   - Free disk space and confirm Output/ is writable.

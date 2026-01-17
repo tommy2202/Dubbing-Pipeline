@@ -49,6 +49,7 @@ cryptography==43.0.3
 # jobs + realtime progress
 sqlitedict==2.1.0
 websockets==12.0
+# SSE stack compatibility (sse-starlette<3 to match starlette in FastAPI)
 sse-starlette==2.1.2
 
 # WebRTC preview

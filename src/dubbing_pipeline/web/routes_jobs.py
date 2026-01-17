@@ -2488,29 +2488,34 @@ async def jobs_events(request: Request, _: Identity = Depends(require_scope("rea
 
     async def gen():
         last: dict[str, str] = {}
-        while True:
-            if await request.is_disconnected():
-                return
-            jobs = store.list(limit=200)
-            for j in jobs:
-                key = f"{j.state.value}:{j.updated_at}:{j.progress:.4f}:{j.message}"
-                if last.get(j.id) == key:
-                    continue
-                last[j.id] = key
-                payload = {
-                    "id": j.id,
-                    "state": j.state.value,
-                    "progress": float(j.progress),
-                    "message": j.message,
-                    "updated_at": j.updated_at,
-                    "created_at": j.created_at,
-                    "video_path": j.video_path,
-                    "mode": j.mode,
-                    "src_lang": j.src_lang,
-                    "tgt_lang": j.tgt_lang,
-                }
-                yield {"event": "job", "data": json.dumps(payload)}
-            await asyncio.sleep(0.75)
+        try:
+            while True:
+                if lifecycle.is_draining():
+                    return
+                if await request.is_disconnected():
+                    return
+                jobs = store.list(limit=200)
+                for j in jobs:
+                    key = f"{j.state.value}:{j.updated_at}:{j.progress:.4f}:{j.message}"
+                    if last.get(j.id) == key:
+                        continue
+                    last[j.id] = key
+                    payload = {
+                        "id": j.id,
+                        "state": j.state.value,
+                        "progress": float(j.progress),
+                        "message": j.message,
+                        "updated_at": j.updated_at,
+                        "created_at": j.created_at,
+                        "video_path": j.video_path,
+                        "mode": j.mode,
+                        "src_lang": j.src_lang,
+                        "tgt_lang": j.tgt_lang,
+                    }
+                    yield {"event": "job", "data": json.dumps(payload)}
+                await asyncio.sleep(0.75)
+        except asyncio.CancelledError:
+            return
 
     import json
 
@@ -2651,19 +2656,24 @@ async def stream_logs(request: Request, id: str, _: Identity = Depends(require_s
                 yield {"event": "message", "data": f"<div>{ln}</div>"}
         if once:
             return
-        while True:
-            if await request.is_disconnected():
-                return
-            with suppress(Exception):
-                if log_path.exists() and log_path.is_file():
-                    with log_path.open("r", encoding="utf-8", errors="replace") as f:
-                        f.seek(pos)
-                        chunk = f.read()
-                        pos = f.tell()
-                    if chunk:
-                        for ln in chunk.splitlines():
-                            yield {"event": "message", "data": f"<div>{ln}</div>"}
-            await asyncio.sleep(0.5)
+        try:
+            while True:
+                if lifecycle.is_draining():
+                    return
+                if await request.is_disconnected():
+                    return
+                with suppress(Exception):
+                    if log_path.exists() and log_path.is_file():
+                        with log_path.open("r", encoding="utf-8", errors="replace") as f:
+                            f.seek(pos)
+                            chunk = f.read()
+                            pos = f.tell()
+                        if chunk:
+                            for ln in chunk.splitlines():
+                                yield {"event": "message", "data": f"<div>{ln}</div>"}
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            return
 
     return EventSourceResponse(gen())
 
@@ -4505,26 +4515,31 @@ async def sse_job(request: Request, id: str, _: Identity = Depends(require_scope
 
     async def gen():
         last_updated = None
-        while True:
-            if await request.is_disconnected():
-                return
-            job = store.get(id)
-            if job is None:
-                yield {"event": "message", "data": '{"error":"not_found"}'}
-                return
-            if job.updated_at != last_updated:
-                last_updated = job.updated_at
-                data = {
-                    "id": job.id,
-                    "state": job.state,
-                    "progress": job.progress,
-                    "message": job.message,
-                    "updated_at": job.updated_at,
-                }
-                yield {"event": "message", "data": json.dumps(data)}
-            if job.state in {JobState.DONE, JobState.FAILED, JobState.CANCELED}:
-                return
-            await asyncio.sleep(0.5)
+        try:
+            while True:
+                if lifecycle.is_draining():
+                    return
+                if await request.is_disconnected():
+                    return
+                job = store.get(id)
+                if job is None:
+                    yield {"event": "message", "data": '{"error":"not_found"}'}
+                    return
+                if job.updated_at != last_updated:
+                    last_updated = job.updated_at
+                    data = {
+                        "id": job.id,
+                        "state": job.state,
+                        "progress": job.progress,
+                        "message": job.message,
+                        "updated_at": job.updated_at,
+                    }
+                    yield {"event": "message", "data": json.dumps(data)}
+                if job.state in {JobState.DONE, JobState.FAILED, JobState.CANCELED}:
+                    return
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            return
 
     import json
 

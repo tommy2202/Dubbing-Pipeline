@@ -25,6 +25,19 @@ If you use a non-standard path:
 
 ---
 
+## Startup self-check failed (ffmpeg, disk, or writable paths)
+
+Symptoms:
+- Server exits at startup
+- Logs mention `startup_self_check_failed`
+
+Fix:
+- Ensure `ffmpeg` and `ffprobe` are installed and on `PATH`
+- Ensure `Output/` and `Input/` are writable
+- Increase free disk space or set `MIN_FREE_GB=0` to disable the disk check
+
+---
+
 ## GPU not detected / running on CPU unexpectedly
 
 Symptoms:

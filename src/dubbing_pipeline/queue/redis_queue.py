@@ -556,17 +556,21 @@ class RedisQueue(QueueBackend):
         return {k: int(v) for k, v in m.items()}
 
     async def _health_loop(self) -> None:
-        while not self._stopping:
-            r = self._redis()
-            ok = False
-            if r is not None:
-                try:
-                    pong = await r.ping()
-                    ok = bool(pong)
-                except Exception:
-                    ok = False
-            self._healthy = bool(ok)
-            await asyncio.sleep(2.0)
+        try:
+            while not self._stopping:
+                r = self._redis()
+                ok = False
+                if r is not None:
+                    try:
+                        pong = await r.ping()
+                        ok = bool(pong)
+                    except Exception:
+                        ok = False
+                self._healthy = bool(ok)
+                await asyncio.sleep(2.0)
+        except asyncio.CancelledError:
+            logger.info("task stopped", task="queue.redis.health")
+            return
 
     async def _consume_loop(self) -> None:
         """
@@ -579,44 +583,48 @@ class RedisQueue(QueueBackend):
         r = self._redis()
         if r is None:
             return
-        while not self._stopping:
-            try:
-                job_id = await self._claim_one()
-                if not job_id:
-                    await asyncio.sleep(0.25)
-                    continue
-                # Attempts + max attempts
-                attempt = 0
-                with suppress(Exception):
-                    attempt = int(await r.hincrby(self._job_meta_key(job_id), "attempts", 1))
-                if attempt and attempt > int(self._cfg.max_attempts):
-                    await self._send_to_dlq(job_id=job_id, reason=f"max_attempts_exceeded:{attempt}")
-                    await self._release_and_cleanup(job_id, reason="max_attempts")
-                    continue
+        try:
+            while not self._stopping:
+                try:
+                    job_id = await self._claim_one()
+                    if not job_id:
+                        await asyncio.sleep(0.25)
+                        continue
+                    # Attempts + max attempts
+                    attempt = 0
+                    with suppress(Exception):
+                        attempt = int(await r.hincrby(self._job_meta_key(job_id), "attempts", 1))
+                    if attempt and attempt > int(self._cfg.max_attempts):
+                        await self._send_to_dlq(job_id=job_id, reason=f"max_attempts_exceeded:{attempt}")
+                        await self._release_and_cleanup(job_id, reason="max_attempts")
+                        continue
 
-                logger.info(
-                    "queue_claimed",
-                    queue_mode="redis",
-                    job_id=job_id,
-                    user_id=str((await self._read_meta(job_id)).get("user_id") or ""),
-                    attempt=int(attempt or 0),
-                )
-                audit.emit(
-                    "queue.claimed",
-                    request_id=None,
-                    user_id=str((await self._read_meta(job_id)).get("user_id") or "") or None,
-                    meta={"mode": "redis", "job_id": job_id, "attempt": int(attempt or 0)},
-                    job_id=job_id,
-                )
+                    logger.info(
+                        "queue_claimed",
+                        queue_mode="redis",
+                        job_id=job_id,
+                        user_id=str((await self._read_meta(job_id)).get("user_id") or ""),
+                        attempt=int(attempt or 0),
+                    )
+                    audit.emit(
+                        "queue.claimed",
+                        request_id=None,
+                        user_id=str((await self._read_meta(job_id)).get("user_id") or "") or None,
+                        meta={"mode": "redis", "job_id": job_id, "attempt": int(attempt or 0)},
+                        job_id=job_id,
+                    )
 
-                res = self._enqueue_cb(job_id)
-                if asyncio.iscoroutine(res):
-                    await res
-            except asyncio.CancelledError:
-                raise
-            except Exception as ex:
-                logger.warning("queue_consume_error", queue_mode="redis", error=str(ex))
-                await asyncio.sleep(1.0)
+                    res = self._enqueue_cb(job_id)
+                    if asyncio.iscoroutine(res):
+                        await res
+                except asyncio.CancelledError:
+                    raise
+                except Exception as ex:
+                    logger.warning("queue_consume_error", queue_mode="redis", error=str(ex))
+                    await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            logger.info("task stopped", task="queue.redis.consume")
+            return
 
     async def _delayed_mover_loop(self) -> None:
         """
@@ -625,24 +633,28 @@ class RedisQueue(QueueBackend):
         r = self._redis()
         if r is None:
             return
-        while not self._stopping:
-            try:
-                now = float(time.time())
-                due = await r.zrangebyscore(self._delayed_key(), min="-inf", max=now, start=0, num=50)
-                if due:
-                    for job_id in due:
-                        jid = str(job_id)
-                        with suppress(Exception):
-                            await r.zrem(self._delayed_key(), jid)
-                        meta = await self._read_meta(jid)
-                        pr = int(meta.get("priority") or 100) if str(meta.get("priority") or "").isdigit() else 100
-                        with suppress(Exception):
-                            await r.zadd(self._pending_key(), {jid: float(pr)})
-                await asyncio.sleep(0.5 if due else 1.5)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                await asyncio.sleep(2.0)
+        try:
+            while not self._stopping:
+                try:
+                    now = float(time.time())
+                    due = await r.zrangebyscore(self._delayed_key(), min="-inf", max=now, start=0, num=50)
+                    if due:
+                        for job_id in due:
+                            jid = str(job_id)
+                            with suppress(Exception):
+                                await r.zrem(self._delayed_key(), jid)
+                            meta = await self._read_meta(jid)
+                            pr = int(meta.get("priority") or 100) if str(meta.get("priority") or "").isdigit() else 100
+                            with suppress(Exception):
+                                await r.zadd(self._pending_key(), {jid: float(pr)})
+                    await asyncio.sleep(0.5 if due else 1.5)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    await asyncio.sleep(2.0)
+        except asyncio.CancelledError:
+            logger.info("task stopped", task="queue.redis.delayed")
+            return
 
     async def _attempts(self, job_id: str) -> int:
         r = self._redis()
@@ -745,16 +757,20 @@ class RedisQueue(QueueBackend):
           return 0
         end
         """
-        while not self._stopping:
-            try:
-                await asyncio.sleep(float(self._cfg.lock_refresh_ms) / 1000.0)
-                # Only refresh if token still matches.
-                await r.eval(lua, 1, key, token, str(int(self._cfg.lock_ttl_ms)))
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                # keep trying; lock may be gone (e.g., operator deleted it)
-                continue
+        try:
+            while not self._stopping:
+                try:
+                    await asyncio.sleep(float(self._cfg.lock_refresh_ms) / 1000.0)
+                    # Only refresh if token still matches.
+                    await r.eval(lua, 1, key, token, str(int(self._cfg.lock_ttl_ms)))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # keep trying; lock may be gone (e.g., operator deleted it)
+                    continue
+        except asyncio.CancelledError:
+            logger.info("task stopped", task="queue.redis.lock_refresh", job_id=str(job_id))
+            return
 
     async def _prepare_scripts(self) -> None:
         r = self._redis()

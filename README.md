@@ -20,6 +20,7 @@ Outputs are written under:
 
 ### Documentation index (start here)
 - **Quickstart (Tailscale recommended)**: `docs/GOLDEN_PATH_TAILSCALE.md`
+- Clean setup guide (brand-new computer): `docs/CLEAN_SETUP_GUIDE.txt`
 - Overview & architecture: `docs/OVERVIEW.md`
 - Full feature list (defaults + optional + outputs): `docs/FEATURES.md`
 - Setup (local + Docker + GPU + security): `docs/SETUP.md`

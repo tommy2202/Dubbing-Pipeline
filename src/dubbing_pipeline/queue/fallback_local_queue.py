@@ -219,7 +219,8 @@ class FallbackLocalQueue(QueueBackend):
                     except Exception:
                         continue
             except asyncio.CancelledError:
-                raise
+                logger.info("task stopped", task="queue.fallback.scan")
+                return
             except Exception:
                 pass
             await asyncio.sleep(self._cfg.scan_interval_s)

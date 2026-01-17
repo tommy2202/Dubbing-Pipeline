@@ -132,7 +132,7 @@ class AutoQueueBackend(QueueBackend):
         self._stopping = True
         if self._task is not None:
             self._task.cancel()
-            with suppress(Exception):
+            with suppress(asyncio.CancelledError, Exception):
                 await self._task
         self._task = None
         with suppress(Exception):
@@ -241,35 +241,39 @@ class AutoQueueBackend(QueueBackend):
         Auto-mode health monitor: enables/disables fallback scan loop as Redis flaps.
         """
         last_active = False
-        while not self._stopping:
-            active = bool(self._redis_active())
-            if self._mode_cfg == "fallback":
-                active = False
-            if self._mode_cfg == "redis":
-                # If forced redis, we don't start fallback scanning automatically.
-                active = True if self._redis is not None else False
+        try:
+            while not self._stopping:
+                active = bool(self._redis_active())
+                if self._mode_cfg == "fallback":
+                    active = False
+                if self._mode_cfg == "redis":
+                    # If forced redis, we don't start fallback scanning automatically.
+                    active = True if self._redis is not None else False
 
-            if active != last_active:
-                last_active = active
-                if active:
-                    # Redis is healthy => stop fallback scan loop (avoid parallel enqueuing).
-                    with suppress(Exception):
-                        await self._fallback.stop()
-                    audit.emit(
-                        "queue.manager_mode",
-                        request_id=None,
-                        user_id=None,
-                        meta={"active": "redis"},
-                    )
-                else:
-                    # Redis down => enable fallback scan loop.
-                    with suppress(Exception):
-                        await self._fallback.start()
-                    audit.emit(
-                        "queue.manager_mode",
-                        request_id=None,
-                        user_id=None,
-                        meta={"active": "fallback"},
-                    )
-            await asyncio.sleep(2.0)
+                if active != last_active:
+                    last_active = active
+                    if active:
+                        # Redis is healthy => stop fallback scan loop (avoid parallel enqueuing).
+                        with suppress(Exception):
+                            await self._fallback.stop()
+                        audit.emit(
+                            "queue.manager_mode",
+                            request_id=None,
+                            user_id=None,
+                            meta={"active": "redis"},
+                        )
+                    else:
+                        # Redis down => enable fallback scan loop.
+                        with suppress(Exception):
+                            await self._fallback.start()
+                        audit.emit(
+                            "queue.manager_mode",
+                            request_id=None,
+                            user_id=None,
+                            meta={"active": "fallback"},
+                        )
+                await asyncio.sleep(2.0)
+        except asyncio.CancelledError:
+            logger.info("task stopped", task="queue.auto.monitor")
+            return
 

@@ -2,6 +2,9 @@
 
 This guide gets you from “fresh machine” to “first dubbed output”, for both CLI and Web UI.
 
+Clean setup guide (plain text, step-by-step):
+docs/CLEAN_SETUP_GUIDE.txt
+
 If you only want to try it quickly, start with the README quickstart and come back here for production hardening.
 
 ---

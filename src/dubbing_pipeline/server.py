@@ -33,9 +33,7 @@ from dubbing_pipeline.jobs.queue import JobQueue
 from dubbing_pipeline.jobs.store import JobStore
 from dubbing_pipeline.ops import audit
 from dubbing_pipeline.ops.metrics import REGISTRY
-from dubbing_pipeline.ops.storage import periodic_prune_tick
 from dubbing_pipeline.runtime import lifecycle
-from dubbing_pipeline.runtime.model_manager import ModelManager
 from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.security.runtime_db import UnsafeRuntimeDbPath, assert_safe_runtime_db_path
 from dubbing_pipeline.utils.crypto import PasswordHasher, random_id
@@ -59,9 +57,6 @@ TEMPLATES = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Ensure clean boot state (tests reuse the same process).
-    with suppress(Exception):
-        lifecycle.end_draining()
     # core pipeline stores
     s = get_settings()
     out_root = Path(s.output_dir).resolve()
@@ -191,50 +186,11 @@ async def lifespan(app: FastAPI):
         except Exception as ex:
             logger.warning("admin bootstrap failed (%s)", ex)
 
-    # Start queue backend before starting workers (so redis intake is ready).
-    with suppress(Exception):
-        await queue_backend.start()
-    await q.start()
-    # Periodic cleanup of stale work/ directories (best-effort).
-    import asyncio as _asyncio2
-
-    _prune_task: _asyncio2.Task | None = None
-
-    async def _prune_loop() -> None:
-        while True:
-            try:
-                periodic_prune_tick(output_root=out_root)
-            except Exception as ex:
-                logger.warning("workdir_prune_failed", error=str(ex))
-            await _asyncio2.sleep(float(s.work_prune_interval_sec))
-
-    try:
-        # run one tick at boot, then start loop
-        periodic_prune_tick(output_root=out_root)
-        _prune_task = _asyncio2.create_task(_prune_loop())
-    except Exception:
-        _prune_task = None
-
-    # Optional model pre-warm (env-controlled). Never prevent boot.
-    try:
-        ModelManager.instance().prewarm()
-    except Exception as ex:
-        logger.warning("model_prewarm_exception", error=str(ex))
+    # Start background components via canonical lifecycle controller.
+    await lifecycle.start_all(app.state)
     yield
-    # Graceful drain on shutdown (or if signals have already initiated drain).
-    lifecycle.begin_draining(timeout_sec=int(s.drain_timeout_sec))
-    with suppress(Exception):
-        sched.stop()
-    with suppress(Exception):
-        await queue_backend.stop()
-    try:
-        await q.graceful_shutdown(timeout_s=int(s.drain_timeout_sec))
-    finally:
-        if _prune_task is not None:
-            _prune_task.cancel()
-            with suppress(Exception):
-                await _prune_task
-        await q.stop()
+    # Graceful shutdown via canonical lifecycle controller.
+    await lifecycle.stop_all(app.state)
 
 
 app = FastAPI(title="dubbing_pipeline server", lifespan=lifespan)
