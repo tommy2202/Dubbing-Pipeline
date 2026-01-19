@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -57,6 +58,11 @@ def main() -> int:
     except RuntimeError as ex:
         print(f"verify_previews: SKIP ({ex})")
         return 0
+
+    repo_root = Path(__file__).resolve().parents[1]
+    src_root = repo_root / "src"
+    if str(src_root) not in sys.path:
+        sys.path.insert(0, str(src_root))
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td).resolve()
