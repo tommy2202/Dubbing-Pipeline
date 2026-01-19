@@ -26,6 +26,10 @@ Key principle: **optional features are opt-in** or degrade gracefully when depen
 - `Output/<stem>/.checkpoint.json` (best-effort resume metadata)
 - `Output/<stem>/manifest.json` (best-effort library manifest fallback)
 - `Output/Library/.../manifest.json` (preferred grouped library manifest)
+- **Preview variants (best-effort)**:
+  - `Output/<stem>/preview/preview_audio.m4a`
+  - `Output/<stem>/preview/preview_video.mp4` (low-res)
+  - Exposed in job UI + library manifest when available.
 
 ### Required metadata for web submissions
 New job submissions via the web/API require:
@@ -130,10 +134,15 @@ These are normalized and stored as:
 - **What it does**: map episode speakers to series characters and persist character refs across episodes.
 - **Controls**:
   - Job page “Voices” tab (map speaker → character, promote ref)
+  - Voice mapping review UI: `/jobs/{job_id}/voices` (speaker samples + save mapping)
   - Optional suggestions: `VOICE_AUTO_MATCH=1`, `VOICE_MATCH_THRESHOLD=0.75`
 - **Outputs**:
   - `VOICE_STORE/<series_slug>/characters/<character_slug>/ref.wav`
   - DB-backed speaker mappings for each job (locked vs suggested)
+- **Drift detection + rollback**:
+  - Similarity check on new refs; low similarity requires confirmation.
+  - Version history: `VOICE_STORE/<series_slug>/characters/<character_slug>/versions/`
+  - Rollback to a previous version from the series characters UI.
 
 ### Character voice memory (optional; cross-episode consistency)
 - **What it does**: keeps a persistent “character → voice identity” map across jobs to reduce drift.
@@ -290,7 +299,8 @@ These are normalized and stored as:
     - `Output/<stem>/mobile/hls/` (**optional**, controlled by `MOBILE_HLS`)
   - “Open in VLC” links on job pages
 - **Library management**:
-  - list/search/filter jobs, tags, archive/unarchive, delete (role-gated)
+  - list/search/filter jobs (series/season/episode/status), tags, archive/unarchive, delete (role-gated)
+  - “Recently Dubbed” + “Continue Last Series” shortcuts
 - **Model management (admin)**:
   - view disk usage + loaded models; optional prewarm (default off)
 
@@ -323,4 +333,12 @@ Details: `docs/SETUP.md` and `docs/security.md`
 - **How to enable**: configure `NTFY_*` env vars and secrets.
 
 Details: `docs/notifications.md`
+
+---
+
+## Scaling (optional single-writer mode)
+
+- **What it does**: lets you run multiple API processes while keeping one writer for metadata.
+- **How it works**: writer acquires a filesystem lock; readers are read-only.
+- **How to enable**: see `docs/SCALE.md`.
 

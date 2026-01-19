@@ -13,10 +13,14 @@ Outputs are written under:
 ### What’s New (current feature-complete stack)
 - **Mobile/web job submission**: resumable chunked uploads + server-file picker fallback, queue/progress/cancel, job pages with tabs.
 - **Mobile playback**: auto-selected mobile-friendly MP4 + optional HLS + “Open in VLC” links.
+- **Preview variants**: low-res video + audio-only previews generated at job completion (best-effort).
 - **QA + review loop**: QA scoring, actionable “Fix” deep-links, segment edit/regen/preview/lock, overrides for music regions + speakers.
+- **Library polish**: search/filter, “Recently Dubbed”, and “Continue Last Series”.
+- **Voice review + safety**: speaker mapping review UI, similarity drift checks, version history + rollback.
 - **Remote access (opt-in)**: Tailscale primary, Cloudflare Tunnel + Access optional, proxy-safe behavior.
 - **Security & privacy**: cookie sessions + CSRF, strict CORS, rate limits, RBAC + scoped API keys, audit logging, optional encryption-at-rest, privacy mode + retention.
 - **Ops**: model cache status + optional prewarm, library management (tags/archive/delete), verification gates.
+  - Optional scaling path (single-writer mode): see `docs/SCALE.md`.
 
 ### Documentation index (start here)
 - **Quickstart (Tailscale recommended)**: `docs/GOLDEN_PATH_TAILSCALE.md`
@@ -27,6 +31,7 @@ Outputs are written under:
 - CLI reference + recipes: `docs/CLI.md`
 - Web/mobile guide (LAN + remote): `docs/WEB_MOBILE.md`
 - Troubleshooting: `docs/TROUBLESHOOTING.md`
+- Scaling (optional single-writer mode): `docs/SCALE.md`
 
 Additional focused docs:
 - Remote access (advanced): `docs/advanced/README.md`
