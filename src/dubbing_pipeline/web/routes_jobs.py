@@ -4052,6 +4052,71 @@ async def get_job_voice_refs(
     }
 
 
+@router.get("/api/jobs/{id}/speakers")
+async def get_job_speakers(
+    request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    refs = await get_job_voice_refs(request, id, ident)
+    if not bool(refs.get("available")):
+        return {
+            "ok": True,
+            "available": False,
+            "items": [],
+            "note": str(refs.get("note") or "No speaker samples available"),
+        }
+    items_map = refs.get("items") if isinstance(refs.get("items"), dict) else {}
+    store = _get_store(request)
+    job = store.get(str(id))
+    series_slug = str(getattr(job, "series_slug", "") or "").strip() if job else ""
+
+    mapped_names: dict[str, str] = {}
+    try:
+        rt = dict(job.runtime or {}) if job and isinstance(job.runtime, dict) else {}
+        for it in rt.get("voice_map_review") or []:
+            if not isinstance(it, dict):
+                continue
+            sid = Path(str(it.get("speaker_id") or "")).name.strip()
+            name = str(it.get("character_name") or "").strip()
+            if sid and name:
+                mapped_names[sid] = name
+    except Exception:
+        mapped_names = {}
+
+    def _label(sid: str) -> str:
+        if sid.upper().startswith("SPEAKER_"):
+            tail = sid.split("_", 1)[1]
+            with suppress(Exception):
+                return f"Speaker {int(tail)}"
+        return f"Speaker {sid}"
+
+    items: list[dict[str, Any]] = []
+    for sid, rec in items_map.items():
+        if not isinstance(rec, dict):
+            continue
+        safe_sid = Path(str(sid or "")).name.strip()
+        if not safe_sid:
+            continue
+        items.append(
+            {
+                "speaker_id": safe_sid,
+                "label": _label(safe_sid),
+                "duration_s": float(rec.get("duration_s") or rec.get("duration_sec") or 0.0),
+                "audio_url": rec.get("audio_url"),
+                "download_url": rec.get("download_url"),
+                "character_slug": rec.get("character_slug"),
+                "character_name": mapped_names.get(safe_sid, ""),
+            }
+        )
+    items.sort(key=lambda x: str(x.get("speaker_id") or ""))
+    return {
+        "ok": True,
+        "available": True,
+        "allow_audio": bool(refs.get("allow_audio")),
+        "series_slug": series_slug,
+        "items": items,
+    }
+
+
 @router.get("/api/jobs/{id}/voice_refs/{speaker_id}/audio")
 async def get_job_voice_ref_audio(
     request: Request,
@@ -4472,6 +4537,58 @@ async def post_job_speaker_mapping(
     return {"ok": True, "mapping": rec}
 
 
+@router.post("/api/jobs/{job_id}/voice-map")
+async def post_job_voice_map(
+    request: Request,
+    job_id: str,
+    ident: Identity = Depends(require_scope("submit:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = _require_job_access(store.get(str(job_id)), ident)
+    body = await request.json()
+    if not isinstance(body, dict) or not isinstance(body.get("items"), list):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    raw_items = [dict(x) for x in body.get("items", []) if isinstance(x, dict)]
+    saved: list[dict[str, Any]] = []
+    for it in raw_items:
+        speaker_id = Path(str(it.get("speaker_id") or "")).name.strip()
+        name = str(it.get("character_name") or it.get("character_slug") or "").strip()
+        if not speaker_id or not name:
+            continue
+        cslug = _slugify_character(name)
+        if not cslug:
+            continue
+        locked = bool(it.get("locked") if it.get("locked") is not None else True)
+        confidence = float(it.get("confidence") or 1.0)
+        store.upsert_speaker_mapping(
+            job_id=str(job_id),
+            speaker_id=speaker_id,
+            character_slug=cslug,
+            confidence=confidence,
+            locked=locked,
+            created_by=str(ident.user.id),
+        )
+        saved.append(
+            {
+                "speaker_id": speaker_id,
+                "character_name": name,
+                "character_slug": cslug,
+                "confidence": confidence,
+                "locked": bool(locked),
+            }
+        )
+    rt = dict(job.runtime or {})
+    rt["voice_map_review"] = saved
+    store.update(str(job_id), runtime=rt)
+    audit_event(
+        "voice.map.save_job",
+        request=request,
+        user_id=ident.user.id,
+        meta={"job_id": str(job_id), "count": len(saved)},
+    )
+    return {"ok": True, "items": saved}
+
+
 @router.get("/api/jobs/{job_id}/speaker-mapping")
 async def get_job_speaker_mapping(
     request: Request,
@@ -4484,33 +4601,27 @@ async def get_job_speaker_mapping(
     return {"ok": True, "items": items}
 
 
-@router.post("/api/series/{series_slug}/characters/{character_slug}/promote-ref")
-async def promote_series_character_ref_from_job(
+def _promote_ref_to_series(
+    *,
     request: Request,
+    store,
+    ident: Identity,
     series_slug: str,
     character_slug: str,
-    ident: Identity = Depends(require_scope("read:job")),
-) -> dict[str, Any]:
-    store = _get_store(request)
+    display_name: str,
+    job: Job,
+    speaker_id: str,
+) -> Path:
     slug = str(series_slug or "").strip()
     cslug = _slugify_character(character_slug)
     if not slug or not cslug:
         raise HTTPException(status_code=400, detail="Invalid path")
     if not _can_edit_series(store, ident=ident, series_slug=slug):
         raise HTTPException(status_code=403, detail="Forbidden")
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
-    job_id = str(body.get("job_id") or "").strip()
-    speaker_id = Path(str(body.get("speaker_id") or "")).name.strip()
-    if not job_id or not speaker_id:
-        raise HTTPException(status_code=422, detail="job_id and speaker_id required")
-    job = _require_job_access(store.get(job_id), ident)
     if str(getattr(job, "series_slug", "") or "").strip() != slug:
         raise HTTPException(status_code=400, detail="Job series_slug does not match")
     if _privacy_blocks_voice_refs(job):
         raise HTTPException(status_code=403, detail="Voice refs not available in privacy/minimal mode")
-
     base_dir = _job_base_dir(job)
     man_path = _voice_refs_manifest_path(base_dir)
     if not man_path.exists():
@@ -4530,13 +4641,17 @@ async def promote_series_character_ref_from_job(
         slug,
         cslug,
         ref_path,
-        job_id=job_id,
-        metadata={"display_name": "", "created_by": str(ident.user.id), "source": "promote_ref"},
+        job_id=str(job.id),
+        metadata={
+            "display_name": str(display_name or ""),
+            "created_by": str(ident.user.id),
+            "source": "promote_ref",
+        },
     )
     store.upsert_character(
         series_slug=slug,
         character_slug=cslug,
-        display_name="",
+        display_name=str(display_name or ""),
         ref_path=str(outp),
         created_by=str(ident.user.id),
     )
@@ -4544,9 +4659,78 @@ async def promote_series_character_ref_from_job(
         "voice.character.promote_ref",
         request=request,
         user_id=ident.user.id,
-        meta={"series_slug": slug, "character_slug": cslug, "job_id": job_id, "speaker_id": speaker_id},
+        meta={
+            "series_slug": slug,
+            "character_slug": cslug,
+            "job_id": str(job.id),
+            "speaker_id": speaker_id,
+        },
+    )
+    return outp
+
+
+@router.post("/api/series/{series_slug}/characters/{character_slug}/promote-ref")
+async def promote_series_character_ref_from_job(
+    request: Request,
+    series_slug: str,
+    character_slug: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    job_id = str(body.get("job_id") or "").strip()
+    speaker_id = Path(str(body.get("speaker_id") or "")).name.strip()
+    if not job_id or not speaker_id:
+        raise HTTPException(status_code=422, detail="job_id and speaker_id required")
+    job = _require_job_access(store.get(job_id), ident)
+    display_name = str(body.get("display_name") or body.get("character_name") or "").strip()
+    outp = _promote_ref_to_series(
+        request=request,
+        store=store,
+        ident=ident,
+        series_slug=series_slug,
+        character_slug=character_slug,
+        display_name=display_name,
+        job=job,
+        speaker_id=speaker_id,
     )
     return {"ok": True, "ref_path": str(outp)}
+
+
+@router.post("/api/series/{series_slug}/voices")
+async def persist_series_voice_from_job(
+    request: Request,
+    series_slug: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not bool(body.get("confirm") is True):
+        raise HTTPException(status_code=400, detail="confirm=true required")
+    job_id = str(body.get("job_id") or "").strip()
+    speaker_id = Path(str(body.get("speaker_id") or "")).name.strip()
+    name = str(body.get("character_name") or body.get("display_name") or "").strip()
+    if not job_id or not speaker_id or not name:
+        raise HTTPException(status_code=422, detail="job_id, speaker_id, character_name required")
+    cslug = _slugify_character(name)
+    if not cslug:
+        raise HTTPException(status_code=400, detail="Invalid character name")
+    job = _require_job_access(store.get(job_id), ident)
+    outp = _promote_ref_to_series(
+        request=request,
+        store=store,
+        ident=ident,
+        series_slug=series_slug,
+        character_slug=cslug,
+        display_name=name,
+        job=job,
+        speaker_id=speaker_id,
+    )
+    return {"ok": True, "ref_path": str(outp), "character_slug": cslug}
 
 
 @router.delete("/api/series/{series_slug}/characters/{character_slug}")

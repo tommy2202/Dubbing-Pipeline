@@ -20,6 +20,7 @@ from dubbing_pipeline.utils.io import read_json
 from dubbing_pipeline.api.middleware import audit_event
 
 router = APIRouter(prefix="/ui", tags=["ui"])
+public_router = APIRouter(tags=["ui"])
 system_router = APIRouter(prefix="/system", tags=["ui"])
 
 
@@ -360,6 +361,16 @@ async def ui_job_detail(request: Request, job_id: str) -> HTMLResponse:
         return RedirectResponse(url="/ui/login", status_code=302)
     created = (request.query_params.get("created") or "").strip() == "1"
     return _render(request, "job_detail.html", {"job_id": job_id, "created": created})
+
+
+@public_router.get("/jobs/{job_id}/voices")
+async def ui_job_voices(request: Request, job_id: str) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="job_voices", meta={"job_id": job_id})
+    return _render(request, "job_voices.html", {"job_id": job_id})
 
 
 @router.get("/upload")

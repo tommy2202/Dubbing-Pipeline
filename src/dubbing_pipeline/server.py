@@ -45,6 +45,7 @@ from dubbing_pipeline.utils.net import install_egress_policy
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 from dubbing_pipeline.queue.manager import AutoQueueBackend
 from dubbing_pipeline.web.routes_jobs import router as jobs_router
+from dubbing_pipeline.web.routes_ui import public_router as public_ui_router
 from dubbing_pipeline.web.routes_ui import router as ui_router
 from dubbing_pipeline.web.routes_ui import system_router as system_ui_router
 from dubbing_pipeline.web.routes_webrtc import router as webrtc_router
@@ -263,6 +264,7 @@ app.include_router(library_router)
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
 app.include_router(ui_router)
+app.include_router(public_ui_router)
 app.include_router(system_ui_router)
 
 

@@ -1,0 +1,188 @@
+{% extends "_base.html" %}
+
+{% block title %}Voices • {{ job_id }}{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <div class="text-xs text-slate-500"><a class="underline" href="/ui/jobs/{{ job_id }}">Job</a> / Voices</div>
+    <h1 class="mt-1 text-2xl font-semibold">Voice Mapping Review</h1>
+    <p class="mt-1 text-sm text-slate-400">Map diarized speakers to characters before saving.</p>
+  </div>
+</div>
+
+<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4"
+     x-data="voiceReview('{{ job_id }}')"
+     x-init="init()">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div class="text-sm text-slate-300">Speakers</div>
+    <div class="flex flex-wrap items-center gap-2">
+      <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm"
+              @click="loadSpeakers()">Refresh</button>
+      <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm font-medium"
+              @click="saveJobMap()" :disabled="saving || speakers.length===0">Save mapping for this job only</button>
+    </div>
+  </div>
+
+  <div class="mt-3 text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
+  <div class="mt-3 text-sm text-emerald-200" x-show="saved" x-cloak>Mapping saved.</div>
+
+  <div class="mt-4 text-sm text-slate-500" x-show="loading" x-cloak>Loading…</div>
+
+  <div class="mt-4 text-sm text-slate-500" x-show="!loading && (!available || speakers.length===0)" x-cloak>
+    No speaker samples available.
+  </div>
+
+  <div class="mt-4 grid gap-3 sm:grid-cols-2" x-show="!loading && speakers.length>0" x-cloak>
+    <template x-for="sp in speakers" :key="sp.speaker_id">
+      <div class="rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+        <div class="flex items-start justify-between gap-2">
+          <div>
+            <div class="text-base font-semibold text-slate-200" x-text="sp.label"></div>
+            <div class="mt-1 text-xs text-slate-500" x-text="sp.speaker_id"></div>
+          </div>
+          <div class="text-xs text-slate-500" x-text="sp.duration_s ? (sp.duration_s.toFixed(1) + 's') : ''"></div>
+        </div>
+
+        <template x-if="sp.audio_url">
+          <div class="mt-3">
+            <audio class="w-full" controls preload="none" :src="sp.audio_url"></audio>
+          </div>
+        </template>
+        <template x-if="!sp.audio_url">
+          <div class="mt-3 text-xs text-slate-500">Audio unavailable (privacy or missing samples).</div>
+        </template>
+
+        <div class="mt-3">
+          <label class="block text-xs text-slate-500">Character name</label>
+          <input class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm"
+                 placeholder="e.g., Rimuru"
+                 x-model="sp.character_name" />
+          <div class="mt-1 text-xs text-slate-500" x-show="sp.character_slug" x-cloak
+               x-text="'slug: ' + sp.character_slug"></div>
+        </div>
+
+        <div class="mt-3 flex flex-wrap gap-2">
+          <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs"
+                  @click="saveSingle(sp)" :disabled="saving">Save for job</button>
+          <button class="rounded bg-emerald-700/80 hover:bg-emerald-600 px-3 py-2 text-xs"
+                  @click="persistSeries(sp)" :disabled="saving || !seriesSlug">Persist to series</button>
+        </div>
+        <div class="mt-2 text-xs text-slate-500" x-show="!seriesSlug" x-cloak>
+          Series not set on this job.
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+  function voiceReview(jobId) {
+    return {
+      jobId,
+      speakers: [],
+      seriesSlug: "",
+      loading: true,
+      saving: false,
+      available: false,
+      error: "",
+      saved: false,
+      async init() {
+        await this.loadSpeakers();
+      },
+      async loadSpeakers() {
+        this.loading = true;
+        this.error = "";
+        this.saved = false;
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/speakers", { credentials: "include" });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          this.available = !!data.available;
+          this.seriesSlug = data.series_slug || "";
+          const items = Array.isArray(data.items) ? data.items : [];
+          this.speakers = items.map((sp) => ({
+            speaker_id: sp.speaker_id,
+            label: sp.label || sp.speaker_id,
+            duration_s: sp.duration_s || 0,
+            audio_url: sp.audio_url || null,
+            download_url: sp.download_url || null,
+            character_slug: sp.character_slug || "",
+            character_name: sp.character_name || sp.character_slug || ""
+          }));
+        } catch (e) {
+          this.error = "Failed to load speakers";
+          this.speakers = [];
+        } finally {
+          this.loading = false;
+        }
+      },
+      async saveJobMap() {
+        if (this.saving) return;
+        this.saving = true;
+        this.saved = false;
+        try {
+          const payload = {
+            items: this.speakers
+              .filter((sp) => sp.character_name && sp.speaker_id)
+              .map((sp) => ({
+                speaker_id: sp.speaker_id,
+                character_name: sp.character_name
+              }))
+          };
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/voice-map", {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-Token": "{{ csrf_token }}"
+            },
+            body: JSON.stringify(payload)
+          });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          this.saved = !!data.ok;
+          await this.loadSpeakers();
+        } catch (e) {
+          this.error = "Failed to save mapping";
+        } finally {
+          this.saving = false;
+        }
+      },
+      async saveSingle(sp) {
+        if (!sp.character_name) return;
+        this.speakers = this.speakers.map((s) => s.speaker_id === sp.speaker_id ? sp : s);
+        await this.saveJobMap();
+      },
+      async persistSeries(sp) {
+        if (!this.seriesSlug || !sp.character_name) return;
+        if (!confirm("Persist this character voice for the series?")) return;
+        this.saving = true;
+        try {
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/voices", {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-Token": "{{ csrf_token }}"
+            },
+            body: JSON.stringify({
+              confirm: true,
+              job_id: this.jobId,
+              speaker_id: sp.speaker_id,
+              character_name: sp.character_name
+            })
+          });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          window.showToast("Saved to series voice store", "success");
+          await this.loadSpeakers();
+        } catch (e) {
+          window.showToast("Failed to persist series voice", "error");
+        } finally {
+          this.saving = false;
+        }
+      }
+    };
+  }
+</script>
+{% endblock %}
