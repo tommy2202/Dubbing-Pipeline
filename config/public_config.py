@@ -53,6 +53,9 @@ class PublicConfig(BaseSettings):
     jobs_db_name: str = Field(default="jobs.db", alias="DUBBING_JOBS_DB_NAME")
     cache_dir: Path | None = Field(default=None, alias="DUBBING_CACHE_DIR")
     models_dir: Path = Field(default=Path("/models"), alias="MODELS_DIR")
+    single_writer_mode: bool = Field(default=False, alias="SINGLE_WRITER_MODE")
+    single_writer_role: str = Field(default="writer", alias="SINGLE_WRITER_ROLE")
+    single_writer_lock_path: Path | None = Field(default=None, alias="SINGLE_WRITER_LOCK_PATH")
 
     # Web/API input layout (uploads)
     # Defaults match the repo's historical container layout: <APP_ROOT>/Input/uploads

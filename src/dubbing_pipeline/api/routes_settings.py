@@ -14,6 +14,7 @@ from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.api.security import verify_csrf
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.notify.settings import allowed_topics, validate_topic
+from dubbing_pipeline.utils.single_writer import writer_lock
 
 
 def _settings_path() -> Path:
@@ -230,33 +231,34 @@ class UserSettingsStore:
                     else:
                         out_library["last_series"] = {}
 
-        with self._lock:
-            all_data = self._load_all()
-            users = all_data.get("users")
-            if not isinstance(users, dict):
-                users = {}
-                all_data["users"] = users
-            cur = users.get(uid)
-            if not isinstance(cur, dict):
-                cur = {}
-            cur.setdefault("defaults", {})
-            cur.setdefault("notifications", {})
-            cur.setdefault("library", {})
-            if out_defaults:
-                if not isinstance(cur.get("defaults"), dict):
-                    cur["defaults"] = {}
-                cur["defaults"].update(out_defaults)
-            if out_notifications:
-                if not isinstance(cur.get("notifications"), dict):
-                    cur["notifications"] = {}
-                cur["notifications"].update(out_notifications)
-            if out_library:
-                if not isinstance(cur.get("library"), dict):
-                    cur["library"] = {}
-                cur["library"].update(out_library)
-            cur["updated_at"] = _now_ts()
-            users[uid] = cur
-            self._save_all(all_data)
+        with writer_lock("user_settings.update"):
+            with self._lock:
+                all_data = self._load_all()
+                users = all_data.get("users")
+                if not isinstance(users, dict):
+                    users = {}
+                    all_data["users"] = users
+                cur = users.get(uid)
+                if not isinstance(cur, dict):
+                    cur = {}
+                cur.setdefault("defaults", {})
+                cur.setdefault("notifications", {})
+                cur.setdefault("library", {})
+                if out_defaults:
+                    if not isinstance(cur.get("defaults"), dict):
+                        cur["defaults"] = {}
+                    cur["defaults"].update(out_defaults)
+                if out_notifications:
+                    if not isinstance(cur.get("notifications"), dict):
+                        cur["notifications"] = {}
+                    cur["notifications"].update(out_notifications)
+                if out_library:
+                    if not isinstance(cur.get("library"), dict):
+                        cur["library"] = {}
+                    cur["library"].update(out_library)
+                cur["updated_at"] = _now_ts()
+                users[uid] = cur
+                self._save_all(all_data)
 
         return self.get_user(uid)
 

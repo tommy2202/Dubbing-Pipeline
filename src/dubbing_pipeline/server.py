@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
@@ -43,6 +43,7 @@ from dubbing_pipeline.utils.crypto import PasswordHasher, random_id
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.net import install_egress_policy
 from dubbing_pipeline.utils.ratelimit import RateLimiter
+from dubbing_pipeline.utils.single_writer import SingleWriterError
 from dubbing_pipeline.queue.manager import AutoQueueBackend
 from dubbing_pipeline.web.routes_jobs import router as jobs_router
 from dubbing_pipeline.web.routes_ui import public_router as public_ui_router
@@ -199,6 +200,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="dubbing_pipeline server", lifespan=lifespan)
+
+
+@app.exception_handler(SingleWriterError)
+async def _handle_single_writer_error(request: Request, exc: SingleWriterError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 app.state.templates = TEMPLATES
 with suppress(Exception):
     STATIC_DIR.mkdir(parents=True, exist_ok=True)

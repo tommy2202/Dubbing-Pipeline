@@ -11,6 +11,7 @@ from typing import Any
 
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.utils.io import atomic_copy, atomic_write_text, read_json
+from dubbing_pipeline.utils.single_writer import writer_lock
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -145,90 +146,91 @@ def save_character_ref(
     - Writes history copy under `refs/<job_id>_<ts>.wav`
     - Updates `meta.json` and series `index.json`
     """
-    src = Path(ref_wav).resolve()
-    if not src.exists() or not src.is_file():
-        raise FileNotFoundError(str(src))
-    sr = get_series_root(series_slug, voice_store_dir=voice_store_dir)
-    cr = _character_root(sr, character_slug)
-    _safe_mkdir(cr)
-    _safe_mkdir(cr / "refs")
-    _safe_mkdir(sr / "characters")
+    with writer_lock("voice_store.save_character_ref"):
+        src = Path(ref_wav).resolve()
+        if not src.exists() or not src.is_file():
+            raise FileNotFoundError(str(src))
+        sr = get_series_root(series_slug, voice_store_dir=voice_store_dir)
+        cr = _character_root(sr, character_slug)
+        _safe_mkdir(cr)
+        _safe_mkdir(cr / "refs")
+        _safe_mkdir(sr / "characters")
 
-    ts = _now_ts()
-    safe_job = _slugify(job_id) or "job"
-    hist = (cr / "refs" / f"{safe_job}_{ts}.wav").resolve()
-    canonical = (cr / "ref.wav").resolve()
+        ts = _now_ts()
+        safe_job = _slugify(job_id) or "job"
+        hist = (cr / "refs" / f"{safe_job}_{ts}.wav").resolve()
+        canonical = (cr / "ref.wav").resolve()
 
-    atomic_copy(src, hist)
-    atomic_copy(src, canonical)
+        atomic_copy(src, hist)
+        atomic_copy(src, canonical)
 
-    # meta.json (character scoped)
-    md = dict(metadata or {})
-    md.setdefault("series_slug", _slugify(series_slug))
-    md.setdefault("character_slug", _slugify(character_slug))
-    md.setdefault("job_id", str(job_id))
-    md.setdefault("created_by", str(md.get("created_by") or ""))
-    md.setdefault("source", str(md.get("source") or "unknown"))
-    md["last_updated_ts"] = int(ts)
-    md["ref_path"] = str(canonical)
-    _dump_json(cr / "meta.json", md)
+        # meta.json (character scoped)
+        md = dict(metadata or {})
+        md.setdefault("series_slug", _slugify(series_slug))
+        md.setdefault("character_slug", _slugify(character_slug))
+        md.setdefault("job_id", str(job_id))
+        md.setdefault("created_by", str(md.get("created_by") or ""))
+        md.setdefault("source", str(md.get("source") or "unknown"))
+        md["last_updated_ts"] = int(ts)
+        md["ref_path"] = str(canonical)
+        _dump_json(cr / "meta.json", md)
 
-    # versions/<ts>/ref.wav + metadata.json
-    with suppress(Exception):
-        _write_version(
-            series_root=sr,
-            character_slug=character_slug,
-            ref_wav=canonical,
-            metadata={
-                "series_slug": _slugify(series_slug),
-                "character_slug": _slugify(character_slug),
-                "display_name": str(md.get("display_name") or md.get("name") or ""),
-                "job_id": str(job_id),
-                "created_by": str(md.get("created_by") or ""),
-                "source": str(md.get("source") or "unknown"),
+        # versions/<ts>/ref.wav + metadata.json
+        with suppress(Exception):
+            _write_version(
+                series_root=sr,
+                character_slug=character_slug,
+                ref_wav=canonical,
+                metadata={
+                    "series_slug": _slugify(series_slug),
+                    "character_slug": _slugify(character_slug),
+                    "display_name": str(md.get("display_name") or md.get("name") or ""),
+                    "job_id": str(job_id),
+                    "created_by": str(md.get("created_by") or ""),
+                    "source": str(md.get("source") or "unknown"),
+                    "updated_at": str(md.get("updated_at") or md.get("last_updated_ts") or ts),
+                },
+            )
+
+        # series index.json
+        idx_path = _series_index_path(sr)
+        idx = read_json(idx_path, default={})
+        if not isinstance(idx, dict):
+            idx = {}
+        idx.setdefault("version", 1)
+        idx.setdefault("series_slug", _slugify(series_slug))
+        chars = idx.get("characters")
+        if not isinstance(chars, list):
+            chars = []
+            idx["characters"] = chars
+        cslug = _slugify(character_slug)
+        display_name = str(md.get("display_name") or md.get("name") or "").strip()
+        created_by = str(md.get("created_by") or "").strip()
+
+        # upsert by character_slug
+        found = None
+        for it in chars:
+            if not isinstance(it, dict):
+                continue
+            if str(it.get("character_slug") or "") == cslug:
+                found = it
+                break
+        rec = found if found is not None else {}
+        rec.update(
+            {
+                "character_slug": cslug,
+                "display_name": display_name,
+                "ref_path": str(canonical),
                 "updated_at": str(md.get("updated_at") or md.get("last_updated_ts") or ts),
-            },
+                "created_by": created_by,
+            }
         )
-
-    # series index.json
-    idx_path = _series_index_path(sr)
-    idx = read_json(idx_path, default={})
-    if not isinstance(idx, dict):
-        idx = {}
-    idx.setdefault("version", 1)
-    idx.setdefault("series_slug", _slugify(series_slug))
-    chars = idx.get("characters")
-    if not isinstance(chars, list):
-        chars = []
-        idx["characters"] = chars
-    cslug = _slugify(character_slug)
-    display_name = str(md.get("display_name") or md.get("name") or "").strip()
-    created_by = str(md.get("created_by") or "").strip()
-
-    # upsert by character_slug
-    found = None
-    for it in chars:
-        if not isinstance(it, dict):
-            continue
-        if str(it.get("character_slug") or "") == cslug:
-            found = it
-            break
-    rec = found if found is not None else {}
-    rec.update(
-        {
-            "character_slug": cslug,
-            "display_name": display_name,
-            "ref_path": str(canonical),
-            "updated_at": str(md.get("updated_at") or md.get("last_updated_ts") or ts),
-            "created_by": created_by,
-        }
-    )
-    if found is None:
-        chars.append(rec)
-    # keep stable ordering
-    chars.sort(key=lambda x: str(x.get("character_slug") or ""))
-    _dump_json(idx_path, idx)
-    return canonical
+        if found is None:
+            chars.append(rec)
+        # keep stable ordering
+        chars.sort(key=lambda x: str(x.get("character_slug") or ""))
+        _dump_json(idx_path, idx)
+        return canonical
 
 
 def delete_character(
@@ -238,38 +240,39 @@ def delete_character(
     Delete a character folder and remove it from the series index.
     Returns True if something was deleted.
     """
-    sr = get_series_root(series_slug, voice_store_dir=voice_store_dir)
-    cr = _character_root(sr, character_slug)
-    deleted = False
-    if cr.exists():
-        # best-effort recursive delete
-        with suppress(Exception):
-            for p in sorted(cr.rglob("*"), reverse=True):
-                with suppress(Exception):
-                    if p.is_file() or p.is_symlink():
-                        p.unlink(missing_ok=True)
-                    elif p.is_dir():
-                        p.rmdir()
+    with writer_lock("voice_store.delete_character"):
+        sr = get_series_root(series_slug, voice_store_dir=voice_store_dir)
+        cr = _character_root(sr, character_slug)
+        deleted = False
+        if cr.exists():
+            # best-effort recursive delete
             with suppress(Exception):
-                cr.rmdir()
-            deleted = True
-
-    # update series index.json (best-effort)
-    with suppress(Exception):
-        idx_path = _series_index_path(sr)
-        idx = read_json(idx_path, default={})
-        if isinstance(idx, dict) and isinstance(idx.get("characters"), list):
-            cslug = _slugify(character_slug)
-            before = len(idx["characters"])
-            idx["characters"] = [
-                x
-                for x in idx["characters"]
-                if not (isinstance(x, dict) and str(x.get("character_slug") or "") == cslug)
-            ]
-            if len(idx["characters"]) != before:
-                _dump_json(idx_path, idx)
+                for p in sorted(cr.rglob("*"), reverse=True):
+                    with suppress(Exception):
+                        if p.is_file() or p.is_symlink():
+                            p.unlink(missing_ok=True)
+                        elif p.is_dir():
+                            p.rmdir()
+                with suppress(Exception):
+                    cr.rmdir()
                 deleted = True
-    return bool(deleted)
+
+        # update series index.json (best-effort)
+        with suppress(Exception):
+            idx_path = _series_index_path(sr)
+            idx = read_json(idx_path, default={})
+            if isinstance(idx, dict) and isinstance(idx.get("characters"), list):
+                cslug = _slugify(character_slug)
+                before = len(idx["characters"])
+                idx["characters"] = [
+                    x
+                    for x in idx["characters"]
+                    if not (isinstance(x, dict) and str(x.get("character_slug") or "") == cslug)
+                ]
+                if len(idx["characters"]) != before:
+                    _dump_json(idx_path, idx)
+                    deleted = True
+        return bool(deleted)
 
 
 def list_character_versions(
