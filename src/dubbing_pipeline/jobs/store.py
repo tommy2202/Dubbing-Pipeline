@@ -110,6 +110,8 @@ class JobStore:
                 "visibility": "TEXT",
                 "created_at": "TEXT",
                 "updated_at": "TEXT",
+                "job_state": "TEXT",
+                "has_outputs": "INTEGER",
             }
             for name, typ in want.items():
                 if name in cols:
@@ -126,6 +128,15 @@ class JobStore:
             )
             con.execute(
                 "CREATE INDEX IF NOT EXISTS idx_job_library_owner_user_id ON job_library(owner_user_id);"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_library_job_state ON job_library(job_state);"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_library_has_outputs ON job_library(has_outputs);"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_library_updated_at ON job_library(updated_at);"
             )
             con.commit()
         finally:
@@ -415,6 +426,11 @@ class JobStore:
 
         created_at = str(raw.get("created_at") or "").strip() or None
         updated_at = str(raw.get("updated_at") or "").strip() or None
+        st_raw = str(raw.get("state") or "").strip()
+        if st_raw.lower().startswith("jobstate."):
+            st_raw = st_raw.split(".", 1)[1]
+        job_state = st_raw.upper() if st_raw else ""
+        has_outputs = 1 if str(raw.get("output_mkv") or raw.get("output_srt") or "").strip() else 0
 
         con = self._conn()
         try:
@@ -422,8 +438,8 @@ class JobStore:
                 """
                 INSERT INTO job_library (
                   job_id, owner_user_id, series_title, series_slug, season_number, episode_number,
-                  visibility, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  visibility, created_at, updated_at, job_state, has_outputs
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_id) DO UPDATE SET
                   owner_user_id=excluded.owner_user_id,
                   series_title=excluded.series_title,
@@ -432,10 +448,24 @@ class JobStore:
                   episode_number=excluded.episode_number,
                   visibility=excluded.visibility,
                   created_at=COALESCE(excluded.created_at, job_library.created_at),
-                  updated_at=excluded.updated_at
+                  updated_at=excluded.updated_at,
+                  job_state=excluded.job_state,
+                  has_outputs=excluded.has_outputs
                 ;
                 """,
-                (str(job_id), owner, title, slug, int(season), int(ep), vis, created_at, updated_at),
+                (
+                    str(job_id),
+                    owner,
+                    title,
+                    slug,
+                    int(season),
+                    int(ep),
+                    vis,
+                    created_at,
+                    updated_at,
+                    job_state,
+                    int(has_outputs),
+                ),
             )
             con.commit()
         finally:

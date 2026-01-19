@@ -60,6 +60,19 @@ def _visibility_where_with_view(*, ident: Identity, view: str | None) -> tuple[s
     return _visibility_where(ident=ident)
 
 
+def _status_where(status: str | None) -> tuple[str, list[Any], str]:
+    s = str(status or "").strip().lower()
+    if not s:
+        return "", [], "all"
+    if s in {"has_outputs", "outputs", "done", "completed"}:
+        return "AND has_outputs = 1", [], "has_outputs"
+    if s in {"in_progress", "running", "queued"}:
+        return "AND job_state IN ('QUEUED','RUNNING','PAUSED')", [], "in_progress"
+    if s in {"failed", "error"}:
+        return "AND job_state = 'FAILED'", [], "failed"
+    return "", [], "all"
+
+
 def list_series(
     *,
     store: JobStore,
@@ -68,6 +81,7 @@ def list_series(
     offset: int | None = None,
     order: str | None = None,
     q: str | None = None,
+    status: str | None = None,
     view: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
@@ -79,6 +93,7 @@ def list_series(
         order_eff = "title"
 
     vis_where, vis_params, vis_label = _visibility_where_with_view(ident=ident, view=view)
+    st_where, st_params, st_label = _status_where(status)
 
     q_text = str(q or "").strip()
     q_like = f"%{q_text.lower()}%" if q_text else ""
@@ -108,6 +123,7 @@ def list_series(
         AND series_slug != ''
         AND {vis_where}
         {q_where}
+        {st_where}
     ),
     latest_title AS (
       SELECT
@@ -142,7 +158,7 @@ def list_series(
     con = _conn(store)
     try:
         rows = con.execute(
-            sql, [*vis_params, *q_params, page.limit, page.offset]
+            sql, [*vis_params, *q_params, *st_params, page.limit, page.offset]
         ).fetchall()
         items = [
             {
@@ -160,6 +176,7 @@ def list_series(
             "order": order_eff,
             "visibility_filter": vis_label,
             "q": q_text,
+            "status_filter": st_label,
         }
     finally:
         con.close()
@@ -172,11 +189,13 @@ def list_seasons(
     series_slug: str,
     limit: int | None = None,
     offset: int | None = None,
+    status: str | None = None,
     view: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     page = _page(limit, offset)
     slug = str(series_slug or "").strip()
     vis_where, vis_params, vis_label = _visibility_where_with_view(ident=ident, view=view)
+    st_where, st_params, st_label = _status_where(status)
 
     sql = f"""
     SELECT
@@ -187,13 +206,16 @@ def list_seasons(
       AND season_number IS NOT NULL
       AND season_number >= 1
       AND {vis_where}
+      {st_where}
     GROUP BY season_number
     ORDER BY season_number ASC
     LIMIT ? OFFSET ?;
     """
     con = _conn(store)
     try:
-        rows = con.execute(sql, [slug, *vis_params, page.limit, page.offset]).fetchall()
+        rows = con.execute(
+            sql, [slug, *vis_params, *st_params, page.limit, page.offset]
+        ).fetchall()
         items = [
             {
                 "season_number": int(r["season_number"] or 0),
@@ -206,6 +228,7 @@ def list_seasons(
             "limit": page.limit,
             "offset": page.offset,
             "visibility_filter": vis_label,
+            "status_filter": st_label,
         }
     finally:
         con.close()
@@ -221,6 +244,7 @@ def list_episodes(
     offset: int | None = None,
     episode_number: int | None = None,
     include_versions: bool = False,
+    status: str | None = None,
     view: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     page = _page(limit, offset)
@@ -229,9 +253,10 @@ def list_episodes(
     ep_filter = int(episode_number) if episode_number is not None else None
     include_versions_b = bool(include_versions)
     vis_where, vis_params, vis_label = _visibility_where_with_view(ident=ident, view=view)
+    st_where, st_params, st_label = _status_where(status)
 
     where_ep = ""
-    params: list[Any] = [slug, season, *vis_params]
+    params: list[Any] = [slug, season, *vis_params, *st_params]
     if ep_filter is not None:
         where_ep = "AND episode_number = ?"
         params.append(ep_filter)
@@ -251,6 +276,7 @@ def list_episodes(
           AND season_number >= 1
           AND episode_number >= 1
           AND {vis_where}
+          {st_where}
           {where_ep}
         ORDER BY episode_number ASC, updated_at DESC
         LIMIT ? OFFSET ?;
@@ -273,6 +299,7 @@ def list_episodes(
             AND season_number >= 1
             AND episode_number >= 1
             AND {vis_where}
+            {st_where}
             {where_ep}
         )
         SELECT episode_number, job_id, visibility, created_at, updated_at, versions_count
@@ -354,7 +381,190 @@ def list_episodes(
             "include_versions": bool(include_versions_b),
             "episode_number": ep_filter,
             "visibility_filter": vis_label,
+            "status_filter": st_label,
         }
     finally:
         con.close()
 
+
+def list_recent(
+    *,
+    store: JobStore,
+    ident: Identity,
+    limit: int | None = None,
+    offset: int | None = None,
+    status: str | None = "has_outputs",
+    view: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    page = _page(limit, offset)
+    vis_where, vis_params, vis_label = _visibility_where_with_view(ident=ident, view=view)
+    st_where, st_params, st_label = _status_where(status)
+
+    sql = f"""
+    SELECT
+      series_slug,
+      series_title,
+      season_number,
+      episode_number,
+      job_id,
+      visibility,
+      updated_at,
+      job_state,
+      has_outputs
+    FROM job_library
+    WHERE series_slug IS NOT NULL
+      AND series_slug != ''
+      AND {vis_where}
+      {st_where}
+    ORDER BY updated_at DESC, series_slug ASC, season_number ASC, episode_number ASC
+    LIMIT ? OFFSET ?;
+    """
+    con = _conn(store)
+    try:
+        rows = con.execute(sql, [*vis_params, *st_params, page.limit, page.offset]).fetchall()
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            vis = str(r["visibility"] or "private")
+            if vis.lower().startswith("visibility."):
+                vis = vis.split(".", 1)[1]
+            vis = vis.lower()
+            if vis not in {"private", "public"}:
+                vis = "private"
+            items.append(
+                {
+                    "series_slug": str(r["series_slug"]),
+                    "series_title": str(r["series_title"] or r["series_slug"]),
+                    "season_number": int(r["season_number"] or 0),
+                    "episode_number": int(r["episode_number"] or 0),
+                    "job_id": str(r["job_id"]),
+                    "status": str(r["job_state"] or ""),
+                    "has_outputs": bool(int(r["has_outputs"] or 0)),
+                    "updated_at": str(r["updated_at"] or ""),
+                    "visibility": vis,
+                }
+            )
+        return items, {
+            "limit": page.limit,
+            "offset": page.offset,
+            "visibility_filter": vis_label,
+            "status_filter": st_label,
+        }
+    finally:
+        con.close()
+
+
+def search_library(
+    *,
+    store: JobStore,
+    ident: Identity,
+    q: str | None = None,
+    season_number: int | None = None,
+    episode_number: int | None = None,
+    status: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+    view: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    page = _page(limit, offset)
+    vis_where, vis_params, vis_label = _visibility_where_with_view(ident=ident, view=view)
+    st_where, st_params, st_label = _status_where(status)
+    q_text = str(q or "").strip()
+    q_like = f"%{q_text.lower()}%" if q_text else ""
+    q_where = ""
+    q_params: list[Any] = []
+    if q_text:
+        q_where = "AND (lower(series_title) LIKE ? OR lower(series_slug) LIKE ?)"
+        q_params = [q_like, q_like]
+
+    season_where = ""
+    season_params: list[Any] = []
+    if season_number is not None:
+        try:
+            sn = int(season_number)
+            if sn >= 1:
+                season_where = "AND season_number = ?"
+                season_params = [sn]
+        except Exception:
+            season_where = ""
+
+    episode_where = ""
+    episode_params: list[Any] = []
+    if episode_number is not None:
+        try:
+            en = int(episode_number)
+            if en >= 1:
+                episode_where = "AND episode_number = ?"
+                episode_params = [en]
+        except Exception:
+            episode_where = ""
+
+    sql = f"""
+    SELECT
+      series_slug,
+      series_title,
+      season_number,
+      episode_number,
+      job_id,
+      visibility,
+      updated_at,
+      job_state,
+      has_outputs
+    FROM job_library
+    WHERE series_slug IS NOT NULL
+      AND series_slug != ''
+      AND season_number >= 1
+      AND episode_number >= 1
+      AND {vis_where}
+      {q_where}
+      {season_where}
+      {episode_where}
+      {st_where}
+    ORDER BY series_slug ASC, season_number ASC, episode_number ASC, updated_at DESC
+    LIMIT ? OFFSET ?;
+    """
+    con = _conn(store)
+    try:
+        rows = con.execute(
+            sql,
+            [
+                *vis_params,
+                *q_params,
+                *season_params,
+                *episode_params,
+                *st_params,
+                page.limit,
+                page.offset,
+            ],
+        ).fetchall()
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            vis = str(r["visibility"] or "private")
+            if vis.lower().startswith("visibility."):
+                vis = vis.split(".", 1)[1]
+            vis = vis.lower()
+            if vis not in {"private", "public"}:
+                vis = "private"
+            items.append(
+                {
+                    "series_slug": str(r["series_slug"]),
+                    "series_title": str(r["series_title"] or r["series_slug"]),
+                    "season_number": int(r["season_number"] or 0),
+                    "episode_number": int(r["episode_number"] or 0),
+                    "job_id": str(r["job_id"]),
+                    "status": str(r["job_state"] or ""),
+                    "has_outputs": bool(int(r["has_outputs"] or 0)),
+                    "updated_at": str(r["updated_at"] or ""),
+                    "visibility": vis,
+                }
+            )
+        return items, {
+            "limit": page.limit,
+            "offset": page.offset,
+            "q": q_text,
+            "visibility_filter": vis_label,
+            "status_filter": st_label,
+            "season_number": season_number,
+            "episode_number": episode_number,
+        }
+    finally:
+        con.close()

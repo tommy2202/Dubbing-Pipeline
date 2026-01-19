@@ -44,6 +44,13 @@ def _default_user_settings() -> dict[str, Any]:
             "notify_enabled": False,
             "notify_topic": "",
         },
+        "library": {
+            "last_series": {
+                "series_slug": "",
+                "series_title": "",
+                "updated_at": 0.0,
+            }
+        },
         "updated_at": _now_ts(),
     }
 
@@ -93,6 +100,20 @@ def _validate_notify_topic(v: Any) -> str:
                 detail="Notification topic not in allowed list",
             ) from ex
         raise HTTPException(status_code=400, detail="Invalid notification topic") from ex
+
+
+def _validate_series_slug(v: Any) -> str:
+    vv = str(v or "").strip()
+    if len(vv) > 200:
+        raise HTTPException(status_code=400, detail="series_slug too long")
+    return vv
+
+
+def _validate_series_title(v: Any) -> str:
+    vv = str(v or "").strip()
+    if len(vv) > 200:
+        raise HTTPException(status_code=400, detail="series_title too long")
+    return vv
 
 
 #
@@ -151,6 +172,8 @@ class UserSettingsStore:
                     base["defaults"].update(cur["defaults"])
                 if isinstance(cur.get("notifications"), dict):
                     base["notifications"].update(cur["notifications"])
+            if isinstance(cur.get("library"), dict):
+                base["library"].update(cur["library"])
                 if cur.get("updated_at"):
                     base["updated_at"] = cur.get("updated_at")
             return base
@@ -165,6 +188,7 @@ class UserSettingsStore:
         # Validate + normalize patch
         out_defaults: dict[str, Any] = {}
         out_notifications: dict[str, Any] = {}
+        out_library: dict[str, Any] = {}
         if isinstance(patch.get("defaults"), dict):
             d = patch["defaults"]
             if "mode" in d:
@@ -188,6 +212,23 @@ class UserSettingsStore:
                 )
             if "notify_topic" in n:
                 out_notifications["notify_topic"] = _validate_notify_topic(n.get("notify_topic"))
+        if isinstance(patch.get("library"), dict):
+            lib = patch["library"]
+            if "last_series" in lib:
+                last = lib.get("last_series")
+                if last is None:
+                    out_library["last_series"] = {}
+                elif isinstance(last, dict):
+                    slug = _validate_series_slug(last.get("series_slug"))
+                    title = _validate_series_title(last.get("series_title"))
+                    if slug:
+                        out_library["last_series"] = {
+                            "series_slug": slug,
+                            "series_title": title,
+                            "updated_at": _now_ts(),
+                        }
+                    else:
+                        out_library["last_series"] = {}
 
         with self._lock:
             all_data = self._load_all()
@@ -200,6 +241,7 @@ class UserSettingsStore:
                 cur = {}
             cur.setdefault("defaults", {})
             cur.setdefault("notifications", {})
+            cur.setdefault("library", {})
             if out_defaults:
                 if not isinstance(cur.get("defaults"), dict):
                     cur["defaults"] = {}
@@ -208,6 +250,10 @@ class UserSettingsStore:
                 if not isinstance(cur.get("notifications"), dict):
                     cur["notifications"] = {}
                 cur["notifications"].update(out_notifications)
+            if out_library:
+                if not isinstance(cur.get("library"), dict):
+                    cur["library"] = {}
+                cur["library"].update(out_library)
             cur["updated_at"] = _now_ts()
             users[uid] = cur
             self._save_all(all_data)
@@ -249,6 +295,7 @@ async def get_settings_me(
     return {
         "defaults": user_cfg.get("defaults", {}),
         "notifications": user_cfg.get("notifications", {}),
+        "library": user_cfg.get("library", {}),
         "system": {
             "limits": {
                 "max_concurrency_global": int(s.max_concurrency_global),
@@ -281,6 +328,7 @@ async def put_settings_me(
     return {
         "defaults": updated.get("defaults", {}),
         "notifications": updated.get("notifications", {}),
+        "library": updated.get("library", {}),
         "updated_at": updated.get("updated_at"),
     }
 
@@ -295,6 +343,7 @@ async def admin_get_user_settings(
         "user_id": str(user_id),
         "defaults": cfg.get("defaults", {}),
         "notifications": cfg.get("notifications", {}),
+        "library": cfg.get("library", {}),
         "updated_at": cfg.get("updated_at"),
     }
 
@@ -310,5 +359,6 @@ async def admin_put_user_settings(
         "user_id": str(user_id),
         "defaults": updated.get("defaults", {}),
         "notifications": updated.get("notifications", {}),
+        "library": updated.get("library", {}),
         "updated_at": updated.get("updated_at"),
     }

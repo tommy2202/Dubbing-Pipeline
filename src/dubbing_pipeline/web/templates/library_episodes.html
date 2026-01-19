@@ -96,7 +96,24 @@
           const url = new URL(window.location.href);
           this.view = url.searchParams.get("view") || "all";
         } catch (e) {}
+        await this.touchContinue();
         await this.reload();
+      },
+      async touchContinue() {
+        try {
+          await fetch("/api/library/continue", {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-Token": "{{ csrf_token }}"
+            },
+            body: JSON.stringify({
+              series_slug: this.seriesSlug,
+              series_title: this.seriesSlug
+            })
+          });
+        } catch (e) {}
       },
       async reload() {
         this.loading = true;
