@@ -1,3 +1,42 @@
+## Reliability tests (P1)
+
+These lightweight scripts validate the P1 reliability scenarios. They avoid GPU use and run on small synthetic media (1–2 seconds).
+
+### Prerequisites
+- `ffmpeg` and `ffprobe` on `PATH`
+- Python dependencies installed (FastAPI stack for API-based tests)
+
+### Quick gate (P1)
+
+```bash
+python scripts/p1_gate.py
+```
+
+The gate will **skip gracefully** if optional dependencies (e.g. FastAPI, ffmpeg) are missing.
+
+### Individual scripts
+
+```bash
+# Two users submit simultaneously
+python scripts/e2e_two_users_submit.py
+
+# Upload interrupted + resumed
+python scripts/e2e_upload_resume.py
+
+# Cancel mid-run
+python scripts/e2e_cancel_midrun.py
+
+# Restart worker mid-run
+python scripts/e2e_restart_worker_midrun.py
+
+# Redis down -> fallback -> Redis back
+python scripts/e2e_redis_fallback.py
+```
+
+### Notes
+- All scripts use `device=cpu` and do not load GPU models.
+- Some scripts rely on FastAPI’s TestClient; missing FastAPI is treated as a **skip**.
+- The Redis fallback test does **not** require a live Redis instance; it simulates health transitions.
 # Reliability tests & runbook
 
 This document describes **real-world failure scenarios** and the corresponding **end-to-end reliability tests** included in this repository.

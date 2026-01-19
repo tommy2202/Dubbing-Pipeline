@@ -120,3 +120,7 @@ jobs:
           python scripts/e2e_job_recovery.py
           python scripts/collect_diagnostics.py
 
+      - name: P1 gate (nightly)
+        run: |
+          python scripts/p1_gate.py
+

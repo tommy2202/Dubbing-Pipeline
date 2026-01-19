@@ -12,8 +12,6 @@ import time
 from concurrent.futures import CancelledError as FuturesCancelledError
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
 
 def _need_tool(name: str) -> None:
     if shutil.which(name):
@@ -101,7 +99,16 @@ def _post_chunk(
 
 def main() -> int:
     random.seed(0)
-    _need_tool("ffmpeg")
+    try:
+        from fastapi.testclient import TestClient
+    except Exception as ex:
+        print(f"e2e_upload_resume: SKIP (fastapi unavailable: {ex})")
+        return 0
+    try:
+        _need_tool("ffmpeg")
+    except RuntimeError as ex:
+        print(f"e2e_upload_resume: SKIP ({ex})")
+        return 0
 
     simulate_loss = os.environ.get("SIMULATE_NETWORK_LOSS", "").strip() in {"1", "true", "yes"}
 
