@@ -9,6 +9,10 @@ on:
         description: "Push image to GHCR"
         required: false
         default: "true"
+      release_hardening:
+        description: "Enable SBOM/signing/attestation steps"
+        required: false
+        default: "false"
 
 permissions:
   contents: read
@@ -23,6 +27,7 @@ jobs:
     timeout-minutes: 60
     env:
       IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/dubbing-pipeline
+      RELEASE_HARDENING: ${{ inputs.release_hardening || vars.RELEASE_HARDENING }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,8 +72,26 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
+      - name: Detect release hardening
+        id: hardening
+        env:
+          RELEASE_HARDENING: ${{ env.RELEASE_HARDENING }}
+        run: |
+          val="$(printf "%s" "${RELEASE_HARDENING}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${val}" = "1" ] || [ "${val}" = "true" ] || [ "${val}" = "yes" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Note (release hardening disabled -> skip)
+        if: steps.hardening.outputs.enabled != 'true'
+        run: |
+          echo "Release hardening disabled; skipping SBOM/signing/attestation steps."
+
       - name: Generate SBOM (Syft)
         id: syft
+        if: steps.hardening.outputs.enabled == 'true'
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -76,6 +99,7 @@ jobs:
           output-file: sbom.spdx.json
 
       - name: Upload SBOM artifact
+        if: steps.hardening.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: sbom-spdx-json
@@ -93,6 +117,7 @@ jobs:
 
       - name: Detect signing keys
         id: keys
+        if: steps.hardening.outputs.enabled == 'true'
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
@@ -104,16 +129,16 @@ jobs:
           fi
 
       - name: Note (signing keys missing -> skip)
-        if: steps.keys.outputs.present != 'true'
+        if: steps.hardening.outputs.enabled == 'true' && steps.keys.outputs.present != 'true'
         run: |
           echo "Signing/attestation keys not configured; skipping signing steps."
 
       - name: Install Cosign (key-based)
-        if: steps.keys.outputs.present == 'true'
+        if: steps.hardening.outputs.enabled == 'true' && steps.keys.outputs.present == 'true'
         uses: sigstore/cosign-installer@v3
 
       - name: Prepare Cosign key file
-        if: steps.keys.outputs.present == 'true'
+        if: steps.hardening.outputs.enabled == 'true' && steps.keys.outputs.present == 'true'
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
         run: |
@@ -127,21 +152,21 @@ jobs:
           PY
 
       - name: Cosign sign (key-based)
-        if: steps.keys.outputs.present == 'true'
+        if: steps.hardening.outputs.enabled == 'true' && steps.keys.outputs.present == 'true'
         env:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           cosign sign --yes --key /tmp/cosign.key "${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
 
       - name: Cosign attest SBOM (key-based)
-        if: steps.keys.outputs.present == 'true'
+        if: steps.hardening.outputs.enabled == 'true' && steps.keys.outputs.present == 'true'
         env:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           cosign attest --yes --key /tmp/cosign.key --type spdxjson --predicate sbom.spdx.json "${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
 
       - name: Attest build provenance (optional)
-        if: steps.keys.outputs.present == 'true'
+        if: steps.hardening.outputs.enabled == 'true'
         uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018
         with:
           subject-name: ${{ env.IMAGE_NAME }}
