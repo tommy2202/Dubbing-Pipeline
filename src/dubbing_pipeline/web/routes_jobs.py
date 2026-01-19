@@ -8,6 +8,7 @@ import json
 import math
 import re
 import time
+from datetime import datetime, timezone
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import AuthStore, Role
 from dubbing_pipeline.api.security import decode_token
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.jobs.checkpoint import read_ckpt
 from dubbing_pipeline.jobs.limits import get_limits, used_minutes_today
 from dubbing_pipeline.jobs.models import Job, JobState, new_id, now_utc
 from dubbing_pipeline.jobs.policy import evaluate_submission
@@ -3058,6 +3060,154 @@ async def stream_logs(request: Request, id: str, _: Identity = Depends(require_s
             return
 
     return EventSourceResponse(gen())
+
+
+_TIMELINE_STAGES: list[tuple[str, str]] = [
+    ("queued", "Queued"),
+    ("extracting", "Extracting"),
+    ("asr", "ASR"),
+    ("translation", "Translation"),
+    ("tts", "TTS"),
+    ("mixing", "Mixing"),
+    ("export", "Export"),
+]
+_TIMELINE_CKPT_KEYS: dict[str, list[str]] = {
+    "extracting": ["audio"],
+    "asr": ["transcribe"],
+    "translation": ["translate"],
+    "tts": ["tts"],
+    "mixing": ["mix", "mux"],
+    "export": ["mix", "mux"],
+}
+
+
+def _to_epoch(ts: Any) -> float | None:
+    if ts is None:
+        return None
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts).timestamp()
+        except Exception:
+            return None
+    return None
+
+
+def _iso(ts: float | None) -> str | None:
+    if ts is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def _ckpt_done_at(stages: dict[str, Any], keys: list[str]) -> float | None:
+    for k in keys:
+        rec = stages.get(k) if isinstance(stages, dict) else None
+        if isinstance(rec, dict) and bool(rec.get("done")):
+            return _to_epoch(rec.get("done_at"))
+    return None
+
+
+@router.get("/api/jobs/{id}/timeline")
+async def job_timeline(
+    request: Request, id: str, _: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = _require_job_access(store.get(id), _)
+    base_dir = _job_base_dir(job)
+    ckpt = read_ckpt(job.id, ckpt_path=(base_dir / ".checkpoint.json")) or {}
+    timeline = ckpt.get("timeline") if isinstance(ckpt.get("timeline"), dict) else {}
+    stages_ckpt = ckpt.get("stages") if isinstance(ckpt.get("stages"), dict) else {}
+
+    entries: list[dict[str, Any]] = []
+    first_started: float | None = None
+
+    for stage_key, label in _TIMELINE_STAGES:
+        if stage_key == "queued":
+            continue
+        entry = timeline.get(stage_key) if isinstance(timeline, dict) else None
+        status = str(entry.get("status")) if isinstance(entry, dict) and entry.get("status") else ""
+        started = _to_epoch(entry.get("started_at")) if isinstance(entry, dict) else None
+        finished = _to_epoch(entry.get("finished_at")) if isinstance(entry, dict) else None
+        skip_reason = str(entry.get("skip_reason") or "") if isinstance(entry, dict) else ""
+
+        if not status:
+            done_at = _ckpt_done_at(stages_ckpt, _TIMELINE_CKPT_KEYS.get(stage_key, []))
+            if done_at:
+                status = "done"
+                started = started or done_at
+                finished = finished or done_at
+        if not status:
+            status = "pending"
+
+        if started is not None and first_started is None:
+            first_started = started
+
+        duration = finished - started if started is not None and finished is not None else None
+        entries.append(
+            {
+                "stage": stage_key,
+                "label": label,
+                "status": status,
+                "started_at": _iso(started),
+                "finished_at": _iso(finished),
+                "duration_s": duration if duration is None else max(0.0, float(duration)),
+                "skip_reason": skip_reason or None,
+            }
+        )
+
+    queued_started = _to_epoch(getattr(job, "created_at", None))
+    queued_finished = first_started
+    if queued_finished is None and job.state != JobState.QUEUED:
+        queued_finished = _to_epoch(getattr(job, "updated_at", None))
+    queued_status = "started" if job.state == JobState.QUEUED and not queued_finished else "done"
+    queued_duration = (
+        queued_finished - queued_started
+        if queued_started is not None and queued_finished is not None
+        else None
+    )
+    entries = [
+        {
+            "stage": "queued",
+            "label": "Queued",
+            "status": queued_status,
+            "started_at": _iso(queued_started),
+            "finished_at": _iso(queued_finished),
+            "duration_s": queued_duration if queued_duration is None else max(0.0, float(queued_duration)),
+            "skip_reason": None,
+        }
+    ] + entries
+
+    current = next((e for e in entries if e.get("status") == "started"), None)
+    if current is None:
+        if job.state == JobState.QUEUED:
+            current = entries[0]
+        else:
+            for e in reversed(entries):
+                if e.get("status") in {"done", "skipped"}:
+                    current = e
+                    break
+    last_log_line = ""
+    try:
+        txt = store.tail_log(id, n=5)
+        lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+        last_log_line = lines[-1] if lines else ""
+    except Exception:
+        last_log_line = ""
+
+    return {
+        "job_id": str(job.id),
+        "job_state": str(job.state.value),
+        "current_stage": current.get("stage") if current else "",
+        "current_stage_label": current.get("label") if current else "",
+        "current_status": current.get("status") if current else "",
+        "last_log_line": last_log_line,
+        "logs_url": f"/ui/jobs/{job.id}?tab=overview",
+        "stages": entries,
+    }
 
 
 @router.get("/api/jobs/{id}/characters")

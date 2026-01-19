@@ -58,6 +58,61 @@
 
   <!-- Overview -->
   <div class="mt-4" x-show="activeTab==='overview'">
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="text-sm text-slate-300">Timeline</div>
+        <a class="text-xs text-slate-400 underline" :href="(timeline && timeline.logs_url) ? timeline.logs_url : ('/ui/jobs/' + encodeURIComponent(jobId) + '?tab=overview')">
+          Full logs
+        </a>
+      </div>
+      <div class="mt-2 text-xs text-slate-500" x-show="timeline && timeline.current_stage_label" x-cloak>
+        <span class="text-slate-400">Current:</span>
+        <span x-text="timeline.current_stage_label || ''"></span>
+        <span class="text-slate-500">·</span>
+        <span x-text="timeline.current_status || ''"></span>
+      </div>
+      <div class="mt-2 text-xs text-slate-500" x-show="timeline && timeline.last_log_line" x-cloak>
+        <span class="text-slate-400">Last log:</span>
+        <span class="break-all" x-text="timeline.last_log_line || ''"></span>
+      </div>
+      <div class="mt-3 space-y-2">
+        <template x-if="!timeline || !Array.isArray(timeline.stages)">
+          <div class="text-sm text-slate-500">Loading timeline…</div>
+        </template>
+        <template x-if="timeline && Array.isArray(timeline.stages)">
+          <div class="grid gap-2 sm:grid-cols-2">
+            <template x-for="st in timeline.stages" :key="st.stage">
+              <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="text-sm text-slate-200" x-text="st.label || st.stage"></div>
+                  <span class="text-xs rounded border border-slate-800 px-2 py-0.5 text-slate-300"
+                        :class="st.status === 'done' ? 'bg-emerald-900/30 text-emerald-200' : (st.status === 'skipped' ? 'bg-amber-900/30 text-amber-200' : (st.status === 'started' ? 'bg-indigo-900/30 text-indigo-200' : 'bg-slate-900/60 text-slate-400'))"
+                        x-text="st.status || 'pending'"></span>
+                </div>
+                <div class="mt-1 text-xs text-slate-500">
+                  <div x-show="st.started_at" x-cloak>
+                    <span class="text-slate-400">Start:</span>
+                    <span x-text="formatTs(st.started_at)"></span>
+                  </div>
+                  <div x-show="st.finished_at" x-cloak>
+                    <span class="text-slate-400">End:</span>
+                    <span x-text="formatTs(st.finished_at)"></span>
+                  </div>
+                  <div x-show="st.duration_s !== null && st.duration_s !== undefined" x-cloak>
+                    <span class="text-slate-400">Duration:</span>
+                    <span x-text="formatDuration(st.duration_s)"></span>
+                  </div>
+                  <div class="text-amber-200" x-show="st.status === 'skipped' && st.skip_reason" x-cloak>
+                    skipped (<span x-text="st.skip_reason"></span>)
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <div class="grid gap-4 lg:grid-cols-2">
       <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
         <div class="text-sm text-slate-300">Summary</div>
@@ -666,6 +721,8 @@
     return {
       jobId,
       job: null,
+      timeline: null,
+      timelineError: "",
       currentUserId: {% if user %}"{{ user.id }}"{% else %}""{% endif %},
       currentUserRole: {% if user and user.role and user.role.value %}"{{ user.role.value }}"{% else %}""{% endif %},
       activeTab: "artifacts",
@@ -692,6 +749,9 @@
         }
         if (tab === "overrides") {
           if (!this.overridesLoaded) this.loadOverrides();
+        }
+        if (tab === "overview") {
+          this.loadTimeline();
         }
         if (tab === "voices") {
           if (!this.voiceRefsLoaded) this.loadVoiceRefs();
@@ -755,6 +815,7 @@
         await this.loadVoiceMap();
         await this.loadFiles();
         await this.loadQA();
+        await this.loadTimeline();
         // deep-link to a tab (and optionally a segment)
         try {
           const u = new URL(window.location.href);
@@ -898,6 +959,34 @@
           const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId), { credentials: "include" });
           if (!r.ok) return;
           this.job = await r.json();
+          if (this.activeTab === "overview") {
+            await this.loadTimeline();
+          }
+        } catch (e) {}
+      },
+      formatTs(ts) {
+        try {
+          if (!ts) return "";
+          const d = new Date(ts);
+          return isNaN(d.getTime()) ? "" : d.toLocaleString();
+        } catch (e) {
+          return "";
+        }
+      },
+      formatDuration(sec) {
+        const s = Number(sec || 0);
+        if (!isFinite(s) || s <= 0) return "0s";
+        if (s < 60) return Math.round(s) + "s";
+        const m = Math.floor(s / 60);
+        const r = Math.round(s % 60);
+        return m + "m " + String(r).padStart(2, "0") + "s";
+      },
+      async loadTimeline() {
+        this.timelineError = "";
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/timeline", { credentials: "include" });
+          if (!r.ok) return;
+          this.timeline = await r.json();
         } catch (e) {}
       },
       async doAction(action) {

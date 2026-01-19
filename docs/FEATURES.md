@@ -279,6 +279,10 @@ These are normalized and stored as:
   - chunked/resumable uploads (`/api/uploads/*`)
   - server-local file picker (restricted) (`/api/files`)
   - bounded job queue + progress + cancel/kill
+- **Job detail timeline**:
+  - stage-by-stage timeline (queued → extracting → ASR → translation → TTS → mixing → export)
+  - start/end times, durations, and skipped stage reasons
+  - last log line with a link to full logs
 - **Playback**:
   - master outputs (MKV/MP4) with HTTP Range support
   - mobile-friendly artifacts:

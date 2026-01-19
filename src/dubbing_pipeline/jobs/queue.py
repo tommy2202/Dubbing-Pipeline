@@ -10,7 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from dubbing_pipeline.config import get_settings
-from dubbing_pipeline.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from dubbing_pipeline.jobs.checkpoint import (
+    read_ckpt,
+    record_stage_finished,
+    record_stage_skipped,
+    record_stage_started,
+    stage_is_done,
+    write_ckpt,
+)
 from dubbing_pipeline.jobs.limits import get_limits
 from dubbing_pipeline.jobs.models import Job, JobState, now_utc
 from dubbing_pipeline.jobs.store import JobStore
@@ -353,6 +360,37 @@ class JobQueue:
         log_path = base_dir / "job.log"
         ckpt_path = base_dir / ".checkpoint.json"
         ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or {}
+        # Timeline helpers (best-effort; never fail job)
+        def _stage_started(stage: str) -> None:
+            with suppress(Exception):
+                record_stage_started(job_id, stage, ckpt_path=ckpt_path)
+            with suppress(Exception):
+                self.store.append_log(job_id, f"[{now_utc()}] stage_started {stage}")
+            with suppress(Exception):
+                logger.info("stage_started", job_id=str(job_id), stage=str(stage))
+
+        def _stage_finished(stage: str) -> None:
+            with suppress(Exception):
+                record_stage_finished(job_id, stage, ckpt_path=ckpt_path)
+            with suppress(Exception):
+                self.store.append_log(job_id, f"[{now_utc()}] stage_finished {stage}")
+            with suppress(Exception):
+                logger.info("stage_finished", job_id=str(job_id), stage=str(stage))
+
+        def _stage_skipped(stage: str, reason: str) -> None:
+            with suppress(Exception):
+                record_stage_skipped(job_id, stage, ckpt_path=ckpt_path, reason=reason)
+            with suppress(Exception):
+                self.store.append_log(
+                    job_id, f"[{now_utc()}] stage_skipped {stage} reason={reason}"
+                )
+            with suppress(Exception):
+                logger.info(
+                    "stage_skipped",
+                    job_id=str(job_id),
+                    stage=str(stage),
+                    reason=str(reason),
+                )
         # runtime report fields persisted on the job
         runtime.setdefault("attempts", {})
         runtime.setdefault("fallback_used", {})
@@ -542,6 +580,8 @@ class JobQueue:
                 self.store.append_log(job_id, f"[{now_utc()}] audio_hash failed: {ex}")
 
             # a) audio_extractor.extract (~0.10)
+            extracting_skipped = False
+            _stage_started("extracting")
             self.store.update(job_id, progress=0.05, message="Extracting audio")
             self.store.append_log(job_id, f"[{now_utc()}] audio_extractor")
             try:
@@ -552,6 +592,8 @@ class JobQueue:
                         job_id,
                         f"[{now_utc()}] pass2 skipped: missing audio checkpoint",
                     )
+                    extracting_skipped = True
+                    _stage_skipped("extracting", "pass2_missing_checkpoint")
                     self.store.update(
                         job_id,
                         state=JobState.DONE,
@@ -564,6 +606,8 @@ class JobQueue:
                 if wav_guess.exists() and stage_is_done(ckpt, "audio"):
                     wav = wav_guess
                     self.store.append_log(job_id, f"[{now_utc()}] audio_extractor (checkpoint hit)")
+                    extracting_skipped = True
+                    _stage_skipped("extracting", "checkpoint_hit")
                     if is_pass2_outer:
                         _note_pass2_skip("audio_extractor", "checkpoint_hit")
                 else:
@@ -613,6 +657,8 @@ class JobQueue:
             except PhaseTimeout as ex:
                 job_errors.labels(stage="audio_timeout").inc()
                 raise RuntimeError(str(ex)) from ex
+            if not extracting_skipped:
+                _stage_finished("extracting")
             self.store.update(job_id, progress=0.10, message="Audio extracted")
             await self._check_canceled(job_id)
             # Stage manifest (resume-safe metadata; best-effort)
@@ -1486,6 +1532,8 @@ class JobQueue:
             srt_out = work_dir / f"{stem}.srt"
             # Persist a stable copy in Output/<stem>/ for inspection / playback.
             srt_public = base_dir / f"{stem}.srt"
+            asr_skipped = False
+            _stage_started("asr")
             self.store.update(job_id, progress=0.30, message=f"Transcribing (Whisper {model_name})")
             self.store.append_log(
                 job_id, f"[{now_utc()}] transcribe model={model_name} device={device}"
@@ -1502,6 +1550,8 @@ class JobQueue:
                             job_id,
                             f"[{now_utc()}] pass2 skipped: missing transcribe checkpoint",
                         )
+                        asr_skipped = True
+                        _stage_skipped("asr", "pass2_missing_checkpoint")
                         self.store.update(
                             job_id,
                             state=JobState.DONE,
@@ -1513,6 +1563,8 @@ class JobQueue:
                         return
                     if srt_out.exists() and srt_meta.exists() and stage_is_done(ckpt, "transcribe"):
                         self.store.append_log(job_id, f"[{now_utc()}] transcribe (checkpoint hit)")
+                        asr_skipped = True
+                        _stage_skipped("asr", "checkpoint_hit")
                         if is_pass2_outer:
                             _note_pass2_skip("transcribe", "checkpoint_hit")
                     else:
@@ -1593,6 +1645,9 @@ class JobQueue:
                             self.store.append_log(
                                 job_id, f"[{now_utc()}] transcribe skipped (import)"
                             )
+                            if not asr_skipped:
+                                asr_skipped = True
+                                _stage_skipped("asr", "imported_transcript")
                         else:
                             _fail_if_forbidden_stage("transcribe")
                             if sched is None:
@@ -1662,6 +1717,8 @@ class JobQueue:
                             ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
                         except Exception:
                             pass
+                    if not asr_skipped:
+                        _stage_finished("asr")
                     whisper_seconds.observe(max(0.0, time.perf_counter() - t_wh0))
                     dt = elapsed()
                     if dt > float(settings.budget_transcribe_sec):
@@ -1863,6 +1920,8 @@ class JobQueue:
             )
 
             do_translate = job.src_lang.lower() != job.tgt_lang.lower()
+            translation_skip_reason = ""
+            _stage_started("translation")
             subs_srt_path: Path | None = srt_out if no_store_tx else srt_public
             # Resynthesis path: if transcript edits exist and a resynth was requested,
             # we will skip MT and synthesize only approved segments (others become silence).
@@ -2065,6 +2124,8 @@ class JobQueue:
                         {"src_lang": job.src_lang, "tgt_lang": job.tgt_lang, "segments": segs},
                     )
                     do_translate = False
+                    if not translation_skip_reason:
+                        translation_skip_reason = "imported_target_srt"
                     try:
                         rt2 = dict(rt_imp)
                         rt2.setdefault("skipped_stages", [])
@@ -2121,6 +2182,8 @@ class JobQueue:
                             )
                             subs_srt_path = translated_srt
                             do_translate = False
+                            if not translation_skip_reason:
+                                translation_skip_reason = "imported_transcript_json"
                             try:
                                 rt2 = dict(rt_imp)
                                 rt2.setdefault("skipped_stages", [])
@@ -2147,6 +2210,8 @@ class JobQueue:
                 self.store.append_log(job_id, f"[{now_utc()}] translate (checkpoint hit)")
                 subs_srt_path = translated_srt
                 do_translate = False
+                if not translation_skip_reason:
+                    translation_skip_reason = "checkpoint_hit"
                 if is_pass2_outer:
                     _note_pass2_skip("translate", "checkpoint_hit")
 
@@ -2156,6 +2221,7 @@ class JobQueue:
                     job_id,
                     f"[{now_utc()}] pass2 skipped: missing translate checkpoint",
                 )
+                _stage_skipped("translation", "pass2_missing_checkpoint")
                 self.store.update(
                     job_id,
                     state=JobState.DONE,
@@ -2435,6 +2501,8 @@ class JobQueue:
                         job_id, progress=0.75, message="Translation failed (using original text)"
                     )
             else:
+                if not translation_skip_reason:
+                    translation_skip_reason = "same_language"
                 self.store.update(job_id, progress=0.75, message="Translation skipped")
 
             # Checkpoint translation artifacts so pass-2 reruns can skip MT.
@@ -2454,6 +2522,11 @@ class JobQueue:
                     )
                     ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
 
+            if translation_skip_reason:
+                _stage_skipped("translation", translation_skip_reason)
+            else:
+                _stage_finished("translation")
+
             # If resynth requested, generate an edited translation JSON for TTS.
             edited_json = None
             if isinstance(resynth, dict) and str(resynth.get("type") or "") == "approved":
@@ -2463,6 +2536,8 @@ class JobQueue:
             await self._check_canceled(job_id)
 
             # e) tts.synthesize aligned track (~0.95)
+            tts_skipped = False
+            _stage_started("tts")
             tts_wav = work_dir / f"{video_path.stem}.tts.wav"
 
             def on_tts_progress(done: int, total: int) -> None:
@@ -2661,6 +2736,8 @@ class JobQueue:
                         and not is_pass2_outer
                     ):
                         self.store.append_log(job_id, f"[{now_utc()}] tts (checkpoint hit)")
+                        tts_skipped = True
+                        _stage_skipped("tts", "checkpoint_hit")
                     else:
                         # Force rerun on resynth.
                         if (
@@ -2750,6 +2827,8 @@ class JobQueue:
                 if (work_dir / "tts_manifest.json").exists():
                     atomic_copy(work_dir / "tts_manifest.json", analysis_dir / "tts_manifest.json")
 
+            if not tts_skipped:
+                _stage_finished("tts")
             self.store.update(job_id, progress=0.95, message="TTS done")
 
             # Tier-2B canonicalization: if "resynth approved" was requested, persist the
@@ -2774,6 +2853,8 @@ class JobQueue:
             await self._check_canceled(job_id)
 
             # f) mixing (~1.00)
+            mixing_skipped = False
+            _stage_started("mixing")
             out_mkv = work_dir / f"{video_path.stem}.dub.mkv"
             out_mp4 = work_dir / f"{video_path.stem}.dub.mp4"
             final_mkv = base_dir / f"{video_path.stem}.dub.mkv"
@@ -2801,6 +2882,8 @@ class JobQueue:
 
                     if (stage_is_done(ckpt, "mix") or stage_is_done(ckpt, "mux")) and not is_pass2_outer:
                         self.store.append_log(job_id, f"[{now_utc()}] mix (checkpoint hit)")
+                        mixing_skipped = True
+                        _stage_skipped("mixing", "checkpoint_hit")
                         # best-effort: reuse previous output paths if present in store state
                         existing = self.store.get(job_id)
                         if existing and existing.output_mkv and Path(existing.output_mkv).exists():
@@ -3222,6 +3305,10 @@ class JobQueue:
                     if dt > float(settings.budget_mux_sec):
                         _mark_degraded("budget_mux_exceeded")
 
+            if not mixing_skipped:
+                _stage_finished("mixing")
+            export_finished = False
+            _stage_started("export")
             def _move_best_effort(src: Path, dst: Path) -> None:
                 try:
                     if not src.exists():
@@ -3240,6 +3327,9 @@ class JobQueue:
 
             # Two-pass voice cloning: after pass1 mux, enqueue pass2 and stop (avoid re-running export/lipsync twice).
             if bool(two_pass_enabled) and str(two_pass_phase or "") != "pass2":
+                if not export_finished:
+                    _stage_finished("export")
+                    export_finished = True
                 try:
                     curj = self.store.get(job_id)
                     rt2 = dict((curj.runtime or {}) if curj else runtime)
@@ -3367,6 +3457,10 @@ class JobQueue:
                 pass
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] mobile outputs skipped: {ex}")
+
+            if not export_finished:
+                _stage_finished("export")
+                export_finished = True
 
             # Tier-3A: optional lip-sync plugin (default off).
             try:

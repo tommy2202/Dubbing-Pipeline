@@ -128,6 +128,78 @@ def write_ckpt(
     return path
 
 
+def _init_ckpt(job_id: str) -> dict[str, Any]:
+    return {"version": 1, "job_id": str(job_id), "stages": {}, "timeline": {}}
+
+
+def _load_ckpt_for_timeline(job_id: str, *, ckpt_path: Path) -> dict[str, Any]:
+    cur = read_ckpt(job_id, ckpt_path=ckpt_path) or _init_ckpt(job_id)
+    if not isinstance(cur.get("stages"), dict):
+        cur["stages"] = {}
+    if not isinstance(cur.get("timeline"), dict):
+        cur["timeline"] = {}
+    return cur
+
+
+def _write_ckpt(path: Path, data: dict[str, Any]) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def record_stage_started(job_id: str, stage: str, *, ckpt_path: Path, meta: dict[str, Any] | None = None) -> None:
+    cur = _load_ckpt_for_timeline(job_id, ckpt_path=ckpt_path)
+    timeline = cur["timeline"]
+    entry = dict(timeline.get(stage) or {})
+    entry.setdefault("started_at", time.time())
+    entry["status"] = "started"
+    entry.pop("skip_reason", None)
+    if meta:
+        entry["meta"] = meta
+    timeline[str(stage)] = entry
+    cur["updated_at"] = time.time()
+    _write_ckpt(ckpt_path, cur)
+
+
+def record_stage_finished(
+    job_id: str, stage: str, *, ckpt_path: Path, meta: dict[str, Any] | None = None
+) -> None:
+    cur = _load_ckpt_for_timeline(job_id, ckpt_path=ckpt_path)
+    timeline = cur["timeline"]
+    entry = dict(timeline.get(stage) or {})
+    entry.setdefault("started_at", time.time())
+    entry["finished_at"] = time.time()
+    entry["status"] = "done"
+    entry.pop("skip_reason", None)
+    if meta:
+        entry["meta"] = meta
+    timeline[str(stage)] = entry
+    cur["updated_at"] = time.time()
+    _write_ckpt(ckpt_path, cur)
+
+
+def record_stage_skipped(
+    job_id: str,
+    stage: str,
+    *,
+    ckpt_path: Path,
+    reason: str,
+    meta: dict[str, Any] | None = None,
+) -> None:
+    cur = _load_ckpt_for_timeline(job_id, ckpt_path=ckpt_path)
+    timeline = cur["timeline"]
+    entry = dict(timeline.get(stage) or {})
+    entry.setdefault("started_at", time.time())
+    entry["finished_at"] = time.time()
+    entry["status"] = "skipped"
+    entry["skip_reason"] = str(reason or "unspecified")
+    if meta:
+        entry["meta"] = meta
+    timeline[str(stage)] = entry
+    cur["updated_at"] = time.time()
+    _write_ckpt(ckpt_path, cur)
+
+
 def advance_stage(
     job_id: str,
     next_stage: str,
