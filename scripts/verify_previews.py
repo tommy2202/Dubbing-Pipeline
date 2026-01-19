@@ -61,8 +61,9 @@ def main() -> int:
 
     repo_root = Path(__file__).resolve().parents[1]
     src_root = repo_root / "src"
-    if str(src_root) not in sys.path:
-        sys.path.insert(0, str(src_root))
+    for p in (str(repo_root), str(src_root)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td).resolve()
