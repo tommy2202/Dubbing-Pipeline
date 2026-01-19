@@ -633,6 +633,36 @@
           </template>
 
           <div class="mt-4 text-sm text-slate-200 space-y-2">
+            <div class="text-sm text-slate-300">Previews</div>
+            <template x-if="files && files.preview_audio">
+              <div>
+                <div class="text-slate-500">Preview (Audio):</div>
+                <audio class="mt-2 w-full max-w-md" controls playsinline>
+                  <source :src="files.preview_audio.url" type="audio/mp4" />
+                </audio>
+                <div class="mt-1 text-xs">
+                  <a class="underline" :href="files.preview_audio.url" target="_blank" rel="noreferrer" download>download</a>
+                </div>
+              </div>
+            </template>
+            <template x-if="files && !files.preview_audio && files.preview_audio_status==='unavailable'">
+              <div class="text-xs text-slate-500">Preview (Audio) unavailable.</div>
+            </template>
+            <template x-if="files && files.preview_video">
+              <div>
+                <div class="text-slate-500">Preview (Low-res):</div>
+                <video class="mt-2 w-full max-w-md rounded border border-slate-800" controls playsinline preload="metadata">
+                  <source :src="files.preview_video.url" type="video/mp4" />
+                </video>
+                <div class="mt-1 text-xs">
+                  <a class="underline" :href="files.preview_video.url" target="_blank" rel="noreferrer" download>download</a>
+                </div>
+              </div>
+            </template>
+            <template x-if="files && !files.preview_video && files.preview_video_status==='unavailable'">
+              <div class="text-xs text-slate-500">Preview (Low-res) unavailable.</div>
+            </template>
+
             <template x-if="files && files.mobile_mp4">
               <div>
                 <span class="text-slate-500">Mobile MP4 (dubbed):</span>

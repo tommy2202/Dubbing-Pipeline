@@ -3602,6 +3602,35 @@ class JobQueue:
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] retention failed; continuing: {ex}")
 
+            # Best-effort preview generation (audio + low-res video).
+            preview_info: dict[str, Any] = {}
+            preview_audio_path: Path | None = None
+            preview_video_path: Path | None = None
+            with suppress(Exception):
+                # Prefer MP4 output for faster preview encoding; fall back to MKV.
+                preview_src = None
+                for cand in [final_mp4, out_mp4, final_mkv, out_mkv]:
+                    try:
+                        if cand and Path(cand).exists():
+                            preview_src = Path(cand)
+                            break
+                    except Exception:
+                        continue
+                preview_info, preview_audio_path, preview_video_path = self._generate_previews_best_effort(
+                    job_id=job_id,
+                    base_dir=base_dir,
+                    source_video=preview_src,
+                )
+
+            # Persist preview metadata in runtime for UI/API surfaces.
+            try:
+                curj = self.store.get(job_id)
+                rt2 = dict((curj.runtime or {}) if curj else runtime)
+                for k, v in preview_info.items():
+                    rt2[k] = v
+            except Exception:
+                rt2 = dict(runtime or {})
+
             self.store.update(
                 job_id,
                 state=JobState.DONE,
@@ -3610,6 +3639,7 @@ class JobQueue:
                 output_mkv=str(final_mkv if final_mkv.exists() else out_mkv),
                 output_srt=str(subs_srt_path) if subs_srt_path else "",
                 work_dir=str(base_dir),
+                runtime=rt2,
             )
             _auto_match_speakers_best_effort()
             if is_pass2_outer:
@@ -3628,7 +3658,13 @@ class JobQueue:
                     self.store.update(job_id, runtime=rt2)
             # Best-effort library mirror + manifest (must never affect job success).
             with suppress(Exception):
-                self._write_library_artifacts_best_effort(job_id=job_id, base_dir=base_dir)
+                self._write_library_artifacts_best_effort(
+                    job_id=job_id,
+                    base_dir=base_dir,
+                    preview_audio=preview_audio_path,
+                    preview_video=preview_video_path,
+                    preview_status=preview_info,
+                )
             # Optional: job-finish notification (best-effort, no impact on pipeline success).
             with suppress(Exception):
                 await self._notify_job_finished(job_id, state="DONE")
@@ -3707,7 +3743,77 @@ class JobQueue:
                 if decrypted_video is not None:
                     decrypted_video.unlink(missing_ok=True)
 
-    def _write_library_artifacts_best_effort(self, *, job_id: str, base_dir: Path) -> None:
+    def _generate_previews_best_effort(
+        self, *, job_id: str, base_dir: Path, source_video: Path | None
+    ) -> tuple[dict[str, Any], Path | None, Path | None]:
+        """
+        Generate preview artifacts (audio + low-res video). Must never throw.
+        Returns (preview_info, audio_path, video_path).
+        """
+        info: dict[str, Any] = {
+            "preview_audio_status": "unavailable",
+            "preview_video_status": "unavailable",
+            "preview_audio_path": "",
+            "preview_video_path": "",
+        }
+        if source_video is None or not Path(source_video).exists():
+            with suppress(Exception):
+                from dubbing_pipeline.media.previews import log_preview_skip
+
+                log_preview_skip("source", job_id=str(job_id), reason="missing_source")
+            return info, None, None
+
+        from dubbing_pipeline.media.previews import (
+            generate_audio_preview,
+            generate_lowres_preview,
+            log_preview_skip,
+            preview_paths,
+        )
+
+        out_root = Path(get_settings().output_dir).resolve()
+        paths = preview_paths(base_dir)
+        audio_path = paths["audio"]
+        video_path = paths["video"]
+
+        def _rel(p: Path) -> str:
+            try:
+                return str(p.resolve().relative_to(out_root)).replace("\\", "/")
+            except Exception:
+                return ""
+
+        try:
+            generate_audio_preview(source_video, audio_path)
+            if audio_path.exists():
+                info["preview_audio_status"] = "ok"
+                info["preview_audio_path"] = _rel(audio_path)
+            else:
+                log_preview_skip("audio", job_id=str(job_id), reason="missing_output")
+        except Exception as ex:
+            log_preview_skip("audio", job_id=str(job_id), reason=str(ex))
+
+        try:
+            generate_lowres_preview(source_video, video_path)
+            if video_path.exists():
+                info["preview_video_status"] = "ok"
+                info["preview_video_path"] = _rel(video_path)
+            else:
+                log_preview_skip("video", job_id=str(job_id), reason="missing_output")
+        except Exception as ex:
+            log_preview_skip("video", job_id=str(job_id), reason=str(ex))
+
+        return info, (audio_path if info["preview_audio_status"] == "ok" else None), (
+            video_path if info["preview_video_status"] == "ok" else None
+        )
+
+    def _write_library_artifacts_best_effort(
+        self,
+        *,
+        job_id: str,
+        base_dir: Path,
+        preview_audio: Path | None = None,
+        preview_video: Path | None = None,
+        preview_status: dict[str, Any] | None = None,
+    ) -> None:
         """
         Best-effort creation of the grouped Library/ mirror and its manifest.json.
         Must never throw.
@@ -3767,6 +3873,8 @@ class JobQueue:
                 master=master,
                 mobile=mobile,
                 hls_index=hls_index,
+                preview_audio=preview_audio,
+                preview_video=preview_video,
                 output_dir=base_dir,
             )
             write_manifest(
@@ -3776,10 +3884,12 @@ class JobQueue:
                     "master": str(master) if master else None,
                     "mobile": str(mobile) if mobile else None,
                     "hls_index": str(hls_index) if hls_index else None,
+                    "preview_audio": str(preview_audio) if preview_audio else None,
+                    "preview_video": str(preview_video) if preview_video else None,
                     "logs_dir": str(logs_dir) if logs_dir.exists() else None,
                     "qa_dir": str(qa_dir) if qa_dir.exists() else None,
                 },
-                extra={"output_dir": str(base_dir)},
+                extra={"output_dir": str(base_dir), "preview_status": dict(preview_status or {})},
             )
             return
         except Exception as ex:
@@ -3799,10 +3909,16 @@ class JobQueue:
                     "master": str(master) if master else None,
                     "mobile": str(mobile) if mobile else None,
                     "hls_index": str(hls_index) if hls_index else None,
+                    "preview_audio": str(preview_audio) if preview_audio else None,
+                    "preview_video": str(preview_video) if preview_video else None,
                     "logs_dir": str(logs_dir) if logs_dir.exists() else None,
                     "qa_dir": str(qa_dir) if qa_dir.exists() else None,
                 },
-                extra={"fallback": True, "output_dir": str(base_dir)},
+                extra={
+                    "fallback": True,
+                    "output_dir": str(base_dir),
+                    "preview_status": dict(preview_status or {}),
+                },
             )
         except Exception:
             # Final fallback: no manifest.

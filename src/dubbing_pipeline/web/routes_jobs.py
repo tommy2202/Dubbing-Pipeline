@@ -4653,14 +4653,50 @@ async def job_files(
         mobile_orig_mp4 = None
         mobile_hls = None
 
+    # Preview artifacts (best-effort)
+    preview_audio = None
+    preview_video = None
+    preview_audio_status = "unavailable"
+    preview_video_status = "unavailable"
+    preview_audio_path = ""
+    preview_video_path = ""
+    try:
+        rt = dict(job.runtime or {}) if isinstance(job.runtime, dict) else {}
+        preview_audio_status = str(rt.get("preview_audio_status") or preview_audio_status)
+        preview_video_status = str(rt.get("preview_video_status") or preview_video_status)
+        preview_audio_path = str(rt.get("preview_audio_path") or "")
+        preview_video_path = str(rt.get("preview_video_path") or "")
+    except Exception:
+        preview_audio_status = "unavailable"
+        preview_video_status = "unavailable"
+
+    try:
+        from dubbing_pipeline.media.previews import preview_paths
+
+        ppaths = preview_paths(base_dir)
+        if ppaths["audio"].exists():
+            preview_audio = ppaths["audio"]
+            preview_audio_status = "ok"
+        if ppaths["video"].exists():
+            preview_video = ppaths["video"]
+            preview_video_status = "ok"
+    except Exception:
+        preview_audio = None
+        preview_video = None
+
     out_root = _output_root()
 
     def rel_url(p: Path) -> str:
         rel = str(p.resolve().relative_to(out_root)).replace("\\", "/")
         return f"/files/{rel}"
 
+    def rel_path(p: Path) -> str:
+        return str(p.resolve().relative_to(out_root)).replace("\\", "/")
+
     files: list[dict[str, Any]] = []
     for kind, p in [
+        ("preview_audio", preview_audio),
+        ("preview_video", preview_video),
         ("mobile_hls_manifest", mobile_hls),
         ("mobile_mp4", mobile_mp4),
         ("mobile_original_mp4", mobile_orig_mp4),
@@ -4771,6 +4807,12 @@ async def job_files(
         "mobile_mp4": None,
         "mobile_original_mp4": None,
         "mobile_hls_manifest": None,
+        "preview_audio": None,
+        "preview_video": None,
+        "preview_audio_status": str(preview_audio_status),
+        "preview_video_status": str(preview_video_status),
+        "preview_audio_path": preview_audio_path,
+        "preview_video_path": preview_video_path,
         "qa_summary": None,
         "qa_top_issues": None,
     }
@@ -4785,6 +4827,12 @@ async def job_files(
         data["mobile_mp4"] = {"url": rel_url(mobile_mp4), "path": str(mobile_mp4)}
     elif mp4 is not None:
         data["mp4"] = {"url": rel_url(mp4), "path": str(mp4)}
+    if preview_audio is not None:
+        data["preview_audio"] = {"url": rel_url(preview_audio), "path": str(preview_audio)}
+        data["preview_audio_path"] = rel_path(preview_audio)
+    if preview_video is not None:
+        data["preview_video"] = {"url": rel_url(preview_video), "path": str(preview_video)}
+        data["preview_video_path"] = rel_path(preview_video)
     if lipsync is not None:
         data["lipsync_mp4"] = {"url": rel_url(lipsync), "path": str(lipsync)}
     if mkv is not None:

@@ -161,6 +161,8 @@ def mirror_outputs_best_effort(
     master: Path | None,
     mobile: Path | None,
     hls_index: Path | None,
+    preview_audio: Path | None = None,
+    preview_video: Path | None = None,
     output_dir: Path,
 ) -> None:
     """
@@ -200,6 +202,18 @@ def mirror_outputs_best_effort(
                     (hls_dst_dir / "target.txt").write_text(
                         str(hls_src_dir.resolve()) + "\n", encoding="utf-8"
                     )
+    except Exception:
+        pass
+
+    # Preview artifacts (best-effort)
+    try:
+        if preview_audio is not None:
+            _try_link_file(library_dir / "preview" / "preview_audio.m4a", Path(preview_audio))
+    except Exception:
+        pass
+    try:
+        if preview_video is not None:
+            _try_link_file(library_dir / "preview" / "preview_video.mp4", Path(preview_video))
     except Exception:
         pass
 

@@ -52,6 +52,8 @@ def write_manifest(
     master = Path(outputs["master"]) if outputs.get("master") else None
     mobile = Path(outputs["mobile"]) if outputs.get("mobile") else None
     hls_index = Path(outputs["hls_index"]) if outputs.get("hls_index") else None
+    preview_audio = Path(outputs["preview_audio"]) if outputs.get("preview_audio") else None
+    preview_video = Path(outputs["preview_video"]) if outputs.get("preview_video") else None
     logs_dir = Path(outputs["logs_dir"]) if outputs.get("logs_dir") else None
     qa_dir = Path(outputs["qa_dir"]) if outputs.get("qa_dir") else None
 
@@ -91,6 +93,8 @@ def write_manifest(
             "master": _p(master),
             "mobile": _p(mobile),
             "hls_index": _p(hls_index),
+            "preview_audio": _p(preview_audio),
+            "preview_video": _p(preview_video),
             "logs_dir": _p(logs_dir),
             "qa_dir": _p(qa_dir),
         },
@@ -98,6 +102,8 @@ def write_manifest(
             "master": _u(master),
             "mobile": _u(mobile),
             "hls_index": _u(hls_index),
+            "preview_audio": _u(preview_audio),
+            "preview_video": _u(preview_video),
             "logs_dir": _u(logs_dir),
             "qa_dir": _u(qa_dir),
         },
