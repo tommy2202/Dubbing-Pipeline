@@ -96,6 +96,50 @@
           </div>
         </template>
 
+        <details class="mt-3">
+          <summary class="cursor-pointer text-xs text-slate-400"
+                   @click="loadVersions(c.character_slug)">Versions & rollback</summary>
+          <div class="mt-2 text-xs text-slate-500" x-show="versionsLoading[c.character_slug]" x-cloak>Loading…</div>
+          <div class="mt-2 text-xs text-slate-500"
+               x-show="!versionsLoading[c.character_slug] && (versionsByChar[c.character_slug] || []).length === 0" x-cloak>
+            No versions found.
+          </div>
+          <div class="mt-2 grid gap-2" x-show="!versionsLoading[c.character_slug]" x-cloak>
+            <template x-for="v in (versionsByChar[c.character_slug] || [])" :key="v.version_id">
+              <div class="rounded-lg border border-slate-800 bg-slate-950/30 p-2 text-xs">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="text-slate-300" x-text="v.created_at || v.version_id"></div>
+                  <div class="text-slate-500" x-text="v.source || ''"></div>
+                </div>
+                <div class="mt-1 text-slate-500">
+                  <span x-text="similarityText(v)"></span>
+                  <span class="ml-1" x-text="v.disclaimer || ''"></span>
+                </div>
+                <div class="mt-2 grid gap-2 sm:grid-cols-2">
+                  <div>
+                    <div class="text-xs text-slate-400">Current ref</div>
+                    <template x-if="currentRefByChar[c.character_slug]">
+                      <audio class="mt-1 w-full" controls preload="none" :src="currentRefByChar[c.character_slug]"></audio>
+                    </template>
+                  </div>
+                  <div>
+                    <div class="text-xs text-slate-400">Version ref</div>
+                    <template x-if="v.audio_url">
+                      <audio class="mt-1 w-full" controls preload="none" :src="v.audio_url"></audio>
+                    </template>
+                  </div>
+                </div>
+                <div class="mt-2" x-show="canEdit" x-cloak>
+                  <button class="rounded bg-amber-700/80 hover:bg-amber-600 px-3 py-2 text-xs"
+                          @click="rollbackVoice(c.character_slug, v.version_id)">
+                    Rollback to this version
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </details>
+
         <div class="mt-3 grid gap-2">
           <template x-if="canEdit">
             <div>
@@ -201,6 +245,9 @@
       error: "",
       newName: "",
       createdSlug: "",
+      versionsByChar: {},
+      versionsLoading: {},
+      currentRefByChar: {},
       async init() { await this.reload(); },
       async reload() {
         this.loading = true;
@@ -216,6 +263,47 @@
           this.error = "Failed to load characters";
         } finally {
           this.loading = false;
+        }
+      },
+      similarityText(v) {
+        const sim = typeof v.similarity === "number" ? v.similarity.toFixed(3) : "";
+        const provider = v.provider ? (" (" + v.provider + ")") : "";
+        return sim ? ("Similarity: " + sim + provider) : "Similarity: n/a";
+      },
+      async loadVersions(characterSlug) {
+        if (!characterSlug) return;
+        if (this.versionsLoading[characterSlug]) return;
+        this.versionsLoading[characterSlug] = true;
+        try {
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug)
+            + "/voices/" + encodeURIComponent(characterSlug) + "/versions", { credentials: "include" });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          this.versionsByChar[characterSlug] = Array.isArray(data.items) ? data.items : [];
+          this.currentRefByChar[characterSlug] = data.current_ref_url || "";
+        } catch (e) {
+          this.versionsByChar[characterSlug] = [];
+          this.currentRefByChar[characterSlug] = "";
+        } finally {
+          this.versionsLoading[characterSlug] = false;
+        }
+      },
+      async rollbackVoice(characterSlug, versionId) {
+        if (!this.canEdit || !characterSlug || !versionId) return;
+        if (!confirm("Rollback this character voice to the selected version?")) return;
+        try {
+          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug)
+            + "/voices/" + encodeURIComponent(characterSlug) + "/rollback?version=" + encodeURIComponent(versionId), {
+            method: "POST",
+            credentials: "include",
+            headers: { "X-CSRF-Token": "{{ csrf_token }}" }
+          });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          window.showToast("Rolled back voice ref", "success");
+          await this.reload();
+          await this.loadVersions(characterSlug);
+        } catch (e) {
+          window.showToast("Rollback failed", "error");
         }
       },
       async createCharacter() {
@@ -264,13 +352,33 @@
           if (!f) return;
           const csrf = document.getElementById("csrf")?.value || "";
           const buf = await f.arrayBuffer();
-          const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/characters/" + encodeURIComponent(characterSlug) + "/ref", {
+          const baseUrl = "/api/series/" + encodeURIComponent(this.seriesSlug) + "/characters/" + encodeURIComponent(characterSlug) + "/ref";
+          const r = await fetch(baseUrl, {
             method: "POST",
             credentials: "include",
             headers: { "content-type": "application/octet-stream", "x-csrf-token": csrf },
             body: buf
           });
-          if (!r.ok) throw new Error(await r.text());
+          if (r.status === 409) {
+            const data = await r.json().catch(() => ({}));
+            const d = data.detail || {};
+            const sim = typeof d.similarity === "number" ? d.similarity.toFixed(3) : "";
+            const thr = typeof d.threshold === "number" ? d.threshold.toFixed(3) : "";
+            const msg = "Similarity " + sim + " below threshold " + thr + ". Confirm overwrite?";
+            if (confirm(msg)) {
+              const r2 = await fetch(baseUrl + "?confirm_overwrite=1", {
+                method: "POST",
+                credentials: "include",
+                headers: { "content-type": "application/octet-stream", "x-csrf-token": csrf },
+                body: buf
+              });
+              if (!r2.ok) throw new Error(await r2.text());
+            } else {
+              return;
+            }
+          } else if (!r.ok) {
+            throw new Error(await r.text());
+          }
           await this.reload();
           window.showToast("Ref uploaded", "success");
         } catch (e) {

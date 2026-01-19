@@ -4448,6 +4448,7 @@ async def upload_series_character_ref(
     request: Request,
     series_slug: str,
     character_slug: str,
+    confirm_overwrite: int = 0,
     ident: Identity = Depends(require_scope("read:job")),
 ) -> dict[str, Any]:
     """
@@ -4467,12 +4468,36 @@ async def upload_series_character_ref(
     if len(raw) > 20 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (>20MB)")
     # Save via voice_store helper
-    from dubbing_pipeline.voice_store.store import save_character_ref
+    from dubbing_pipeline.voice_store.store import get_character_ref, save_character_ref
 
     tmp = (_output_root() / "_tmp" / f"{slug}_{cslug}_{int(time.time())}.wav").resolve()
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_bytes(raw)
     try:
+        existing = get_character_ref(slug, cslug)
+        if existing is not None and existing.exists():
+            try:
+                from dubbing_pipeline.voice.similarity import compare_refs
+
+                sim_info = compare_refs(current_ref=existing, new_ref=tmp)
+                sim = sim_info.get("similarity")
+                provider = sim_info.get("provider")
+                disclaimer = sim_info.get("disclaimer")
+                threshold = float(getattr(get_settings(), "voice_similarity_threshold", 0.72) or 0.72)
+                if sim is not None and float(sim) < float(threshold) and not bool(confirm_overwrite):
+                    detail = {
+                        "reason": "low_similarity",
+                        "similarity": float(sim),
+                        "threshold": float(threshold),
+                        "provider": str(provider or "unknown"),
+                        "disclaimer": str(disclaimer or ""),
+                        "current_ref_url": f"/api/series/{slug}/characters/{cslug}/audio",
+                    }
+                    raise HTTPException(status_code=409, detail=detail)
+            except HTTPException:
+                raise
+            except Exception:
+                pass
         outp = save_character_ref(
             slug,
             cslug,
@@ -4611,6 +4636,7 @@ def _promote_ref_to_series(
     display_name: str,
     job: Job,
     speaker_id: str,
+    confirm_overwrite: bool,
 ) -> Path:
     slug = str(series_slug or "").strip()
     cslug = _slugify_character(character_slug)
@@ -4635,7 +4661,40 @@ def _promote_ref_to_series(
     if ref_path is None or not ref_path.exists():
         raise HTTPException(status_code=404, detail="speaker ref not found")
 
-    from dubbing_pipeline.voice_store.store import save_character_ref
+    from dubbing_pipeline.voice_store.store import get_character_ref, save_character_ref
+
+    # Drift check: compare against current canonical ref if present.
+    existing = get_character_ref(slug, cslug)
+    if existing is not None and existing.exists():
+        try:
+            from dubbing_pipeline.voice.similarity import compare_refs
+
+            sim_info = compare_refs(current_ref=existing, new_ref=ref_path)
+            sim = sim_info.get("similarity")
+            provider = sim_info.get("provider")
+            disclaimer = sim_info.get("disclaimer")
+            threshold = float(getattr(get_settings(), "voice_similarity_threshold", 0.72) or 0.72)
+            if sim is not None and float(sim) < float(threshold) and not bool(confirm_overwrite):
+                allow_audio = not _privacy_blocks_voice_refs(job)
+                detail = {
+                    "reason": "low_similarity",
+                    "similarity": float(sim),
+                    "threshold": float(threshold),
+                    "provider": str(provider or "unknown"),
+                    "disclaimer": str(disclaimer or ""),
+                    "current_ref_url": f"/api/series/{slug}/characters/{cslug}/audio",
+                    "new_ref_url": (
+                        f"/api/jobs/{job.id}/voice_refs/{speaker_id}/audio" if allow_audio else None
+                    ),
+                    "speaker_id": speaker_id,
+                    "character_slug": cslug,
+                    "display_name": str(display_name or ""),
+                }
+                raise HTTPException(status_code=409, detail=detail)
+        except HTTPException:
+            raise
+        except Exception:
+            pass
 
     outp = save_character_ref(
         slug,
@@ -4682,6 +4741,7 @@ async def promote_series_character_ref_from_job(
         raise HTTPException(status_code=400, detail="Invalid JSON body")
     job_id = str(body.get("job_id") or "").strip()
     speaker_id = Path(str(body.get("speaker_id") or "")).name.strip()
+    confirm_overwrite = bool(body.get("confirm_overwrite") is True)
     if not job_id or not speaker_id:
         raise HTTPException(status_code=422, detail="job_id and speaker_id required")
     job = _require_job_access(store.get(job_id), ident)
@@ -4695,6 +4755,7 @@ async def promote_series_character_ref_from_job(
         display_name=display_name,
         job=job,
         speaker_id=speaker_id,
+        confirm_overwrite=confirm_overwrite,
     )
     return {"ok": True, "ref_path": str(outp)}
 
@@ -4711,6 +4772,7 @@ async def persist_series_voice_from_job(
         raise HTTPException(status_code=400, detail="Invalid JSON body")
     if not bool(body.get("confirm") is True):
         raise HTTPException(status_code=400, detail="confirm=true required")
+    confirm_overwrite = bool(body.get("confirm_overwrite") is True)
     job_id = str(body.get("job_id") or "").strip()
     speaker_id = Path(str(body.get("speaker_id") or "")).name.strip()
     name = str(body.get("character_name") or body.get("display_name") or "").strip()
@@ -4729,8 +4791,120 @@ async def persist_series_voice_from_job(
         display_name=name,
         job=job,
         speaker_id=speaker_id,
+        confirm_overwrite=confirm_overwrite,
     )
     return {"ok": True, "ref_path": str(outp), "character_slug": cslug}
+
+
+@router.get("/api/series/{series_slug}/voices/{character_slug}/versions")
+async def list_series_voice_versions(
+    request: Request,
+    series_slug: str,
+    character_slug: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    slug = str(series_slug or "").strip()
+    cslug = _slugify_character(character_slug)
+    if not slug or not cslug:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not _can_access_series(store, ident=ident, series_slug=slug):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from dubbing_pipeline.voice_store.store import get_character_ref, list_character_versions
+    from dubbing_pipeline.voice.similarity import compare_refs
+
+    current_ref = get_character_ref(slug, cslug)
+    current_ref_url = (
+        f"/api/series/{slug}/characters/{cslug}/audio" if current_ref is not None else None
+    )
+    items = list_character_versions(slug, cslug)
+    out: list[dict[str, Any]] = []
+    for it in items:
+        ref_path = Path(str(it.get("ref_path") or "")).resolve()
+        sim_info = {}
+        if current_ref is not None and ref_path.exists():
+            sim_info = compare_refs(current_ref=current_ref, new_ref=ref_path)
+        out.append(
+            {
+                **it,
+                "audio_url": f"/api/series/{slug}/voices/{cslug}/versions/{it.get('version_id')}/audio",
+                "similarity": sim_info.get("similarity"),
+                "provider": sim_info.get("provider"),
+                "disclaimer": sim_info.get("disclaimer"),
+            }
+        )
+    return {"ok": True, "current_ref_url": current_ref_url, "items": out}
+
+
+@router.get("/api/series/{series_slug}/voices/{character_slug}/versions/{version_id}/audio")
+async def get_series_voice_version_audio(
+    request: Request,
+    series_slug: str,
+    character_slug: str,
+    version_id: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> Response:
+    store = _get_store(request)
+    slug = str(series_slug or "").strip()
+    cslug = _slugify_character(character_slug)
+    if not slug or not cslug:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not _can_access_series(store, ident=ident, series_slug=slug):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from dubbing_pipeline.voice_store.store import get_character_version
+
+    meta = get_character_version(slug, cslug, version_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="version not found")
+    p = Path(str(meta.get("ref_path") or "")).resolve()
+    # Ensure path stays under voice store root
+    vs_root = Path(get_settings().voice_store_dir).resolve()
+    try:
+        p.relative_to(vs_root)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Not found") from None
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return _file_range_response(request, p, media_type="audio/wav")
+
+
+@router.post("/api/series/{series_slug}/voices/{character_slug}/rollback")
+async def rollback_series_voice(
+    request: Request,
+    series_slug: str,
+    character_slug: str,
+    version: str | None = None,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    slug = str(series_slug or "").strip()
+    cslug = _slugify_character(character_slug)
+    if not slug or not cslug:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not _can_edit_series(store, ident=ident, series_slug=slug):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    version_id = str(version or "").strip()
+    if not version_id:
+        body = await request.json()
+        if isinstance(body, dict):
+            version_id = str(body.get("version") or "").strip()
+    if not version_id:
+        raise HTTPException(status_code=422, detail="version required")
+    from dubbing_pipeline.voice_store.store import rollback_character_ref
+
+    outp = rollback_character_ref(
+        series_slug=slug,
+        character_slug=cslug,
+        version_id=version_id,
+        created_by=str(ident.user.id),
+    )
+    audit_event(
+        "voice.character.rollback",
+        request=request,
+        user_id=ident.user.id,
+        meta={"series_slug": slug, "character_slug": cslug, "version_id": version_id},
+    )
+    return {"ok": True, "ref_path": str(outp), "version_id": version_id}
 
 
 @router.delete("/api/series/{series_slug}/characters/{character_slug}")

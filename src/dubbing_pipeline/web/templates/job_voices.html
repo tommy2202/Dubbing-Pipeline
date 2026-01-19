@@ -26,6 +26,33 @@
 
   <div class="mt-3 text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
   <div class="mt-3 text-sm text-emerald-200" x-show="saved" x-cloak>Mapping saved.</div>
+  <div class="mt-3 rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 text-sm text-amber-100"
+       x-show="warning" x-cloak>
+    <div class="font-semibold text-amber-200">Voice drift warning</div>
+    <div class="mt-1 text-xs" x-text="warningText()"></div>
+    <div class="mt-2 grid gap-2 sm:grid-cols-2">
+      <div>
+        <div class="text-xs text-amber-200">Current ref</div>
+        <template x-if="warning.current_ref_url">
+          <audio class="mt-1 w-full" controls preload="none" :src="warning.current_ref_url"></audio>
+        </template>
+        <div class="mt-1 text-xs text-amber-200" x-show="!warning.current_ref_url" x-cloak>Unavailable</div>
+      </div>
+      <div>
+        <div class="text-xs text-amber-200">New ref</div>
+        <template x-if="warning.new_ref_url">
+          <audio class="mt-1 w-full" controls preload="none" :src="warning.new_ref_url"></audio>
+        </template>
+        <div class="mt-1 text-xs text-amber-200" x-show="!warning.new_ref_url" x-cloak>Unavailable</div>
+      </div>
+    </div>
+    <div class="mt-3 flex flex-wrap gap-2">
+      <button class="rounded bg-amber-600 hover:bg-amber-500 px-3 py-2 text-xs font-medium"
+              @click="confirmOverwrite()" :disabled="saving">Confirm overwrite</button>
+      <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs"
+              @click="warning=null">Cancel</button>
+    </div>
+  </div>
 
   <div class="mt-4 text-sm text-slate-500" x-show="loading" x-cloak>Loading…</div>
 
@@ -87,6 +114,8 @@
       available: false,
       error: "",
       saved: false,
+      warning: null,
+      pendingPersist: null,
       async init() {
         await this.loadSpeakers();
       },
@@ -94,6 +123,8 @@
         this.loading = true;
         this.error = "";
         this.saved = false;
+        this.warning = null;
+        this.pendingPersist = null;
         try {
           const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/speakers", { credentials: "include" });
           if (!r.ok) throw new Error("failed (" + r.status + ")");
@@ -157,6 +188,23 @@
       async persistSeries(sp) {
         if (!this.seriesSlug || !sp.character_name) return;
         if (!confirm("Persist this character voice for the series?")) return;
+        await this.persistSeriesSubmit(sp, false);
+      },
+      warningText() {
+        if (!this.warning) return "";
+        const sim = typeof this.warning.similarity === "number" ? this.warning.similarity.toFixed(3) : "";
+        const thr = typeof this.warning.threshold === "number" ? this.warning.threshold.toFixed(3) : "";
+        const provider = this.warning.provider ? (" (" + this.warning.provider + ")") : "";
+        const disc = this.warning.disclaimer ? (" " + this.warning.disclaimer) : "";
+        return "Similarity " + sim + " below threshold " + thr + provider + "." + disc;
+      },
+      async confirmOverwrite() {
+        if (!this.pendingPersist) return;
+        const sp = this.pendingPersist;
+        this.warning = null;
+        await this.persistSeriesSubmit(sp, true);
+      },
+      async persistSeriesSubmit(sp, force) {
         this.saving = true;
         try {
           const r = await fetch("/api/series/" + encodeURIComponent(this.seriesSlug) + "/voices", {
@@ -170,9 +218,16 @@
               confirm: true,
               job_id: this.jobId,
               speaker_id: sp.speaker_id,
-              character_name: sp.character_name
+              character_name: sp.character_name,
+              confirm_overwrite: !!force
             })
           });
+          if (r.status === 409) {
+            const detail = await r.json().catch(() => ({}));
+            this.warning = detail.detail || detail;
+            this.pendingPersist = sp;
+            return;
+          }
           if (!r.ok) throw new Error("failed (" + r.status + ")");
           window.showToast("Saved to series voice store", "success");
           await this.loadSpeakers();

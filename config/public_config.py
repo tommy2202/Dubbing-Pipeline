@@ -317,6 +317,9 @@ class PublicConfig(BaseSettings):
         default_factory=lambda: (Path.cwd() / "data" / "voices").resolve(),
         alias="VOICE_STORE",
     )
+    voice_similarity_threshold: float = Field(
+        default=0.72, alias="VOICE_SIMILARITY_THRESHOLD"
+    )
 
     # Speaker reference extraction (post-diarization; used to build per-speaker ~N second refs).
     # This does not enable any new pipeline by itself; it just writes reference WAVs for downstream use.

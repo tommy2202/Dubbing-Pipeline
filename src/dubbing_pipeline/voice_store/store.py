@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from datetime import datetime, timezone
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,12 +27,45 @@ def _now_ts() -> int:
     return int(time.time())
 
 
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
 def _safe_mkdir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
 def _dump_json(path: Path, data: dict[str, Any]) -> None:
     atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _version_id() -> str:
+    return str(int(time.time() * 1000))
+
+
+def _version_root(series_root: Path, character_slug: str) -> Path:
+    return (_character_root(series_root, character_slug) / "versions").resolve()
+
+
+def _write_version(
+    *,
+    series_root: Path,
+    character_slug: str,
+    ref_wav: Path,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    vid = _version_id()
+    vroot = _version_root(series_root, character_slug)
+    vdir = (vroot / vid).resolve()
+    _safe_mkdir(vdir)
+    ref_out = (vdir / "ref.wav").resolve()
+    atomic_copy(Path(ref_wav).resolve(), ref_out)
+    meta = dict(metadata or {})
+    meta.setdefault("version_id", vid)
+    meta.setdefault("created_at", _now_iso())
+    meta.setdefault("ref_path", str(ref_out))
+    _dump_json(vdir / "metadata.json", meta)
+    return {"version_id": vid, "ref_path": str(ref_out), "metadata": meta}
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,9 +168,27 @@ def save_character_ref(
     md.setdefault("character_slug", _slugify(character_slug))
     md.setdefault("job_id", str(job_id))
     md.setdefault("created_by", str(md.get("created_by") or ""))
+    md.setdefault("source", str(md.get("source") or "unknown"))
     md["last_updated_ts"] = int(ts)
     md["ref_path"] = str(canonical)
     _dump_json(cr / "meta.json", md)
+
+    # versions/<ts>/ref.wav + metadata.json
+    with suppress(Exception):
+        _write_version(
+            series_root=sr,
+            character_slug=character_slug,
+            ref_wav=canonical,
+            metadata={
+                "series_slug": _slugify(series_slug),
+                "character_slug": _slugify(character_slug),
+                "display_name": str(md.get("display_name") or md.get("name") or ""),
+                "job_id": str(job_id),
+                "created_by": str(md.get("created_by") or ""),
+                "source": str(md.get("source") or "unknown"),
+                "updated_at": str(md.get("updated_at") or md.get("last_updated_ts") or ts),
+            },
+        )
 
     # series index.json
     idx_path = _series_index_path(sr)
@@ -218,4 +270,99 @@ def delete_character(
                 _dump_json(idx_path, idx)
                 deleted = True
     return bool(deleted)
+
+
+def list_character_versions(
+    series_slug: str, character_slug: str, *, voice_store_dir: Path | None = None
+) -> list[dict[str, Any]]:
+    sr = get_series_root(series_slug, voice_store_dir=voice_store_dir)
+    cslug = _slugify(character_slug)
+    vroot = _version_root(sr, cslug)
+    if not vroot.exists():
+        return []
+    items: list[dict[str, Any]] = []
+    for vdir in sorted(vroot.iterdir(), reverse=True):
+        if not vdir.is_dir():
+            continue
+        vid = vdir.name
+        ref_path = vdir / "ref.wav"
+        meta_path = vdir / "metadata.json"
+        meta = read_json(meta_path, default={})
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.setdefault("version_id", vid)
+        meta.setdefault("series_slug", _slugify(series_slug))
+        meta.setdefault("character_slug", cslug)
+        meta.setdefault("ref_path", str(ref_path) if ref_path.exists() else "")
+        meta.setdefault("created_at", "")
+        items.append(
+            {
+                "version_id": str(meta.get("version_id") or vid),
+                "ref_path": str(meta.get("ref_path") or ""),
+                "created_at": str(meta.get("created_at") or ""),
+                "job_id": str(meta.get("job_id") or ""),
+                "created_by": str(meta.get("created_by") or ""),
+                "source": str(meta.get("source") or ""),
+                "display_name": str(meta.get("display_name") or ""),
+            }
+        )
+    return items
+
+
+def get_character_version(
+    series_slug: str,
+    character_slug: str,
+    version_id: str,
+    *,
+    voice_store_dir: Path | None = None,
+) -> dict[str, Any] | None:
+    sr = get_series_root(series_slug, voice_store_dir=voice_store_dir)
+    cslug = _slugify(character_slug)
+    vid = str(version_id or "").strip()
+    if not vid:
+        return None
+    vdir = (_version_root(sr, cslug) / vid).resolve()
+    ref_path = vdir / "ref.wav"
+    if not vdir.exists() or not ref_path.exists():
+        return None
+    meta_path = vdir / "metadata.json"
+    meta = read_json(meta_path, default={})
+    if not isinstance(meta, dict):
+        meta = {}
+    meta.setdefault("version_id", vid)
+    meta.setdefault("series_slug", _slugify(series_slug))
+    meta.setdefault("character_slug", cslug)
+    meta.setdefault("ref_path", str(ref_path))
+    return meta
+
+
+def rollback_character_ref(
+    *,
+    series_slug: str,
+    character_slug: str,
+    version_id: str,
+    created_by: str = "",
+    voice_store_dir: Path | None = None,
+) -> Path:
+    meta = get_character_version(
+        series_slug, character_slug, version_id, voice_store_dir=voice_store_dir
+    )
+    if not meta:
+        raise FileNotFoundError("version not found")
+    ref_path = Path(str(meta.get("ref_path") or "")).resolve()
+    if not ref_path.exists():
+        raise FileNotFoundError("version ref missing")
+    return save_character_ref(
+        series_slug,
+        character_slug,
+        ref_path,
+        job_id=str(meta.get("job_id") or "rollback"),
+        metadata={
+            "display_name": str(meta.get("display_name") or ""),
+            "created_by": str(created_by or ""),
+            "source": "rollback",
+            "rollback_version": str(version_id),
+        },
+        voice_store_dir=voice_store_dir,
+    )
 
