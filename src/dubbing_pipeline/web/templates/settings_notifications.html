@@ -1,0 +1,133 @@
+{% extends "_base.html" %}
+
+{% block title %}Notification Settings • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Notification Settings</h1>
+    <p class="mt-1 text-sm text-slate-400">Private ntfy notifications for your jobs.</p>
+  </div>
+  <div class="flex flex-wrap items-center gap-2 text-sm">
+    <a class="rounded border border-slate-800 px-3 py-2 text-slate-200 hover:text-white" href="/ui/settings">Defaults</a>
+    <span class="rounded border border-slate-800 px-3 py-2 text-slate-100 bg-slate-900/60">Notifications</span>
+  </div>
+</div>
+
+<div class="mt-6 grid gap-4 lg:grid-cols-2" x-data="notifySettingsPage()" x-init="init()">
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <h2 class="text-sm text-slate-300">ntfy (private)</h2>
+    <p class="mt-1 text-xs text-slate-500">
+      Job notifications are delivered through a private self-hosted <code>ntfy</code> server.
+      Use a unique topic to keep notifications private.
+    </p>
+
+    <div class="mt-3 text-xs text-slate-500">
+      <span class="text-slate-400">NTFY_ENABLED:</span>
+      {{ 1 if (system.notifications.ntfy_enabled if system and system.notifications else false) else 0 }}
+      <span class="ml-2 text-slate-400">READY:</span>
+      {{ 1 if (system.notifications.ntfy_ready if system and system.notifications else false) else 0 }}
+    </div>
+
+    {% if not (system.notifications.ntfy_ready if system and system.notifications else false) %}
+      <div class="mt-3 text-sm text-amber-200">
+        Notifications are disabled because the server is not configured. Ask an admin to set NTFY_BASE_URL and enable NTFY.
+      </div>
+    {% endif %}
+
+    {% if not can_edit_settings %}
+      <div class="mt-2 text-sm text-slate-500">Viewer role: read-only.</div>
+    {% endif %}
+
+    <div class="mt-4 space-y-4 text-sm">
+      <label class="flex items-center gap-3">
+        <input type="checkbox" class="h-4 w-4 rounded border-slate-700 bg-slate-950"
+               x-model="form.notifications.notify_enabled"
+               :disabled="!canEdit || !ntfyReady" />
+        <span class="text-slate-200">Enable job notifications</span>
+      </label>
+
+      <div>
+        <label class="block text-sm text-slate-300" for="notifyTopic">Topic</label>
+        {% if system.notifications.ntfy_allowed_topics if system and system.notifications else false %}
+          <select id="notifyTopic" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3"
+                  x-model="form.notifications.notify_topic"
+                  :disabled="!canEdit || !ntfyReady">
+            <option value="">Select a topic</option>
+            {% for t in system.notifications.ntfy_allowed_topics %}
+              <option value="{{ t }}">{{ t }}</option>
+            {% endfor %}
+          </select>
+          <p class="mt-1 text-xs text-slate-500">Topics are limited to the server allowlist.</p>
+        {% else %}
+          <input id="notifyTopic" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3"
+                 placeholder="my-private-topic"
+                 x-model="form.notifications.notify_topic"
+                 :disabled="!canEdit || !ntfyReady" />
+          <p class="mt-1 text-xs text-slate-500">Use letters, numbers, dash, underscore, or dot.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      <button class="rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-3 text-sm font-medium"
+              @click="save()"
+              :disabled="!canEdit || !ntfyReady">
+        Save
+      </button>
+      <div class="text-sm text-red-200" role="alert" aria-live="polite" x-show="error" x-cloak x-text="error"></div>
+      <div class="text-sm text-emerald-200" aria-live="polite" x-show="toast" x-cloak x-text="toast"></div>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <h2 class="text-sm text-slate-300">What you will receive</h2>
+    <p class="mt-1 text-xs text-slate-500">Notifications include a deep link to the job detail page.</p>
+    <ul class="mt-3 text-sm text-slate-200 space-y-2">
+      <li>Job completed</li>
+      <li>Job failed</li>
+      <li>Job needs attention (when the pipeline flags warnings)</li>
+    </ul>
+    <div class="mt-4 text-xs text-slate-500">
+      Documentation: <a class="underline" href="/docs/notifications.md" target="_blank" rel="noreferrer">docs/notifications.md</a>
+    </div>
+  </div>
+</div>
+
+<script>
+  function notifySettingsPage() {
+    return {
+      error: "",
+      toast: "",
+      canEdit: {{ "true" if can_edit_settings else "false" }},
+      ntfyReady: {{ "true" if (system.notifications.ntfy_ready if system and system.notifications else false) else "false" }},
+      form: {
+        notifications: {
+          notify_enabled: {{ "true" if (cfg.notifications.notify_enabled if cfg and cfg.notifications else false) else "false" }},
+          notify_topic: "{{ ((cfg.notifications.notify_topic if cfg and cfg.notifications and cfg.notifications.notify_topic else '') | e) }}",
+        },
+      },
+      init() {},
+      async save() {
+        this.error = "";
+        this.toast = "";
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/settings", {
+          method: "PUT",
+          credentials: "include",
+          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify(this.form),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          this.error = d.detail || ("Save failed (" + r.status + ")");
+          try { window.showToast(this.error, "error"); } catch (e) {}
+          return;
+        }
+        this.toast = "Saved";
+        try { window.showToast("Notification settings saved", "success"); } catch (e) {}
+      },
+    };
+  }
+</script>
+{% endblock %}

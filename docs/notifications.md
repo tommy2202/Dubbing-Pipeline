@@ -71,9 +71,19 @@ Add these settings (example):
 ```bash
 NTFY_ENABLED=1
 NTFY_BASE_URL=http://127.0.0.1:8081
-NTFY_TOPIC=<random-topic>
+# Optional allowlist for per-user topics (comma/space separated)
+# NTFY_ALLOWED_TOPICS=user-a-topic,user-b-topic
 # Optional: for absolute click URLs in notifications
 PUBLIC_BASE_URL=http://<tailscale-ip>:8000
+```
+
+Per-user topics are configured in the web UI at:
+- `/ui/settings/notifications`
+
+If you want to test the legacy/global topic (manual scripts only), you can still set:
+
+```bash
+NTFY_TOPIC=<random-topic>
 ```
 
 ### `.env.secrets` (secret)
@@ -96,7 +106,7 @@ NTFY_AUTH=userpass:<username>:<password>
 
 1) Install the **ntfy** app on your phone.
 2) Set the server to your private ntfy base URL (localhost won’t work from phone; use Tailscale IP if you enabled Option B).
-3) Subscribe to your topic (same value as `NTFY_TOPIC`).
+3) Subscribe to your topic (set in `/ui/settings/notifications`).
 
 ---
 
@@ -114,5 +124,11 @@ This script is safe to run even if notifications are not configured:
 
 ```bash
 python scripts/verify_ntfy.py
+```
+
+For per-user notification checks (dry-run by default):
+
+```bash
+python scripts/verify_notifications_ntfy.py
 ```
 

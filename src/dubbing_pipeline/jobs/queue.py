@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.api.routes_settings import UserSettingsStore
 from dubbing_pipeline.jobs.checkpoint import (
     read_ckpt,
     record_stage_finished,
@@ -38,6 +39,7 @@ from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.security.crypto import CryptoConfigError, decrypt_file, is_encrypted_path
 from dubbing_pipeline.stages import audio_extractor, mkv_export, tts
 from dubbing_pipeline.ops import audit
+from dubbing_pipeline.notify.settings import allowed_topics, validate_topic
 from dubbing_pipeline.stages.diarization import DiarizeConfig
 from dubbing_pipeline.stages.diarization import diarize as diarize_v2
 from dubbing_pipeline.stages.mixing import MixConfig, mix
@@ -3806,7 +3808,9 @@ class JobQueue:
             # Final fallback: no manifest.
             return
 
-    async def _notify_job_finished(self, job_id: str, *, state: str) -> None:
+    async def _notify_job_finished(
+        self, job_id: str, *, state: str, dry_run: bool = False
+    ) -> None:
         """
         Best-effort private notification hook (ntfy).
         Must never throw or affect job outcome.
@@ -3814,9 +3818,33 @@ class JobQueue:
         settings = get_settings()
         if not bool(getattr(settings, "ntfy_enabled", False)):
             return
+        base_url = str(getattr(settings, "ntfy_base_url", "") or "").strip()
+        if not base_url:
+            return
 
         job = self.store.get(job_id)
         if job is None:
+            return
+        owner_id = str(getattr(job, "owner_id", "") or "").strip()
+        if not owner_id:
+            return
+
+        # Per-user notification settings (no secrets stored).
+        notify_cfg: dict[str, Any] = {}
+        try:
+            cfg = UserSettingsStore().get_user(owner_id)
+            if isinstance(cfg.get("notifications"), dict):
+                notify_cfg = dict(cfg.get("notifications") or {})
+        except Exception:
+            notify_cfg = {}
+        if not bool(notify_cfg.get("notify_enabled")):
+            return
+        topic_raw = str(notify_cfg.get("notify_topic") or "").strip()
+        try:
+            topic = validate_topic(topic_raw, allowed=allowed_topics())
+        except ValueError:
+            return
+        if not topic:
             return
 
         # Privacy mode: if configured or if retention is minimal (data minimization), redact filenames.
@@ -3842,14 +3870,24 @@ class JobQueue:
             filename = ""
 
         title = "Dubbing job finished" if privacy_on else (filename or "Dubbing job finished")
-        msg = f"Status: {state}\nJob: {job_id}"
+        job_link = ""
+        base = str(getattr(settings, "public_base_url", "") or "").strip().rstrip("/")
+        job_link = f"{base}/ui/jobs/{job_id}" if base else f"/ui/jobs/{job_id}"
+        msg = f"Status: {state}\nJob: {job_id}\nLink: {job_link}"
 
         # Click URL (optional): requires PUBLIC_BASE_URL to be configured.
-        base = str(getattr(settings, "public_base_url", "") or "").strip().rstrip("/")
         click = f"{base}/ui/jobs/{job_id}" if base else None
 
         tags = ["dubbing-pipeline", str(state).lower()]
         prio = 4 if str(state).upper() == "FAILED" else 3
+        attention_reasons: list[str] = []
+        if str(state).upper() == "DONE":
+            try:
+                md = rt.get("metadata") if isinstance(rt.get("metadata"), dict) else {}
+                if bool(md.get("degraded")) and isinstance(md.get("degraded_reasons"), list):
+                    attention_reasons = [str(r) for r in md.get("degraded_reasons") if str(r)]
+            except Exception:
+                attention_reasons = []
 
         # Run sync notifier in a thread to avoid blocking the async worker.
         import asyncio as _asyncio
@@ -3864,8 +3902,36 @@ class JobQueue:
                 url=click,
                 tags=tags,
                 priority=prio,
-                user_id=str(job.owner_id or "") or None,
+                user_id=str(owner_id) or None,
                 job_id=str(job_id),
+                topic=topic,
+                dry_run=dry_run,
             )
 
         await _asyncio.to_thread(_send)
+        if attention_reasons:
+            reason_txt = ", ".join(attention_reasons[:6])
+            att_title = (
+                "Dubbing job needs attention"
+                if privacy_on
+                else (filename or "Dubbing job needs attention")
+            )
+            att_msg = f"Warnings: {reason_txt}\nJob: {job_id}\nLink: {job_link}"
+
+            def _send_attention() -> bool:
+                from dubbing_pipeline.notify.ntfy import notify as _notify
+
+                return _notify(
+                    event="job.needs_attention",
+                    title=att_title,
+                    message=att_msg,
+                    url=click,
+                    tags=["dubbing-pipeline", "attention"],
+                    priority=4,
+                    user_id=str(owner_id) or None,
+                    job_id=str(job_id),
+                    topic=topic,
+                    dry_run=dry_run,
+                )
+
+            await _asyncio.to_thread(_send_attention)

@@ -212,6 +212,9 @@ class PublicConfig(BaseSettings):
     ntfy_enabled: bool = Field(default=False, alias="NTFY_ENABLED")
     ntfy_base_url: str = Field(default="", alias="NTFY_BASE_URL")  # e.g. http://127.0.0.1:8081
     ntfy_topic: str = Field(default="", alias="NTFY_TOPIC")  # choose a random topic
+    ntfy_allowed_topics: str = Field(
+        default="", alias="NTFY_ALLOWED_TOPICS"
+    )  # comma/space list for UI selection
     ntfy_tls_insecure: bool = Field(default=False, alias="NTFY_TLS_INSECURE")
     ntfy_timeout_sec: float = Field(default=5.0, alias="NTFY_TIMEOUT_SEC")
     ntfy_retries: int = Field(default=3, alias="NTFY_RETRIES")

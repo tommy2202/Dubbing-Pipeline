@@ -13,6 +13,7 @@ from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.api.routes_settings import UserSettingsStore
 from dubbing_pipeline.api.security import issue_csrf_token
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.notify.settings import allowed_topics
 from dubbing_pipeline.jobs.models import Job
 from dubbing_pipeline.library.paths import get_job_output_root
 from dubbing_pipeline.utils.io import read_json
@@ -79,6 +80,29 @@ def _render(request: Request, template: str, ctx: dict[str, Any]) -> HTMLRespons
     resp = templates.TemplateResponse(request, template, context)
     _with_csrf_cookie(resp, csrf)
     return resp
+
+
+def _system_settings_payload() -> dict[str, Any]:
+    s = get_settings()
+    base = str(getattr(s, "ntfy_base_url", "") or "").strip()
+    return {
+        "limits": {
+            "max_concurrency_global": int(s.max_concurrency_global),
+            "max_concurrency_transcribe": int(s.max_concurrency_transcribe),
+            "max_concurrency_tts": int(s.max_concurrency_tts),
+            "backpressure_q_max": int(s.backpressure_q_max),
+        },
+        "budgets": {
+            "budget_transcribe_sec": int(s.budget_transcribe_sec),
+            "budget_tts_sec": int(s.budget_tts_sec),
+            "budget_mux_sec": int(s.budget_mux_sec),
+        },
+        "notifications": {
+            "ntfy_enabled": bool(getattr(s, "ntfy_enabled", False)),
+            "ntfy_ready": bool(getattr(s, "ntfy_enabled", False)) and bool(base),
+            "ntfy_allowed_topics": allowed_topics(),
+        },
+    }
 
 
 def _audit_ui_page_view(request: Request, *, user_id: str, page: str, meta: dict[str, Any] | None = None) -> None:
@@ -374,7 +398,6 @@ async def ui_settings(request: Request) -> HTMLResponse:
             cfg = st.get_user(user.id)
         except Exception:
             cfg = {}
-    s = get_settings()
     return _render(
         request,
         "settings.html",
@@ -385,22 +408,34 @@ async def ui_settings(request: Request) -> HTMLResponse:
                 if getattr(user, "role", None)
                 else False
             ),
-            "system": {
-                "limits": {
-                    "max_concurrency_global": int(s.max_concurrency_global),
-                    "max_concurrency_transcribe": int(s.max_concurrency_transcribe),
-                    "max_concurrency_tts": int(s.max_concurrency_tts),
-                    "backpressure_q_max": int(s.backpressure_q_max),
-                },
-                "budgets": {
-                    "budget_transcribe_sec": int(s.budget_transcribe_sec),
-                    "budget_tts_sec": int(s.budget_tts_sec),
-                    "budget_mux_sec": int(s.budget_mux_sec),
-                },
-                "notifications": {
-                    "ntfy_enabled": bool(getattr(s, "ntfy_enabled", False)),
-                },
-            },
+            "system": _system_settings_payload(),
+        },
+    )
+
+
+@router.get("/settings/notifications")
+async def ui_settings_notifications(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    st = _user_settings_store(request)
+    cfg = {}
+    if st is not None:
+        try:
+            cfg = st.get_user(user.id)
+        except Exception:
+            cfg = {}
+    return _render(
+        request,
+        "settings_notifications.html",
+        {
+            "cfg": cfg,
+            "can_edit_settings": (
+                (str(user.role.value) in {"operator", "admin"})
+                if getattr(user, "role", None)
+                else False
+            ),
+            "system": _system_settings_payload(),
         },
     )
 

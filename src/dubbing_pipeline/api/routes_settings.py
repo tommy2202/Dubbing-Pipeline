@@ -13,6 +13,7 @@ from dubbing_pipeline.api.deps import Identity, current_identity, require_role
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.api.security import verify_csrf
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.notify.settings import allowed_topics, validate_topic
 
 
 def _settings_path() -> Path:
@@ -39,6 +40,10 @@ def _default_user_settings() -> dict[str, Any]:
             "tts_lang": str(s.tts_lang or "en"),
             "tts_speaker": str(s.tts_speaker or "default"),
         },
+        "notifications": {
+            "notify_enabled": False,
+            "notify_topic": "",
+        },
         "updated_at": _now_ts(),
     }
 
@@ -62,6 +67,32 @@ def _validate_lang(v: str) -> str:
     if not vv or len(vv) > 12:
         raise HTTPException(status_code=400, detail="Invalid language code")
     return vv
+
+
+def _validate_bool(v: Any, *, field: str) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    vv = str(v).strip().lower()
+    if vv in {"1", "true", "yes", "on"}:
+        return True
+    if vv in {"0", "false", "no", "off"}:
+        return False
+    raise HTTPException(status_code=400, detail=f"Invalid {field} (expected true|false)")
+
+
+def _validate_notify_topic(v: Any) -> str:
+    allowed = allowed_topics()
+    try:
+        return validate_topic(str(v or ""), allowed=allowed)
+    except ValueError as ex:
+        if str(ex) == "topic_not_allowed":
+            raise HTTPException(
+                status_code=400,
+                detail="Notification topic not in allowed list",
+            ) from ex
+        raise HTTPException(status_code=400, detail="Invalid notification topic") from ex
 
 
 #
@@ -133,6 +164,7 @@ class UserSettingsStore:
 
         # Validate + normalize patch
         out_defaults: dict[str, Any] = {}
+        out_notifications: dict[str, Any] = {}
         if isinstance(patch.get("defaults"), dict):
             d = patch["defaults"]
             if "mode" in d:
@@ -148,6 +180,15 @@ class UserSettingsStore:
             if "tts_speaker" in d:
                 out_defaults["tts_speaker"] = str(d.get("tts_speaker") or "").strip() or "default"
 
+        if isinstance(patch.get("notifications"), dict):
+            n = patch["notifications"]
+            if "notify_enabled" in n:
+                out_notifications["notify_enabled"] = _validate_bool(
+                    n.get("notify_enabled"), field="notify_enabled"
+                )
+            if "notify_topic" in n:
+                out_notifications["notify_topic"] = _validate_notify_topic(n.get("notify_topic"))
+
         with self._lock:
             all_data = self._load_all()
             users = all_data.get("users")
@@ -158,10 +199,15 @@ class UserSettingsStore:
             if not isinstance(cur, dict):
                 cur = {}
             cur.setdefault("defaults", {})
+            cur.setdefault("notifications", {})
             if out_defaults:
                 if not isinstance(cur.get("defaults"), dict):
                     cur["defaults"] = {}
                 cur["defaults"].update(out_defaults)
+            if out_notifications:
+                if not isinstance(cur.get("notifications"), dict):
+                    cur["notifications"] = {}
+                cur["notifications"].update(out_notifications)
             cur["updated_at"] = _now_ts()
             users[uid] = cur
             self._save_all(all_data)
@@ -199,8 +245,10 @@ async def get_settings_me(
     store = _get_user_settings_store(request)
     user_cfg = store.get_user(ident.user.id)
     s = get_settings()
+    base = str(getattr(s, "ntfy_base_url", "") or "").strip()
     return {
         "defaults": user_cfg.get("defaults", {}),
+        "notifications": user_cfg.get("notifications", {}),
         "system": {
             "limits": {
                 "max_concurrency_global": int(s.max_concurrency_global),
@@ -215,6 +263,8 @@ async def get_settings_me(
             },
             "notifications": {
                 "ntfy_enabled": bool(getattr(s, "ntfy_enabled", False)),
+                "ntfy_ready": bool(getattr(s, "ntfy_enabled", False)) and bool(base),
+                "ntfy_allowed_topics": allowed_topics(),
             },
         },
         "updated_at": user_cfg.get("updated_at"),
@@ -230,6 +280,7 @@ async def put_settings_me(
     updated = store.update_user(ident.user.id, body if isinstance(body, dict) else {})
     return {
         "defaults": updated.get("defaults", {}),
+        "notifications": updated.get("notifications", {}),
         "updated_at": updated.get("updated_at"),
     }
 
@@ -243,6 +294,7 @@ async def admin_get_user_settings(
     return {
         "user_id": str(user_id),
         "defaults": cfg.get("defaults", {}),
+        "notifications": cfg.get("notifications", {}),
         "updated_at": cfg.get("updated_at"),
     }
 
@@ -257,5 +309,6 @@ async def admin_put_user_settings(
     return {
         "user_id": str(user_id),
         "defaults": updated.get("defaults", {}),
+        "notifications": updated.get("notifications", {}),
         "updated_at": updated.get("updated_at"),
     }

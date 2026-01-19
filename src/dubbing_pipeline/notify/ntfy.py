@@ -12,6 +12,7 @@ from dubbing_pipeline.ops import audit
 from dubbing_pipeline.utils.log import logger
 
 from .base import Notification
+from .settings import is_valid_topic, normalize_topic
 
 
 def _parse_auth(raw: str) -> dict[str, str]:
@@ -105,6 +106,8 @@ def notify(
     priority: int | None = None,
     user_id: str | None = None,
     job_id: str | None = None,
+    topic: str | None = None,
+    dry_run: bool = False,
 ) -> bool:
     """
     Best-effort ntfy notification.
@@ -117,7 +120,13 @@ def notify(
     if not bool(getattr(s, "ntfy_enabled", False)):
         return False
     base = str(getattr(s, "ntfy_base_url", "") or "").strip()
-    topic = str(getattr(s, "ntfy_topic", "") or "").strip()
+    topic_override = normalize_topic(topic)
+    if topic_override:
+        if not is_valid_topic(topic_override):
+            return False
+        topic = topic_override
+    else:
+        topic = str(getattr(s, "ntfy_topic", "") or "").strip()
     if not base or not topic:
         return False
 
@@ -139,43 +148,50 @@ def notify(
     ok = False
     last_status: int | None = None
     last_error: str | None = None
-    for attempt in range(retries + 1):
-        try:
-            st = _post_ntfy(
-                base_url=base,
-                topic=topic,
-                payload=n,
-                auth_headers=auth_headers,
-                timeout_sec=timeout_sec,
-                tls_insecure=tls_insecure,
-            )
-            last_status = int(st)
-            if 200 <= int(st) < 300:
-                ok = True
-                break
-            # Retry on rate limit / server errors.
-            if (int(st) in {408, 425, 429} or int(st) >= 500) and (attempt < retries):
-                _sleep_backoff(attempt)
-                continue
-            break
-        except urllib.error.HTTPError as ex:
+    if dry_run:
+        last_status = 200
+        ok = True
+    else:
+        for attempt in range(retries + 1):
             try:
-                last_status = int(ex.code)
-            except Exception:
-                last_status = None
-            last_error = "http_error"
-            if (
-                last_status in {408, 425, 429} or (last_status is not None and last_status >= 500)
-            ) and (attempt < retries):
-                _sleep_backoff(attempt)
-                continue
-            break
-        except Exception as ex:
-            last_error = str(ex)[:200]
-            if attempt < retries:
-                _sleep_backoff(attempt)
-                continue
-            break
+                st = _post_ntfy(
+                    base_url=base,
+                    topic=topic,
+                    payload=n,
+                    auth_headers=auth_headers,
+                    timeout_sec=timeout_sec,
+                    tls_insecure=tls_insecure,
+                )
+                last_status = int(st)
+                if 200 <= int(st) < 300:
+                    ok = True
+                    break
+                # Retry on rate limit / server errors.
+                if (int(st) in {408, 425, 429} or int(st) >= 500) and (
+                    attempt < retries
+                ):
+                    _sleep_backoff(attempt)
+                    continue
+                break
+            except urllib.error.HTTPError as ex:
+                try:
+                    last_status = int(ex.code)
+                except Exception:
+                    last_status = None
+                last_error = "http_error"
+                if (
+                    last_status in {408, 425, 429}
+                    or (last_status is not None and last_status >= 500)
+                ) and (attempt < retries):
+                    _sleep_backoff(attempt)
+                    continue
+                break
+            except Exception as ex:
+                last_error = str(ex)[:200]
+                if attempt < retries:
+                    _sleep_backoff(attempt)
+                    continue
+                break
 
     # Audit/log without credentials (never include auth/topic).
     with suppress(Exception):
@@ -189,6 +205,7 @@ def notify(
                 "job_id": str(job_id or "") or None,
                 "status": int(last_status) if last_status is not None else None,
                 "error": last_error,
+                "dry_run": bool(dry_run),
             },
         )
 
@@ -198,8 +215,11 @@ def notify(
             "ntfy_notify",
             ok=bool(ok),
             event=str(event),
+            user_id=str(user_id or "") or None,
             job_id=str(job_id or "") or None,
             status=int(last_status) if last_status is not None else None,
+            error=str(last_error) if last_error else None,
+            dry_run=bool(dry_run),
         )
 
     return bool(ok)
