@@ -78,6 +78,24 @@ Step 3: voice
 
 The server will create a job and you’ll be redirected to its page.
 
+#### Upload progress + resume (mobile)
+- A progress card appears during upload showing:
+  - bytes uploaded / total
+  - % complete
+  - chunk X/Y
+  - speed + ETA
+- If the upload can resume (same file + valid session), the UI shows **Resuming upload…**.
+- If resume is not possible, the UI explains why (session expired or file changed) and starts fresh.
+
+Screenshots (capture for your deployment):
+- Upload progress card with bytes/%/speed.
+- “Resuming upload…” banner after refresh.
+
+Known limits:
+- File size caps are enforced (`MAX_UPLOAD_BYTES`, `MAX_UPLOAD_BYTES_PER_USER`).
+- Chunk size is server-defined (`UPLOAD_CHUNK_BYTES`) and may vary by deployment.
+- Resumable uploads require the same file on the same device; changing files resets the session.
+
 ---
 
 ## Browse the grouped Library (mobile-friendly)

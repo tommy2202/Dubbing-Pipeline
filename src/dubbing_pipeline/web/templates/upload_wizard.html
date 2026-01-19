@@ -446,6 +446,7 @@
           type="submit"
           x-show="step===3"
           x-cloak
+          id="jobSubmitBtn"
           class="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-5 py-3 text-sm font-semibold"
           @click="
             error='';
@@ -463,6 +464,20 @@
         </button>
       </div>
     </div>
+
+    <div id="uploadStatusCard" class="mt-4 hidden rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+      <div class="text-sm text-slate-300">Upload progress</div>
+      <div class="mt-3 h-2 w-full rounded bg-slate-800" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+        <div id="uploadProgressBar" class="h-2 rounded bg-emerald-500" style="width:0%"></div>
+      </div>
+      <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+        <div id="uploadProgressText">0% · 0 B / 0 B</div>
+        <div id="uploadSpeedText">--</div>
+      </div>
+      <div class="mt-1 text-xs text-slate-500" id="uploadChunkText"></div>
+      <div class="mt-2 text-xs text-amber-200" id="uploadResumeText" role="status" aria-live="polite"></div>
+      <div class="mt-2 text-xs text-red-200" id="uploadErrorText" role="alert" aria-live="polite"></div>
+    </div>
   </form>
 </div>
 
@@ -471,6 +486,203 @@
   (function () {
     const form = document.getElementById("jobForm");
     if (!form) return;
+
+    const statusCard = document.getElementById("uploadStatusCard");
+    const progressBar = document.getElementById("uploadProgressBar");
+    const progressText = document.getElementById("uploadProgressText");
+    const speedText = document.getElementById("uploadSpeedText");
+    const chunkText = document.getElementById("uploadChunkText");
+    const resumeText = document.getElementById("uploadResumeText");
+    const errorText = document.getElementById("uploadErrorText");
+    const submitBtn = document.getElementById("jobSubmitBtn");
+
+    const STORAGE_KEY = "dp_upload_session_v1";
+
+    function fmtBytes(n) {
+      try {
+        const u = ["B", "KB", "MB", "GB"];
+        let i = 0;
+        let x = Number(n || 0);
+        while (x >= 1024 && i < u.length - 1) { x /= 1024; i++; }
+        return (i === 0 ? String(Math.round(x)) : x.toFixed(1)) + " " + u[i];
+      } catch (e) { return String(n || 0); }
+    }
+
+    function fmtSpeed(bps) {
+      if (!bps || !isFinite(bps)) return "--";
+      return fmtBytes(bps) + "/s";
+    }
+
+    function fmtEta(seconds) {
+      if (!seconds || !isFinite(seconds) || seconds < 0) return "--";
+      const s = Math.round(seconds);
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return m > 0 ? (m + "m " + String(r).padStart(2, "0") + "s") : (r + "s");
+    }
+
+    function setStatusVisible(on) {
+      if (!statusCard) return;
+      statusCard.classList.toggle("hidden", !on);
+    }
+
+    function setError(msg) {
+      if (!errorText) return;
+      errorText.textContent = msg || "";
+    }
+
+    function setNote(msg) {
+      if (!resumeText) return;
+      resumeText.textContent = msg || "";
+    }
+
+    function setChunkLabel(idx, total) {
+      if (!chunkText) return;
+      if (!total || total <= 0) {
+        chunkText.textContent = "";
+        return;
+      }
+      const n = Math.min(total, Math.max(1, idx + 1));
+      chunkText.textContent = "Chunk " + n + " / " + total;
+    }
+
+    function setProgress(uploaded, total, speedBps) {
+      if (!progressBar || !progressText) return;
+      const pct = total > 0 ? Math.min(100, Math.max(0, (uploaded / total) * 100)) : 0;
+      progressBar.style.width = pct.toFixed(1) + "%";
+      progressText.textContent = pct.toFixed(1) + "% · " + fmtBytes(uploaded) + " / " + fmtBytes(total);
+      const eta = speedBps ? ((total - uploaded) / speedBps) : 0;
+      if (speedText) {
+        speedText.textContent = speedBps ? (fmtSpeed(speedBps) + " · ETA " + fmtEta(eta)) : "--";
+      }
+    }
+
+    function safeDetail(detail) {
+      if (!detail || typeof detail !== "string") return "";
+      if (detail.includes("/") || detail.includes("\\") || detail.includes("Traceback")) return "";
+      return detail;
+    }
+
+    function friendlyMessage(status, detail, phase) {
+      const safe = safeDetail(detail);
+      if (status === 413) return "Upload too large. Choose a smaller file or ask an admin to raise limits.";
+      if (status === 401 || status === 403) return "Session expired. Please sign in again.";
+      if (status === 404) return "Upload session expired. Please restart the upload.";
+      if (status === 409) return "Upload out of order. Trying to resume.";
+      if (status === 429) return "Server busy. Retrying shortly…";
+      if (status >= 500) return "Server error. Retrying shortly…";
+      if (phase === "complete") return safe || "Upload finished but validation failed. Please retry.";
+      return safe || "Upload failed. Please retry.";
+    }
+
+    function shouldRetry(status) {
+      return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function readSession(file) {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return null;
+        const s = JSON.parse(raw);
+        if (!s || s.file_name !== file.name || Number(s.file_size) !== Number(file.size)) return null;
+        if (Number(s.file_last_modified || 0) !== Number(file.lastModified || 0)) return null;
+        return s;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function writeSession(session) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+      } catch (e) {}
+    }
+
+    function clearSession() {
+      try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+    }
+
+    async function fetchJson(url, opts) {
+      const r = await fetch(url, opts);
+      const data = await r.json().catch(() => ({}));
+      return { ok: r.ok, status: r.status, data };
+    }
+
+    async function syncResume(uploadId, csrf, totalBytes) {
+      const st = await fetchJson("/api/uploads/" + encodeURIComponent(uploadId), {
+        method: "GET",
+        credentials: "include",
+        headers: { "X-CSRF-Token": csrf },
+      });
+      if (!st.ok) return { ok: false, status: st.status };
+      if (Number(st.data.total_bytes || 0) !== Number(totalBytes)) {
+        return { ok: false, status: 409, reason: "file_mismatch" };
+      }
+      const received = st.data.received || {};
+      const idxs = Object.keys(received).map((k) => parseInt(k, 10)).filter((n) => Number.isFinite(n));
+      const nextIdx = idxs.length ? (Math.max.apply(null, idxs) + 1) : 0;
+      return {
+        ok: true,
+        completed: !!st.data.completed,
+        chunkBytes: Number(st.data.chunk_bytes || 0),
+        receivedBytes: Number(st.data.received_bytes || 0),
+        nextIdx: nextIdx,
+      };
+    }
+
+    async function postChunkWithRetry({ uploadId, idx, offset, ab, sha, csrf, totalChunks }) {
+      const maxAttempts = 4;
+      let attempt = 0;
+      while (true) {
+        try {
+          const r = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/chunk?index=${idx}&offset=${offset}`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/octet-stream", "X-Chunk-Sha256": sha, "X-CSRF-Token": csrf },
+            body: ab,
+          });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok) return { ok: true, data };
+
+          if (r.status === 409 && String(data.detail || "").includes("expected index")) {
+            setNote("Resume detected. Syncing…");
+            return { ok: false, retry: false, resync: true, detail: String(data.detail || "") };
+          }
+          if (shouldRetry(r.status) && attempt < maxAttempts - 1) {
+            const wait = Math.min(6000, 400 * Math.pow(2, attempt)) + Math.random() * 250;
+            setNote("Retrying chunk " + (idx + 1) + "/" + totalChunks + " in " + Math.round(wait / 100) / 10 + "s");
+            await sleep(wait);
+            attempt += 1;
+            continue;
+          }
+          return { ok: false, retry: false, detail: friendlyMessage(r.status, data.detail, "chunk") };
+        } catch (e) {
+          if (attempt < maxAttempts - 1) {
+            const wait = Math.min(6000, 400 * Math.pow(2, attempt)) + Math.random() * 250;
+            setNote("Network issue. Retrying in " + Math.round(wait / 100) / 10 + "s");
+            await sleep(wait);
+            attempt += 1;
+            continue;
+          }
+          return { ok: false, retry: false, detail: "Network error. Please check your connection and retry." };
+        }
+      }
+    }
+
+    function setSubmitting(on) {
+      if (!submitBtn) return;
+      submitBtn.disabled = !!on;
+      if (on) {
+        submitBtn.dataset.label = submitBtn.textContent || "Start Job";
+        submitBtn.textContent = "Uploading…";
+      } else {
+        submitBtn.textContent = submitBtn.dataset.label || "Start Job";
+      }
+    }
 
     // Resumable chunked upload (single-file only). Falls back to HTMX multipart.
     form.addEventListener("submit", async function (evt) {
@@ -485,9 +697,19 @@
         const file = fileEl && fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
         if (!file) return; // allow existing validation to fire
 
+        if (!crypto || !crypto.subtle) {
+          window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: "This browser cannot verify upload integrity. Please use a modern browser." } }));
+          return;
+        }
+
         // Intercept HTMX submit
         evt.preventDefault();
         evt.stopPropagation();
+
+        setStatusVisible(true);
+        setError("");
+        setNote("");
+        setSubmitting(true);
 
         const csrf = document.getElementById("csrf")?.value || "";
         const fd = new FormData(form);
@@ -520,51 +742,149 @@
           if (tgtTxt) cfg.tgt_srt_text = tgtTxt;
           if (jsTxt) cfg.transcript_json_text = jsTxt;
         } catch (e) {
-          throw e;
+          setError("Imported subtitle/transcript file is too large (max 2MB).");
+          return;
         }
 
-        // 1) init upload
-        const initR = await fetch("/api/uploads/init", {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
-          body: JSON.stringify({ filename: file.name, total_bytes: file.size, mime: file.type || "" }),
-        });
-        if (!initR.ok) throw new Error("upload init failed (" + initR.status + ")");
-        const init = await initR.json();
-        const uploadId = init.upload_id;
-        const chunkBytes = init.chunk_bytes || (5 * 1024 * 1024);
+        let uploadId = "";
+        let chunkBytes = 0;
+        let uploadedBytes = 0;
+        let nextIdx = 0;
+        let completed = false;
 
-        // 2) upload chunks
-        let offset = 0;
-        let idx = 0;
-        while (offset < file.size) {
-          const end = Math.min(file.size, offset + chunkBytes);
-          const blob = file.slice(offset, end);
-          const ab = await blob.arrayBuffer();
-          const digest = await crypto.subtle.digest("SHA-256", ab);
-          const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
-          const chunkR = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/chunk?index=${idx}&offset=${offset}`, {
+        const session = readSession(file);
+        if (session && session.upload_id) {
+          setNote("Checking for resumable upload…");
+          const res = await syncResume(session.upload_id, csrf, file.size);
+          if (res.ok) {
+            uploadId = String(session.upload_id);
+            chunkBytes = Number(res.chunkBytes || 0);
+            uploadedBytes = Number(res.receivedBytes || 0);
+            nextIdx = Number(res.nextIdx || 0);
+            completed = !!res.completed;
+            setNote(completed ? "Upload already completed. Finishing…" : "Resuming upload…");
+          } else {
+            const reason = res.reason === "file_mismatch" ? "File changed since last attempt." : "Previous upload expired.";
+            setNote("Resume unavailable. " + reason + " Starting a new upload.");
+            clearSession();
+          }
+        }
+
+        if (!uploadId) {
+          setNote("Starting upload…");
+          const init = await fetchJson("/api/uploads/init", {
             method: "POST",
             credentials: "include",
-            headers: { "content-type": "application/octet-stream", "X-Chunk-Sha256": hex, "X-CSRF-Token": csrf },
-            body: ab,
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ filename: file.name, total_bytes: file.size, mime: file.type || "" }),
           });
-          if (!chunkR.ok) throw new Error("upload chunk failed (" + chunkR.status + ")");
-          offset = end;
-          idx += 1;
+          if (!init.ok) {
+            const msg = friendlyMessage(init.status, init.data.detail, "init");
+            setError(msg);
+            window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
+            return;
+          }
+          uploadId = String(init.data.upload_id || "");
+          chunkBytes = Number(init.data.chunk_bytes || (5 * 1024 * 1024));
+          uploadedBytes = 0;
+          nextIdx = 0;
         }
 
-        // 3) complete
-        const doneR = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/complete`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
-          body: JSON.stringify({}),
+        if (!uploadId || !chunkBytes) {
+          const msg = "Upload session could not be created. Please retry.";
+          setError(msg);
+          window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
+          return;
+        }
+
+        const totalChunks = Math.max(1, Math.ceil(file.size / chunkBytes));
+        setChunkLabel(nextIdx, totalChunks);
+        setProgress(uploadedBytes, file.size, 0);
+
+        writeSession({
+          upload_id: uploadId,
+          file_name: file.name,
+          file_size: file.size,
+          file_last_modified: file.lastModified || 0,
+          chunk_bytes: chunkBytes,
+          received_bytes: uploadedBytes,
+          updated_at: Date.now(),
         });
-        if (!doneR.ok) throw new Error("upload complete failed (" + doneR.status + ")");
+
+        const speedStart = performance.now();
+        const speedBase = uploadedBytes;
+
+        if (!completed) {
+          while ((nextIdx * chunkBytes) < file.size) {
+            const offset = nextIdx * chunkBytes;
+            const end = Math.min(file.size, offset + chunkBytes);
+            const blob = file.slice(offset, end);
+            const ab = await blob.arrayBuffer();
+            const digest = await crypto.subtle.digest("SHA-256", ab);
+            const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+            setChunkLabel(nextIdx, totalChunks);
+
+            const res = await postChunkWithRetry({
+              uploadId: uploadId,
+              idx: nextIdx,
+              offset: offset,
+              ab: ab,
+              sha: hex,
+              csrf: csrf,
+              totalChunks: totalChunks,
+            });
+            if (res.resync) {
+              const sync = await syncResume(uploadId, csrf, file.size);
+              if (!sync.ok) {
+                const msg = "Upload resume failed. Please retry from the beginning.";
+                setError(msg);
+                window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
+                return;
+              }
+              uploadedBytes = Number(sync.receivedBytes || 0);
+              nextIdx = Number(sync.nextIdx || 0);
+              setNote("Resumed at chunk " + (nextIdx + 1) + ".");
+              continue;
+            }
+            if (!res.ok) {
+              const msg = res.detail || "Upload failed. Please retry.";
+              setError(msg);
+              window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
+              return;
+            }
+            uploadedBytes = Number(res.data && res.data.received_bytes ? res.data.received_bytes : end);
+            nextIdx += 1;
+            const elapsed = Math.max(0.25, (performance.now() - speedStart) / 1000.0);
+            const speed = Math.max(0, (uploadedBytes - speedBase) / elapsed);
+            setProgress(uploadedBytes, file.size, speed);
+            writeSession({
+              upload_id: uploadId,
+              file_name: file.name,
+              file_size: file.size,
+              file_last_modified: file.lastModified || 0,
+              chunk_bytes: chunkBytes,
+              received_bytes: uploadedBytes,
+              updated_at: Date.now(),
+            });
+          }
+
+          setNote("Finalizing upload…");
+          const done = await fetchJson(`/api/uploads/${encodeURIComponent(uploadId)}/complete`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({}),
+          });
+          if (!done.ok) {
+            const msg = friendlyMessage(done.status, done.data.detail, "complete");
+            setError(msg);
+            window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
+            return;
+          }
+        }
 
         // 4) create job referencing upload_id
+        setNote("Submitting job…");
         const jobR = await fetch("/api/jobs", {
           method: "POST",
           credentials: "include",
@@ -573,14 +893,20 @@
         });
         const jobData = await jobR.json().catch(() => ({}));
         if (!jobR.ok) {
-          const msg = (jobData && (jobData.detail || jobData.error)) ? (jobData.detail || jobData.error) : ("Job submit failed (" + jobR.status + ")");
+          const msg = safeDetail(jobData.detail || jobData.error) || "Job submit failed. Please retry.";
+          setError(msg);
           window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
           return;
         }
+        clearSession();
         const jobId = jobData.id || jobData.job_id || null;
         if (jobId) window.location = "/ui/jobs/" + encodeURIComponent(jobId) + "?created=1";
       } catch (e) {
-        window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: String(e || "submit failed") } }));
+        const msg = "Upload failed. Please retry.";
+        setError(msg);
+        window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
+      } finally {
+        setSubmitting(false);
       }
     }, true);
 
@@ -590,7 +916,7 @@
         if (!xhr) return;
         const data = JSON.parse(xhr.responseText || "{}");
         if (xhr.status !== 200) {
-          const msg = (data && (data.detail || data.error)) ? (data.detail || data.error) : ("Job submit failed (" + xhr.status + ")");
+          const msg = safeDetail(data.detail || data.error) || ("Job submit failed (" + xhr.status + ")");
           window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
           return;
         }
