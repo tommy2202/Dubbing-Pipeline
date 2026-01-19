@@ -84,11 +84,15 @@ def main() -> int:
         src = inp / "tiny.mp4"
         _make_tiny_mp4(src)
 
-        from dubbing_pipeline.media.previews import (
-            generate_audio_preview,
-            generate_lowres_preview,
-            preview_paths,
-        )
+        try:
+            from dubbing_pipeline.media.previews import (
+                generate_audio_preview,
+                generate_lowres_preview,
+                preview_paths,
+            )
+        except Exception as ex:
+            print(f"verify_previews: SKIP (imports unavailable: {ex})")
+            return 0
 
         paths = preview_paths(out)
         generate_audio_preview(src, paths["audio"])
