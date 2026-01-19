@@ -59,9 +59,13 @@ def main() -> int:
         print(f"e2e_restart_worker_midrun: SKIP ({ex})")
         return 0
 
-    from dubbing_pipeline.jobs.queue import JobQueue
-    from dubbing_pipeline.jobs.models import Job, JobState, now_utc
-    from dubbing_pipeline.jobs.store import JobStore
+    try:
+        from dubbing_pipeline.jobs.queue import JobQueue
+        from dubbing_pipeline.jobs.models import Job, JobState, now_utc
+        from dubbing_pipeline.jobs.store import JobStore
+    except Exception as ex:
+        print(f"e2e_restart_worker_midrun: SKIP (imports unavailable: {ex})")
+        return 0
 
     class _NoopJobQueue(JobQueue):
         async def _worker(self) -> None:

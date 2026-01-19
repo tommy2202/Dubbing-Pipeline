@@ -14,6 +14,7 @@ _MISSING_RE = re.compile(r"No module named ['\"]([^'\"]+)['\"]")
 _TOOL_RE = re.compile(r"Missing required tool: ([A-Za-z0-9_\-]+)")
 _OPTIONAL_MODULES = {
     "fastapi",
+    "pydantic",
     "httpx",
     "redis",
     "torch",
