@@ -3,8 +3,16 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from pathlib import Path
 
 from fastapi.testclient import TestClient
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 def main() -> int:
@@ -15,12 +23,18 @@ def main() -> int:
     - exit cleanly without shutdown exceptions
     """
     with tempfile.TemporaryDirectory() as td:
-        root = td
-        out_dir = os.path.join(root, "Output")
-        os.makedirs(out_dir, exist_ok=True)
+        root = Path(td).resolve()
+        in_dir = root / "Input"
+        out_dir = root / "Output"
+        logs_dir = root / "logs"
+        in_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
 
-        os.environ.setdefault("APP_ROOT", root)
-        os.environ.setdefault("OUTPUT_DIR", out_dir)
+        os.environ.setdefault("APP_ROOT", str(root))
+        os.environ.setdefault("INPUT_DIR", str(in_dir))
+        os.environ.setdefault("DUBBING_OUTPUT_DIR", str(out_dir))
+        os.environ.setdefault("DUBBING_LOG_DIR", str(logs_dir))
         os.environ.setdefault("REMOTE_ACCESS_MODE", "off")
         os.environ.setdefault("COOKIE_SECURE", "0")
         os.environ.setdefault("ADMIN_USERNAME", "admin")
@@ -28,9 +42,9 @@ def main() -> int:
 
         # Clear cached settings (important when running multiple verifies in same interpreter).
         try:
-            from config import settings as cfg_settings
+            from dubbing_pipeline.config import get_settings
 
-            cfg_settings.get_settings.cache_clear()
+            get_settings.cache_clear()
         except Exception:
             pass
 
@@ -42,7 +56,7 @@ def main() -> int:
                 assert r.status_code == 200, r.text
 
                 r = c.post(
-                    "/auth/login",
+                    "/api/auth/login",
                     json={"username": "admin", "password": "password123", "session": True},
                 )
                 assert r.status_code == 200, r.text
@@ -57,6 +71,13 @@ def main() -> int:
         except Exception as ex:
             print(f"verify_shutdown_clean: FAIL ({ex})", file=sys.stderr)
             raise
+
+        log_path = logs_dir / "app.log"
+        if log_path.exists():
+            data = log_path.read_text(encoding="utf-8", errors="replace").lower()
+            if "cancellederror" in data or "exceptiongroup" in data:
+                print("verify_shutdown_clean: FAIL (CancelledError in logs)", file=sys.stderr)
+                return 2
 
     print("verify_shutdown_clean: OK")
     return 0

@@ -25,6 +25,7 @@ jinja2==3.1.4
 aiofiles==23.2.1
 qrcode==7.4.2
 pillow==10.4.0
+httpx==0.28.1
 
 # auth / security
 itsdangerous==2.2.0

@@ -789,6 +789,7 @@ For full details (job submission, uploads, monitoring, playback, QA/editing):
 - **Do not expose the server publicly without HTTPS.**
 - Secrets never live in git; use `.env.secrets` and keep it local.
 - Use strong `API_TOKEN`; request logs intentionally omit query strings.
+- Before inviting others, run: `python scripts/p0_gate.py`.
 
 ---
 
@@ -812,9 +813,9 @@ The Coqui XTTS engine requires explicit acknowledgement:
 
 Without it, the TTS layer refuses to synthesize.
 
-### Docker `numpy==1.22.0` pin rationale
+### Docker `numpy==1.26.4` pin rationale
 
-The Docker constraints pin `numpy==1.22.0` to satisfy **wheel compatibility for `TTS==0.22.0` on Python 3.10** in a reproducible way.
+The Docker constraints pin `numpy==1.26.4` to keep **Python 3.10 + ML wheels compatible** (including `TTS==0.22.0`) in a reproducible way.
 
 ### No subtitles in output
 
