@@ -91,6 +91,9 @@ class PublicConfig(BaseSettings):
 
     # --- UI telemetry / audit (optional; off by default to avoid noisy logs) ---
     ui_audit_page_views: bool = Field(default=False, alias="DUBBING_UI_AUDIT_PAGE_VIEWS")
+    readiness_operator_access: bool = Field(
+        default=False, alias="READINESS_OPERATOR_ACCESS"
+    )
 
     # --- alignment / metadata ---
     whisper_word_timestamps: bool = Field(default=False, alias="WHISPER_WORD_TIMESTAMPS")

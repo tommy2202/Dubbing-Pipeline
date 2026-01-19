@@ -79,6 +79,19 @@ Fix options:
 
 ---
 
+## Model readiness dashboard (admin)
+
+Symptoms:
+- uncertain which models/dependencies are available
+- pipeline features silently fall back
+
+Where to check:
+- `/system/readiness` (admin UI)
+
+This dashboard reports CUDA availability, cached model weights, diarization tokens, and feature gates.
+
+---
+
 ## Diarization not available
 
 Symptoms:

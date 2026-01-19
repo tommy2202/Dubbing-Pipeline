@@ -20,6 +20,7 @@ from dubbing_pipeline.utils.io import read_json
 from dubbing_pipeline.api.middleware import audit_event
 
 router = APIRouter(prefix="/ui", tags=["ui"])
+system_router = APIRouter(prefix="/system", tags=["ui"])
 
 
 def _get_templates(request: Request) -> Jinja2Templates:
@@ -121,6 +122,20 @@ def _audit_ui_page_view(request: Request, *, user_id: str, page: str, meta: dict
         )
     except Exception:
         return
+
+
+def _can_view_readiness(user) -> bool:
+    try:
+        if not user or not getattr(user, "role", None):
+            return False
+        if str(user.role.value) == "admin":
+            return True
+        s = get_settings()
+        if bool(getattr(s, "readiness_operator_access", False)) and str(user.role.value) == "operator":
+            return True
+    except Exception:
+        return False
+    return False
 
 
 def _job_base_dir_from_dict(job: dict[str, Any]) -> Path:
@@ -438,6 +453,18 @@ async def ui_settings_notifications(request: Request) -> HTMLResponse:
             "system": _system_settings_payload(),
         },
     )
+
+
+@system_router.get("/readiness")
+async def ui_system_readiness(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    if not _can_view_readiness(user):
+        return RedirectResponse(url="/ui/dashboard", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="system_readiness")
+    return _render(request, "system_readiness.html", {})
 
 
 @router.get("/admin/queue")
