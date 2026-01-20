@@ -275,6 +275,9 @@ def _verify_end_to_end() -> None:
                 assert done.status_code == 200, done.text
                 assert done.json().get("ok") is True
 
+                # Provide a tiny imported SRT to skip ASR/translation when models are unavailable.
+                srt_text = "1\n00:00:00,000 --> 00:00:01,000\nHello world.\n"
+
                 # 3) create job (enable QA)
                 jobr = c.post(
                     "/api/jobs",
@@ -290,6 +293,8 @@ def _verify_end_to_end() -> None:
                         "pg": "off",
                         "qa": True,
                         "cache_policy": "minimal",
+                        "src_srt_text": srt_text,
+                        "tgt_srt_text": srt_text,
                     },
                     headers={"X-CSRF-Token": csrf},
                 )
