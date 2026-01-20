@@ -924,6 +924,7 @@ async def uploads_complete(
             chunk_bytes = 0
         if chunk_bytes > 0:
             expected_count = int(math.ceil(float(total) / float(chunk_bytes)))
+            changed = False
             for idx in range(expected_count):
                 rec_i = received.get(str(idx))
                 if not isinstance(rec_i, dict):
@@ -932,6 +933,13 @@ async def uploads_complete(
                 expected_size = min(int(chunk_bytes), int(total) - expected_offset)
                 rec_offset = int(rec_i.get("offset") or -1)
                 rec_size = int(rec_i.get("size") or -1)
+                if rec_offset < 0 or rec_size <= 0:
+                    # Backfill legacy/missing metadata using expected layout.
+                    rec_offset = expected_offset
+                    rec_size = expected_size
+                    rec_i["offset"] = int(rec_offset)
+                    rec_i["size"] = int(rec_size)
+                    changed = True
                 if rec_offset != expected_offset or rec_size != expected_size:
                     # Fallback: accept stored offsets if they are still in-bounds.
                     if rec_offset < 0 or rec_size <= 0 or (rec_offset + rec_size) > int(total):
@@ -945,6 +953,9 @@ async def uploads_complete(
                             offset=int(rec_offset),
                             size=int(rec_size),
                         )
+            if changed:
+                with suppress(Exception):
+                    store.update_upload(upload_id, received=received, updated_at=_now_iso())
 
         # Verify file size
         st = part_path.stat()
