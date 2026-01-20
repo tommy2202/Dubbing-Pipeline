@@ -930,10 +930,21 @@ async def uploads_complete(
                     raise HTTPException(status_code=400, detail="Upload incomplete (missing chunk)")
                 expected_offset = int(idx) * int(chunk_bytes)
                 expected_size = min(int(chunk_bytes), int(total) - expected_offset)
-                if int(rec_i.get("offset") or -1) != expected_offset:
-                    raise HTTPException(status_code=400, detail="Upload chunk offset mismatch")
-                if int(rec_i.get("size") or -1) != expected_size:
-                    raise HTTPException(status_code=400, detail="Upload chunk size mismatch")
+                rec_offset = int(rec_i.get("offset") or -1)
+                rec_size = int(rec_i.get("size") or -1)
+                if rec_offset != expected_offset or rec_size != expected_size:
+                    # Fallback: accept stored offsets if they are still in-bounds.
+                    if rec_offset < 0 or rec_size <= 0 or (rec_offset + rec_size) > int(total):
+                        raise HTTPException(status_code=400, detail="Upload chunk offset mismatch")
+                    with suppress(Exception):
+                        logger.warning(
+                            "upload_chunk_layout_mismatch",
+                            upload_id=str(upload_id),
+                            expected_offset=int(expected_offset),
+                            expected_size=int(expected_size),
+                            offset=int(rec_offset),
+                            size=int(rec_size),
+                        )
 
         # Verify file size
         st = part_path.stat()
