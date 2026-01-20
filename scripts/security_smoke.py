@@ -30,15 +30,19 @@ def main() -> int:
         with open(dummy_mp4, "wb") as f:
             f.write(b"\x00" * 1024)
 
-        os.environ.setdefault("APP_ROOT", root)
-        os.environ.setdefault("DUBBING_OUTPUT_DIR", out_dir)
-        os.environ.setdefault("DUBBING_LOG_DIR", os.path.join(root, "logs"))
-        os.environ.setdefault("INPUT_DIR", in_dir)
-        os.environ.setdefault("REMOTE_ACCESS_MODE", "off")
-        os.environ.setdefault("COOKIE_SECURE", "0")
-        os.environ.setdefault("ADMIN_USERNAME", "admin")
-        os.environ.setdefault("ADMIN_PASSWORD", "password123")
-        os.environ.setdefault("CORS_ORIGINS", "")  # strict default: none
+        uploads_dir = os.path.join(in_dir, "uploads")
+        os.makedirs(uploads_dir, exist_ok=True)
+        os.environ["APP_ROOT"] = root
+        os.environ["DUBBING_OUTPUT_DIR"] = out_dir
+        os.environ["DUBBING_LOG_DIR"] = os.path.join(root, "logs")
+        os.environ["INPUT_DIR"] = in_dir
+        os.environ["INPUT_UPLOADS_DIR"] = uploads_dir
+        os.environ["DUBBING_STATE_DIR"] = os.path.join(out_dir, "_state")
+        os.environ["REMOTE_ACCESS_MODE"] = "off"
+        os.environ["COOKIE_SECURE"] = "0"
+        os.environ["ADMIN_USERNAME"] = "admin"
+        os.environ["ADMIN_PASSWORD"] = "password123"
+        os.environ["CORS_ORIGINS"] = ""  # strict default: none
 
         # Clear cached settings
         try:
@@ -88,7 +92,13 @@ def main() -> int:
                 # video_path must be under INPUT_DIR (no arbitrary reads)
                 r = c.post(
                     "/api/jobs",
-                    json={"video_path": "../Output/_state/auth.db", "mode": "low"},
+                    json={
+                        "video_path": "../Output/_state/auth.db",
+                        "mode": "low",
+                        "series_title": "Security Smoke",
+                        "season_number": 1,
+                        "episode_number": 1,
+                    },
                     headers={"X-CSRF-Token": csrf},
                 )
                 assert r.status_code == 400, r.text
