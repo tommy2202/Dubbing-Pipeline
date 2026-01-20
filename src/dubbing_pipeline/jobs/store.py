@@ -405,88 +405,90 @@ class JobStore:
         This is intentionally tolerant: legacy jobs may not have library fields yet.
         """
         with writer_lock("job_store.upsert_library"):
-        try:
-            from dubbing_pipeline.library.normalize import normalize_series_title, series_to_slug
-        except Exception:
-            return
+            try:
+                from dubbing_pipeline.library.normalize import normalize_series_title, series_to_slug
+            except Exception:
+                return
 
-        title_in = str(raw.get("series_title") or "")
-        title = normalize_series_title(title_in)
-        try:
-            season = int(raw.get("season_number") or 0)
-        except Exception:
-            season = 0
-        try:
-            ep = int(raw.get("episode_number") or 0)
-        except Exception:
-            ep = 0
+            title_in = str(raw.get("series_title") or "")
+            title = normalize_series_title(title_in)
+            try:
+                season = int(raw.get("season_number") or 0)
+            except Exception:
+                season = 0
+            try:
+                ep = int(raw.get("episode_number") or 0)
+            except Exception:
+                ep = 0
 
-        # Only index jobs with complete library metadata.
-        if not title or season < 1 or ep < 1:
-            return
+            # Only index jobs with complete library metadata.
+            if not title or season < 1 or ep < 1:
+                return
 
-        slug = str(raw.get("series_slug") or "").strip()
-        if not slug:
-            slug = series_to_slug(title)
-        if not slug:
-            return
+            slug = str(raw.get("series_slug") or "").strip()
+            if not slug:
+                slug = series_to_slug(title)
+            if not slug:
+                return
 
-        owner = str(raw.get("owner_id") or raw.get("owner_user_id") or "").strip()
-        if not owner:
-            return
+            owner = str(raw.get("owner_id") or raw.get("owner_user_id") or "").strip()
+            if not owner:
+                return
 
-        vis = str(raw.get("visibility") or "private").strip().lower()
-        if vis.startswith("visibility."):
-            vis = vis.split(".", 1)[1]
-        if vis not in {"private", "public"}:
-            vis = "private"
+            vis = str(raw.get("visibility") or "private").strip().lower()
+            if vis.startswith("visibility."):
+                vis = vis.split(".", 1)[1]
+            if vis not in {"private", "public"}:
+                vis = "private"
 
-        created_at = str(raw.get("created_at") or "").strip() or None
-        updated_at = str(raw.get("updated_at") or "").strip() or None
-        st_raw = str(raw.get("state") or "").strip()
-        if st_raw.lower().startswith("jobstate."):
-            st_raw = st_raw.split(".", 1)[1]
-        job_state = st_raw.upper() if st_raw else ""
-        has_outputs = 1 if str(raw.get("output_mkv") or raw.get("output_srt") or "").strip() else 0
-
-        con = self._conn()
-        try:
-            con.execute(
-                """
-                INSERT INTO job_library (
-                  job_id, owner_user_id, series_title, series_slug, season_number, episode_number,
-                  visibility, created_at, updated_at, job_state, has_outputs
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(job_id) DO UPDATE SET
-                  owner_user_id=excluded.owner_user_id,
-                  series_title=excluded.series_title,
-                  series_slug=excluded.series_slug,
-                  season_number=excluded.season_number,
-                  episode_number=excluded.episode_number,
-                  visibility=excluded.visibility,
-                  created_at=COALESCE(excluded.created_at, job_library.created_at),
-                  updated_at=excluded.updated_at,
-                  job_state=excluded.job_state,
-                  has_outputs=excluded.has_outputs
-                ;
-                """,
-                (
-                    str(job_id),
-                    owner,
-                    title,
-                    slug,
-                    int(season),
-                    int(ep),
-                    vis,
-                    created_at,
-                    updated_at,
-                    job_state,
-                    int(has_outputs),
-                ),
+            created_at = str(raw.get("created_at") or "").strip() or None
+            updated_at = str(raw.get("updated_at") or "").strip() or None
+            st_raw = str(raw.get("state") or "").strip()
+            if st_raw.lower().startswith("jobstate."):
+                st_raw = st_raw.split(".", 1)[1]
+            job_state = st_raw.upper() if st_raw else ""
+            has_outputs = (
+                1 if str(raw.get("output_mkv") or raw.get("output_srt") or "").strip() else 0
             )
-            con.commit()
-        finally:
-            con.close()
+
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO job_library (
+                      job_id, owner_user_id, series_title, series_slug, season_number, episode_number,
+                      visibility, created_at, updated_at, job_state, has_outputs
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(job_id) DO UPDATE SET
+                      owner_user_id=excluded.owner_user_id,
+                      series_title=excluded.series_title,
+                      series_slug=excluded.series_slug,
+                      season_number=excluded.season_number,
+                      episode_number=excluded.episode_number,
+                      visibility=excluded.visibility,
+                      created_at=COALESCE(excluded.created_at, job_library.created_at),
+                      updated_at=excluded.updated_at,
+                      job_state=excluded.job_state,
+                      has_outputs=excluded.has_outputs
+                    ;
+                    """,
+                    (
+                        str(job_id),
+                        owner,
+                        title,
+                        slug,
+                        int(season),
+                        int(ep),
+                        vis,
+                        created_at,
+                        updated_at,
+                        job_state,
+                        int(has_outputs),
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
 
     def put(self, job: Job) -> None:
         with writer_lock("job_store.put"):
