@@ -9,6 +9,7 @@ from typing import Any
 from sqlitedict import SqliteDict  # type: ignore
 
 from dubbing_pipeline.jobs.models import Job, JobState, now_utc
+from dubbing_pipeline.utils.locks import file_lock
 
 
 class JobStore:
@@ -16,6 +17,7 @@ class JobStore:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._lock_path = self.db_path.with_suffix(self.db_path.suffix + ".lock")
         # Ensure core tables exist before any schema migrations that reference them.
         with suppress(Exception):
             with self._jobs() as _db:
@@ -51,6 +53,9 @@ class JobStore:
             con.execute("PRAGMA foreign_keys = ON;")
         return con
 
+    def _write_lock(self):
+        return file_lock(self._lock_path)
+
     def _jobs_pk_col(self) -> str:
         """
         SqliteDict's backing table schema is implementation-defined.
@@ -74,62 +79,63 @@ class JobStore:
         Create/migrate the SQL table used for indexed, grouped library browsing.
         Backwards-compatible: never rewrites the existing jobs table.
         """
-        pk_col = self._jobs_pk_col()
-        con = self._conn()
-        try:
-            con.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS job_library (
-                  job_id TEXT PRIMARY KEY,
-                  owner_user_id TEXT NOT NULL,
-                  series_title TEXT,
-                  series_slug TEXT,
-                  season_number INTEGER,
-                  episode_number INTEGER,
-                  visibility TEXT NOT NULL DEFAULT 'private',
-                  created_at TEXT,
-                  updated_at TEXT,
-                  FOREIGN KEY(job_id) REFERENCES jobs({pk_col}) ON DELETE CASCADE
-                );
-                """
-            )
+        with self._write_lock():
+            pk_col = self._jobs_pk_col()
+            con = self._conn()
+            try:
+                con.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS job_library (
+                      job_id TEXT PRIMARY KEY,
+                      owner_user_id TEXT NOT NULL,
+                      series_title TEXT,
+                      series_slug TEXT,
+                      season_number INTEGER,
+                      episode_number INTEGER,
+                      visibility TEXT NOT NULL DEFAULT 'private',
+                      created_at TEXT,
+                      updated_at TEXT,
+                      FOREIGN KEY(job_id) REFERENCES jobs({pk_col}) ON DELETE CASCADE
+                    );
+                    """
+                )
 
-            # Best-effort, additive migrations (older DBs).
-            cols = []
-            with suppress(Exception):
-                cols = [
-                    str(r["name"])
-                    for r in con.execute("PRAGMA table_info(job_library);").fetchall()
-                ]
-            want: dict[str, str] = {
-                "owner_user_id": "TEXT",
-                "series_title": "TEXT",
-                "series_slug": "TEXT",
-                "season_number": "INTEGER",
-                "episode_number": "INTEGER",
-                "visibility": "TEXT",
-                "created_at": "TEXT",
-                "updated_at": "TEXT",
-            }
-            for name, typ in want.items():
-                if name in cols:
-                    continue
+                # Best-effort, additive migrations (older DBs).
+                cols = []
                 with suppress(Exception):
-                    con.execute(f"ALTER TABLE job_library ADD COLUMN {name} {typ};")
+                    cols = [
+                        str(r["name"])
+                        for r in con.execute("PRAGMA table_info(job_library);").fetchall()
+                    ]
+                want: dict[str, str] = {
+                    "owner_user_id": "TEXT",
+                    "series_title": "TEXT",
+                    "series_slug": "TEXT",
+                    "season_number": "INTEGER",
+                    "episode_number": "INTEGER",
+                    "visibility": "TEXT",
+                    "created_at": "TEXT",
+                    "updated_at": "TEXT",
+                }
+                for name, typ in want.items():
+                    if name in cols:
+                        continue
+                    with suppress(Exception):
+                        con.execute(f"ALTER TABLE job_library ADD COLUMN {name} {typ};")
 
-            # Indexes for grouped browsing queries.
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS idx_job_library_series_slug ON job_library(series_slug);"
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS idx_job_library_series_season_episode ON job_library(series_slug, season_number, episode_number);"
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS idx_job_library_owner_user_id ON job_library(owner_user_id);"
-            )
-            con.commit()
-        finally:
-            con.close()
+                # Indexes for grouped browsing queries.
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_job_library_series_slug ON job_library(series_slug);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_job_library_series_season_episode ON job_library(series_slug, season_number, episode_number);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_job_library_owner_user_id ON job_library(owner_user_id);"
+                )
+                con.commit()
+            finally:
+                con.close()
 
     def _init_voice_schema(self) -> None:
         """
@@ -139,44 +145,45 @@ class JobStore:
         - character_voice: series_slug, character_slug, display_name, ref_path, updated_at, created_by
         - speaker_mapping: job_id, speaker_id, character_slug, confidence, locked
         """
-        con = self._conn()
-        try:
-            con.execute(
-                """
-                CREATE TABLE IF NOT EXISTS character_voice (
-                  series_slug TEXT NOT NULL,
-                  character_slug TEXT NOT NULL,
-                  display_name TEXT,
-                  ref_path TEXT,
-                  updated_at TEXT,
-                  created_by TEXT,
-                  PRIMARY KEY(series_slug, character_slug)
-                );
-                """
-            )
-            con.execute(
-                """
-                CREATE TABLE IF NOT EXISTS speaker_mapping (
-                  job_id TEXT NOT NULL,
-                  speaker_id TEXT NOT NULL,
-                  character_slug TEXT NOT NULL,
-                  confidence REAL NOT NULL DEFAULT 1.0,
-                  locked INTEGER NOT NULL DEFAULT 1,
-                  updated_at TEXT,
-                  created_by TEXT,
-                  PRIMARY KEY(job_id, speaker_id)
-                );
-                """
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS idx_character_voice_series_slug ON character_voice(series_slug);"
-            )
-            con.execute(
-                "CREATE INDEX IF NOT EXISTS idx_speaker_mapping_job_id ON speaker_mapping(job_id);"
-            )
-            con.commit()
-        finally:
-            con.close()
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS character_voice (
+                      series_slug TEXT NOT NULL,
+                      character_slug TEXT NOT NULL,
+                      display_name TEXT,
+                      ref_path TEXT,
+                      updated_at TEXT,
+                      created_by TEXT,
+                      PRIMARY KEY(series_slug, character_slug)
+                    );
+                    """
+                )
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS speaker_mapping (
+                      job_id TEXT NOT NULL,
+                      speaker_id TEXT NOT NULL,
+                      character_slug TEXT NOT NULL,
+                      confidence REAL NOT NULL DEFAULT 1.0,
+                      locked INTEGER NOT NULL DEFAULT 1,
+                      updated_at TEXT,
+                      created_by TEXT,
+                      PRIMARY KEY(job_id, speaker_id)
+                    );
+                    """
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_character_voice_series_slug ON character_voice(series_slug);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_speaker_mapping_job_id ON speaker_mapping(job_id);"
+                )
+                con.commit()
+            finally:
+                con.close()
 
     # --- persistent character voices ---
     def upsert_character(
@@ -193,32 +200,33 @@ class JobStore:
         if not series_slug or not character_slug:
             raise ValueError("series_slug and character_slug required")
         now = now_utc()
-        con = self._conn()
-        try:
-            con.execute(
-                """
-                INSERT INTO character_voice(
-                  series_slug, character_slug, display_name, ref_path, updated_at, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(series_slug, character_slug) DO UPDATE SET
-                  display_name=excluded.display_name,
-                  ref_path=excluded.ref_path,
-                  updated_at=excluded.updated_at,
-                  created_by=COALESCE(NULLIF(excluded.created_by,''), character_voice.created_by)
-                ;
-                """,
-                (
-                    series_slug,
-                    character_slug,
-                    str(display_name or ""),
-                    str(ref_path or ""),
-                    now,
-                    str(created_by or ""),
-                ),
-            )
-            con.commit()
-        finally:
-            con.close()
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO character_voice(
+                      series_slug, character_slug, display_name, ref_path, updated_at, created_by
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(series_slug, character_slug) DO UPDATE SET
+                      display_name=excluded.display_name,
+                      ref_path=excluded.ref_path,
+                      updated_at=excluded.updated_at,
+                      created_by=COALESCE(NULLIF(excluded.created_by,''), character_voice.created_by)
+                    ;
+                    """,
+                    (
+                        series_slug,
+                        character_slug,
+                        str(display_name or ""),
+                        str(ref_path or ""),
+                        now,
+                        str(created_by or ""),
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
         return {
             "series_slug": series_slug,
             "character_slug": character_slug,
@@ -277,16 +285,17 @@ class JobStore:
         character_slug = str(character_slug or "").strip()
         if not series_slug or not character_slug:
             return False
-        con = self._conn()
-        try:
-            cur = con.execute(
-                "DELETE FROM character_voice WHERE series_slug = ? AND character_slug = ?;",
-                (series_slug, character_slug),
-            )
-            con.commit()
-            return bool(cur.rowcount and int(cur.rowcount) > 0)
-        finally:
-            con.close()
+        with self._write_lock():
+            con = self._conn()
+            try:
+                cur = con.execute(
+                    "DELETE FROM character_voice WHERE series_slug = ? AND character_slug = ?;",
+                    (series_slug, character_slug),
+                )
+                con.commit()
+                return bool(cur.rowcount and int(cur.rowcount) > 0)
+            finally:
+                con.close()
 
     # --- per-job speaker mappings ---
     def upsert_speaker_mapping(
@@ -305,34 +314,35 @@ class JobStore:
         if not job_id or not speaker_id or not character_slug:
             raise ValueError("job_id, speaker_id, character_slug required")
         now = now_utc()
-        con = self._conn()
-        try:
-            con.execute(
-                """
-                INSERT INTO speaker_mapping(
-                  job_id, speaker_id, character_slug, confidence, locked, updated_at, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(job_id, speaker_id) DO UPDATE SET
-                  character_slug=excluded.character_slug,
-                  confidence=excluded.confidence,
-                  locked=excluded.locked,
-                  updated_at=excluded.updated_at,
-                  created_by=COALESCE(NULLIF(excluded.created_by,''), speaker_mapping.created_by)
-                ;
-                """,
-                (
-                    job_id,
-                    speaker_id,
-                    character_slug,
-                    float(confidence),
-                    1 if bool(locked) else 0,
-                    now,
-                    str(created_by or ""),
-                ),
-            )
-            con.commit()
-        finally:
-            con.close()
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO speaker_mapping(
+                      job_id, speaker_id, character_slug, confidence, locked, updated_at, created_by
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(job_id, speaker_id) DO UPDATE SET
+                      character_slug=excluded.character_slug,
+                      confidence=excluded.confidence,
+                      locked=excluded.locked,
+                      updated_at=excluded.updated_at,
+                      created_by=COALESCE(NULLIF(excluded.created_by,''), speaker_mapping.created_by)
+                    ;
+                    """,
+                    (
+                        job_id,
+                        speaker_id,
+                        character_slug,
+                        float(confidence),
+                        1 if bool(locked) else 0,
+                        now,
+                        str(created_by or ""),
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
         return {
             "job_id": job_id,
             "speaker_id": speaker_id,
@@ -376,6 +386,7 @@ class JobStore:
         Best-effort denormalized index for library browsing.
 
         This is intentionally tolerant: legacy jobs may not have library fields yet.
+        Caller must hold the write lock.
         """
         try:
             from dubbing_pipeline.library.normalize import normalize_series_title, series_to_slug
@@ -442,7 +453,7 @@ class JobStore:
             con.close()
 
     def put(self, job: Job) -> None:
-        with self._lock, self._jobs() as db:
+        with self._write_lock(), self._lock, self._jobs() as db:
             raw = job.to_dict()
             db[job.id] = raw
             with suppress(Exception):
@@ -456,7 +467,7 @@ class JobStore:
         return Job.from_dict(raw)
 
     def update(self, id: str, **fields: Any) -> Job | None:
-        with self._lock, self._jobs() as db:
+        with self._write_lock(), self._lock, self._jobs() as db:
             raw = db.get(id)
             if raw is None:
                 return None
@@ -487,16 +498,17 @@ class JobStore:
     def delete_job(self, id: str) -> None:
         if not id:
             return
-        with self._lock:
-            with self._jobs() as db, suppress(Exception):
-                del db[str(id)]
-            with suppress(Exception):
-                con = self._conn()
-                try:
-                    con.execute("DELETE FROM job_library WHERE job_id = ?;", (str(id),))
-                    con.commit()
-                finally:
-                    con.close()
+        with self._write_lock():
+            with self._lock:
+                with self._jobs() as db, suppress(Exception):
+                    del db[str(id)]
+                with suppress(Exception):
+                    con = self._conn()
+                    try:
+                        con.execute("DELETE FROM job_library WHERE job_id = ?;", (str(id),))
+                        con.commit()
+                    finally:
+                        con.close()
 
     def append_log(self, id: str, text: str) -> None:
         job = self.get(id)
@@ -540,7 +552,7 @@ class JobStore:
     def put_idempotency(self, key: str, job_id: str) -> None:
         if not key:
             return
-        with self._lock, self._idem() as db:
+        with self._write_lock(), self._lock, self._idem() as db:
             db[key] = {"job_id": str(job_id), "ts": __import__("time").time()}
 
     # --- presets ---
@@ -566,12 +578,12 @@ class JobStore:
         pid = str(preset.get("id") or "")
         if not pid:
             raise ValueError("preset.id required")
-        with self._lock, self._presets() as db:
+        with self._write_lock(), self._lock, self._presets() as db:
             db[pid] = dict(preset)
         return dict(preset)
 
     def delete_preset(self, preset_id: str) -> None:
-        with self._lock, self._presets() as db, suppress(Exception):
+        with self._write_lock(), self._lock, self._presets() as db, suppress(Exception):
             del db[str(preset_id)]
 
     # --- projects ---
@@ -597,19 +609,19 @@ class JobStore:
         pid = str(project.get("id") or "")
         if not pid:
             raise ValueError("project.id required")
-        with self._lock, self._projects() as db:
+        with self._write_lock(), self._lock, self._projects() as db:
             db[pid] = dict(project)
         return dict(project)
 
     def delete_project(self, project_id: str) -> None:
-        with self._lock, self._projects() as db, suppress(Exception):
+        with self._write_lock(), self._lock, self._projects() as db, suppress(Exception):
             del db[str(project_id)]
 
     # --- resumable uploads (web/mobile) ---
     def put_upload(self, upload_id: str, rec: dict[str, Any]) -> dict[str, Any]:
         if not upload_id:
             raise ValueError("upload_id required")
-        with self._lock, self._uploads() as db:
+        with self._write_lock(), self._lock, self._uploads() as db:
             db[str(upload_id)] = dict(rec)
             return dict(rec)
 
@@ -623,7 +635,7 @@ class JobStore:
     def update_upload(self, upload_id: str, **fields: Any) -> dict[str, Any] | None:
         if not upload_id:
             return None
-        with self._lock, self._uploads() as db:
+        with self._write_lock(), self._lock, self._uploads() as db:
             raw = db.get(str(upload_id))
             if not isinstance(raw, dict):
                 return None
@@ -633,5 +645,5 @@ class JobStore:
             return dict(raw)
 
     def delete_upload(self, upload_id: str) -> None:
-        with self._lock, self._uploads() as db, suppress(Exception):
+        with self._write_lock(), self._lock, self._uploads() as db, suppress(Exception):
             del db[str(upload_id)]
