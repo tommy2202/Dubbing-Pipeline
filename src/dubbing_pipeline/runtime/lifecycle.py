@@ -288,6 +288,23 @@ async def start_all(app_state: Any) -> None:
             _prune_loop(output_root=str(out_root), interval_s=interval),
             name="workdir.prune",
         )
+    # Retention sweeper (best-effort; safe defaults enabled).
+    retention_interval = float(getattr(s, "retention_interval_sec", 0) or 0)
+    if bool(getattr(s, "retention_enabled", False)) and retention_interval > 0:
+        with suppress(Exception):
+            from dubbing_pipeline.ops.retention import retention_loop
+
+            store = getattr(app_state, "job_store", None)
+            if store is not None:
+                st.create_task(
+                    retention_loop(
+                        store=store,
+                        output_root=Path(out_root),
+                        app_root=Path(s.app_root),
+                        interval_s=retention_interval,
+                    ),
+                    name="retention.sweep",
+                )
 
     try:
         ModelManager.instance().prewarm()

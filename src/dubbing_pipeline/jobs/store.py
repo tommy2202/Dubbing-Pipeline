@@ -495,6 +495,13 @@ class JobStore:
         jobs.sort(key=lambda j: j.created_at, reverse=True)
         return jobs[:limit]
 
+    def list_all(self) -> list[Job]:
+        with self._lock, self._jobs() as db:
+            items = list(db.items())
+        jobs = [Job.from_dict(v) for _, v in items]
+        jobs.sort(key=lambda j: j.created_at, reverse=True)
+        return jobs
+
     def delete_job(self, id: str) -> None:
         if not id:
             return
@@ -631,6 +638,15 @@ class JobStore:
         with self._lock, self._uploads() as db:
             v = db.get(str(upload_id))
         return dict(v) if isinstance(v, dict) else None
+
+    def list_uploads(self) -> list[dict[str, Any]]:
+        with self._lock, self._uploads() as db:
+            items = list(db.items())
+        out: list[dict[str, Any]] = []
+        for _, rec in items:
+            if isinstance(rec, dict):
+                out.append(dict(rec))
+        return out
 
     def update_upload(self, upload_id: str, **fields: Any) -> dict[str, Any] | None:
         if not upload_id:

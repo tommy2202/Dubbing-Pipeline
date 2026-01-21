@@ -2116,35 +2116,39 @@ async def unarchive_job(
 
 
 @router.delete("/api/jobs/{id}")
-async def delete_job_admin(
-    request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))
+async def delete_job(
+    request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
     job = require_job_access(store=store, ident=ident, job_id=id)
-    # Only allow deleting inside OUTPUT_ROOT.
-    out_root = _output_root()
-    base_dir = _job_base_dir(job)
-    jobs_ptr = (out_root / "jobs" / id).resolve()
-    for p in [base_dir, jobs_ptr]:
-        try:
-            p.resolve().relative_to(out_root)
-        except Exception:
-            raise HTTPException(
-                status_code=400, detail="Refusing to delete outside output dir"
-            ) from None
     # Best-effort cancel first
     try:
         q = _get_queue(request)
-        await q.kill(id, reason="Deleted by admin")
+        await q.kill(id, reason="Deleted by user")
     except Exception:
         pass
-    with suppress(Exception):
-        import shutil
+    out_root = _output_root()
+    try:
+        from dubbing_pipeline.ops.retention import delete_job_artifacts
 
-        shutil.rmtree(base_dir, ignore_errors=True)
-        shutil.rmtree(jobs_ptr, ignore_errors=True)
+        deleted, _bytes, paths, unsafe = delete_job_artifacts(job=job, output_root=out_root)
+        if unsafe:
+            raise HTTPException(
+                status_code=400, detail="Refusing to delete outside output dir"
+            ) from None
+        if not deleted:
+            raise HTTPException(status_code=500, detail="Failed to delete job artifacts")
+    except HTTPException:
+        raise
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail="Failed to delete job artifacts") from ex
     store.delete_job(id)
-    audit_event("job.delete", request=request, user_id=ident.user.id, meta={"job_id": id})
+    audit_event(
+        "job.delete",
+        request=request,
+        user_id=ident.user.id,
+        meta={"job_id": id, "owner_id": str(getattr(job, "owner_id", "") or ""), "paths": paths},
+    )
     return {"ok": True}
 
 

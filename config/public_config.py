@@ -365,6 +365,13 @@ class PublicConfig(BaseSettings):
     budget_tts_sec: int = Field(default=900, alias="BUDGET_TTS_SEC")
     budget_mux_sec: int = Field(default=120, alias="BUDGET_MUX_SEC")
 
+    retention_enabled: bool = Field(default=True, alias="RETENTION_ENABLED")
+    retention_upload_ttl_hours: int = Field(default=24, alias="RETENTION_UPLOAD_TTL_HOURS")
+    retention_job_artifact_days: int = Field(default=14, alias="RETENTION_JOB_ARTIFACT_DAYS")
+    retention_log_days: int = Field(default=14, alias="RETENTION_LOG_DAYS")
+    retention_interval_sec: int = Field(default=3600, alias="RETENTION_INTERVAL_SEC")
+
+    # Legacy retention knobs (kept for compatibility; prefer the RETENTION_* settings above).
     retention_days_input: int = Field(default=7, alias="RETENTION_DAYS_INPUT")
     retention_days_logs: int = Field(default=14, alias="RETENTION_DAYS_LOGS")
     char_store_key_file: Path = Field(
