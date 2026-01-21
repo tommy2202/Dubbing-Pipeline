@@ -42,6 +42,6 @@ def test_trusted_proxy_honors_xff_public() -> None:
 
     req = _make_request(
         "203.0.113.10",
-        {"x-forwarded-for": "10.0.0.5, 198.51.100.99"},
+        {"x-forwarded-for": "10.0.0.5, 8.8.8.8"},
     )
-    assert get_client_ip(req) == "198.51.100.99"
+    assert get_client_ip(req) == "8.8.8.8"

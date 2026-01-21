@@ -30,16 +30,16 @@ def main() -> int:
 
     req = _make_request(
         "203.0.113.10",
-        {"x-forwarded-for": "10.0.0.5, 198.51.100.99"},
+        {"x-forwarded-for": "10.0.0.5, 8.8.8.8"},
     )
-    assert get_client_ip(req) == "198.51.100.99"
+    assert get_client_ip(req) == "8.8.8.8"
 
     os.environ["TRUSTED_PROXIES"] = "198.51.100.1"
     get_settings.cache_clear()
 
     req2 = _make_request(
         "203.0.113.10",
-        {"x-forwarded-for": "10.0.0.5, 198.51.100.99"},
+        {"x-forwarded-for": "10.0.0.5, 8.8.8.8"},
     )
     assert get_client_ip(req2) == "203.0.113.10"
 
