@@ -15,7 +15,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
-from dubbing_pipeline.api.deps import require_role, require_scope
+from dubbing_pipeline.api.access import require_file_access
+from dubbing_pipeline.api.deps import Identity, require_role, require_scope
 from dubbing_pipeline.api.middleware import request_context_middleware
 from dubbing_pipeline.api.models import AuthStore, Role, User, now_ts
 from dubbing_pipeline.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
@@ -486,8 +487,12 @@ async def login_redirect() -> Response:
 
 
 @app.get("/video/{job}")
-async def video(request: Request, job: str, _: object = Depends(require_scope("read:job"))):
+async def video(request: Request, job: str, ident: Identity = Depends(require_scope("read:job"))):
     p = _resolve_job(job)
+    store = getattr(request.app.state, "job_store", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="Job store not initialized")
+    require_file_access(store=store, ident=ident, path=p)
     ctype, _ = mimetypes.guess_type(str(p))
     ctype = ctype or ("video/mp4" if p.suffix.lower() == ".mp4" else "video/x-matroska")
 
@@ -501,8 +506,12 @@ async def video(request: Request, job: str, _: object = Depends(require_scope("r
 
 
 @app.get("/files/{path:path}")
-async def files(request: Request, path: str, _: object = Depends(require_scope("read:job"))):
+async def files(request: Request, path: str, ident: Identity = Depends(require_scope("read:job"))):
     p = _safe_output_path(path)
+    store = getattr(request.app.state, "job_store", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="Job store not initialized")
+    require_file_access(store=store, ident=ident, path=p)
     ctype, _ = mimetypes.guess_type(str(p))
     if not ctype:
         # HLS / TS

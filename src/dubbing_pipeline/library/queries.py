@@ -35,10 +35,8 @@ def _visibility_where(*, ident: Identity) -> tuple[str, list[Any], str]:
     """
     if ident.user.role == Role.admin:
         return "1=1", [], "admin_all"
-    # Object-level auth:
-    # - allow user's private items
-    # - allow public items from other users
-    return "(owner_user_id = ? OR visibility = 'public')", [str(ident.user.id)], "owner_or_public"
+    # Object-level auth: owner-only (admin handled above).
+    return "owner_user_id = ?", [str(ident.user.id)], "owner_only"
 
 
 def _visibility_where_with_view(*, ident: Identity, view: str | None) -> tuple[str, list[Any], str]:
@@ -51,13 +49,14 @@ def _visibility_where_with_view(*, ident: Identity, view: str | None) -> tuple[s
       - public: only public items
     """
     v = str(view or "all").strip().lower()
-    if v in {"my", "mine", "owner"}:
-        if ident.user.role == Role.admin:
-            return "1=1", [], "admin_all"
-        return "owner_user_id = ?", [str(ident.user.id)], "owner_only"
+    if ident.user.role == Role.admin:
+        return "1=1", [], "admin_all"
+    # Owner-only for non-admin regardless of view selector.
     if v in {"pub", "public"}:
-        return "visibility = 'public'", [], "public_only"
-    return _visibility_where(ident=ident)
+        return "owner_user_id = ?", [str(ident.user.id)], "owner_only"
+    if v in {"my", "mine", "owner"}:
+        return "owner_user_id = ?", [str(ident.user.id)], "owner_only"
+    return "owner_user_id = ?", [str(ident.user.id)], "owner_only"
 
 
 def list_series(

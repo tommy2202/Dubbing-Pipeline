@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
+from dubbing_pipeline.api.access import require_library_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.library import queries
 from dubbing_pipeline.utils.log import logger
@@ -30,6 +31,8 @@ async def library_series(
     items, meta = queries.list_series(
         store=store, ident=ident, limit=limit, offset=offset, order=order, q=q, view=view
     )
+    for it in items:
+        require_library_access(store=store, ident=ident, series_slug=str(it.get("series_slug") or ""))
     logger.info(
         "library_series",
         user_id=str(ident.user.id),
@@ -58,6 +61,7 @@ async def library_seasons(
     items, meta = queries.list_seasons(
         store=store, ident=ident, series_slug=series_slug, limit=limit, offset=offset, view=view
     )
+    require_library_access(store=store, ident=ident, series_slug=series_slug)
     logger.info(
         "library_seasons",
         user_id=str(ident.user.id),
@@ -95,6 +99,9 @@ async def library_episodes(
         episode_number=episode_number,
         include_versions=bool(int(include_versions or 0)),
         view=view,
+    )
+    require_library_access(
+        store=store, ident=ident, series_slug=series_slug, season_number=int(season_number)
     )
     logger.info(
         "library_episodes",

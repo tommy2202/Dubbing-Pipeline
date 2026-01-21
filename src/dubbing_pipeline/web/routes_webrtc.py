@@ -11,7 +11,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from dubbing_pipeline.api.deps import require_scope
+from dubbing_pipeline.api.access import require_file_access, require_job_access
+from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState
 from dubbing_pipeline.utils.log import logger
@@ -55,18 +56,23 @@ def _get_rl(request: Request) -> RateLimiter:
     return rl
 
 
-def _resolve_job_media_path(request: Request, job_id: str, video_path: str | None = None) -> Path:
+def _resolve_job_media_path(
+    request: Request,
+    *,
+    job_id: str,
+    ident: Identity,
+    video_path: str | None = None,
+) -> Path:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=job_id)
+
     # Prefer explicit video_path if provided (still must exist).
     if video_path:
         p = Path(video_path).expanduser().resolve()
         if not p.exists() or not p.is_file():
             raise HTTPException(status_code=404, detail="video_path not found")
+        require_file_access(store=store, ident=ident, path=p)
         return p
-
-    store = _get_store(request)
-    job = store.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
     if job.state != JobState.DONE or not job.output_mkv:
         raise HTTPException(status_code=409, detail="Job not done")
     p = Path(job.output_mkv)
@@ -149,7 +155,9 @@ async def shutdown_webrtc_peers() -> None:
 
 
 @router.post("/webrtc/offer")
-async def webrtc_offer(request: Request, _: object = Depends(require_scope("read:job"))) -> dict:
+async def webrtc_offer(
+    request: Request, ident: Identity = Depends(require_scope("read:job"))
+) -> dict:
     # auth required (cookie/bearer/api-key), CSRF enforced by require_scope for cookie flows.
 
     # Lazy import so local installs don't break if aiortc/av aren't installed.
@@ -171,7 +179,7 @@ async def webrtc_offer(request: Request, _: object = Depends(require_scope("read
         raise HTTPException(status_code=400, detail="Required: job_id, sdp, type")
 
     media_path = _resolve_job_media_path(
-        request, job_id=job_id, video_path=str(video_path) if video_path else None
+        request, job_id=job_id, ident=ident, video_path=str(video_path) if video_path else None
     )
 
     ip = request.client.host if request.client else "unknown"
@@ -265,9 +273,19 @@ async def webrtc_offer(request: Request, _: object = Depends(require_scope("read
 @router.get("/webrtc/demo", response_class=HTMLResponse)
 async def webrtc_demo(request: Request) -> HTMLResponse:
     # Demo page is protected.
-    require_scope("read:job")(request)  # type: ignore[misc]
+    ident = require_scope("read:job")(request)  # type: ignore[misc]
     store = _get_store(request)
     jobs = [j for j in store.list(limit=100) if j.state == JobState.DONE and j.output_mkv]
+    visible = []
+    for j in jobs:
+        try:
+            require_job_access(store=store, ident=ident, job=j)
+        except HTTPException as ex:
+            if ex.status_code == 403:
+                continue
+            raise
+        visible.append(j)
+    jobs = visible
     # Minimal page; token is supplied as query param by the user.
     ice = _ice_servers()
     ice_json = json.dumps(ice)
