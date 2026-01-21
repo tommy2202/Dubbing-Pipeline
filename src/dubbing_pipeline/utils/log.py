@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import sys
+from collections.abc import Mapping
 from contextlib import suppress
 from contextvars import ContextVar
 from logging.handlers import RotatingFileHandler
@@ -34,9 +35,39 @@ _JWT_RE = re.compile(r"\beyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\b"
 _API_KEY_RE = re.compile(r"\bdp_[a-z0-9]{6,}_[A-Za-z0-9_\-]{10,}\b", re.IGNORECASE)
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9_\-\.=]+)")
 _BASIC_RE = re.compile(r"(?i)\bBasic\s+([A-Za-z0-9_\-+/=]+)")
-_KV_RE = re.compile(
-    r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|token|secret|password|api_key)\b\s*=\s*([^\s,;]+)"
+_COOKIE_RE = re.compile(
+    r"(?i)\b(session|refresh|csrf|access_token|refresh_token|token|auth)=([^;,\s]+)"
 )
+_HEADER_RE = re.compile(
+    r"(?i)\b(authorization|cookie|set-cookie|x-api-key|x-csrf-token)\b\s*[:=]\s*([^\n]+)"
+)
+_TEXT_INLINE_RE = re.compile(
+    r"(?i)\b(transcript|subtitle|subtitles|content|prompt)\b\s*[:=]\s*([^\n]{20,})"
+)
+_KV_RE = re.compile(
+    r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|token|secret|password|api_key|authorization|cookie)\b\s*=\s*([^\s,;]+)"
+)
+
+_SENSITIVE_KEYS = {
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "x-csrf-token",
+    "csrf",
+    "csrf_token",
+    "session",
+    "refresh",
+    "token",
+    "access_token",
+    "refresh_token",
+    "api_key",
+    "password",
+    "secret",
+    "jwt",
+}
+_TEXT_KEYS = {"text", "subtitle", "subtitles", "transcript", "content", "prompt"}
+_LIST_KEYS = {"segments", "lines", "items", "updates"}
 
 
 def _secret_literals() -> list[str]:
@@ -49,42 +80,21 @@ def _secret_literals() -> list[str]:
         s = get_settings()
         sec = getattr(s, "secret", None)
         if sec is not None:
-            # SecretStr values
-            for name in (
-                "jwt_secret",
-                "csrf_secret",
-                "session_secret",
-                "huggingface_token",
-                "hf_token",
-                "admin_password",
-                "char_store_key",
-                "artifacts_key",
-                "ntfy_auth",
-            ):
-                try:
+            # Best-effort: include all secret-config values.
+            field_names = getattr(sec.__class__, "model_fields", {}) or {}
+            for name in field_names.keys():
+                with suppress(Exception):
                     v = getattr(sec, name)
-                except Exception:
-                    v = None
-                try:
-                    if v is not None and hasattr(v, "get_secret_value"):
+                raw = ""
+                if v is None:
+                    continue
+                if hasattr(v, "get_secret_value"):
+                    with suppress(Exception):
                         raw = str(v.get_secret_value() or "")
-                        if raw:
-                            vals.append(raw)
-                except Exception:
-                    pass
-            # Plain string secrets
-            try:
-                api_token = str(getattr(sec, "api_token", "") or "")
-                if api_token:
-                    vals.append(api_token)
-            except Exception:
-                pass
-            try:
-                turn_pw = str(getattr(sec, "turn_password", "") or "")
-                if turn_pw:
-                    vals.append(turn_pw)
-            except Exception:
-                pass
+                elif isinstance(v, str):
+                    raw = str(v or "")
+                if raw:
+                    vals.append(raw)
     except Exception:
         pass
 
@@ -109,15 +119,55 @@ def _redact_str(s: str) -> str:
     s = _API_KEY_RE.sub("***REDACTED***", s)
     s = _BEARER_RE.sub("Bearer ***REDACTED***", s)
     s = _BASIC_RE.sub("Basic ***REDACTED***", s)
+    s = _COOKIE_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
+    s = _HEADER_RE.sub(lambda m: f"{m.group(1)}: ***REDACTED***", s)
+    s = _TEXT_INLINE_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
     s = _KV_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
     return s
 
 
+def _is_sensitive_key(key: str | None) -> bool:
+    if not key:
+        return False
+    k = str(key).strip().lower()
+    if k in _SENSITIVE_KEYS:
+        return True
+    return any(k.endswith(s) for s in ("_secret", "_token", "_password", "_key"))
+
+
+def _scrub_obj(obj: Any, *, key: str | None = None) -> Any:
+    if _is_sensitive_key(key):
+        return "***REDACTED***"
+    if isinstance(obj, str):
+        if key and str(key).strip().lower() in _TEXT_KEYS:
+            return {"redacted": True, "len": len(obj)}
+        return _redact_str(obj)
+    if isinstance(obj, bytes):
+        return {"bytes": len(obj)}
+    if isinstance(obj, Mapping):
+        out: dict[str, Any] = {}
+        for k, v in obj.items():
+            kk = str(k)
+            if kk.strip().lower() in _LIST_KEYS and isinstance(v, list):
+                out[kk] = {"count": len(v)}
+            else:
+                out[kk] = _scrub_obj(v, key=kk)
+        return out
+    if isinstance(obj, (list, tuple, set)):
+        return [_scrub_obj(v) for v in obj]
+    return obj
+
+
+def safe_log_data(data: Any) -> Any:
+    return _scrub_obj(data)
+
+
+def safe_log(event: str, **kwargs: Any) -> None:
+    logger.info(event, **safe_log_data(kwargs))
+
+
 def redact_event(_, __, event_dict: dict[str, Any]) -> dict[str, Any]:
-    for k, v in list(event_dict.items()):
-        if isinstance(v, str):
-            event_dict[k] = _redact_str(v)
-    return event_dict
+    return _scrub_obj(event_dict)
 
 
 def add_contextvars(_, __, event_dict: dict[str, Any]) -> dict[str, Any]:
@@ -166,8 +216,8 @@ def _configure_structlog() -> structlog.stdlib.BoundLogger:
         structlog.processors.TimeStamper(fmt="iso", utc=True, key="ts"),
         structlog.stdlib.add_log_level,
         add_contextvars,
-        redact_event,
         structlog.processors.format_exc_info,
+        redact_event,
         rename_event_to_msg,
     ]
 
@@ -199,8 +249,8 @@ def _configure_structlog() -> structlog.stdlib.BoundLogger:
             structlog.processors.TimeStamper(fmt="iso", utc=True, key="ts"),
             structlog.stdlib.add_log_level,
             add_contextvars,
-            redact_event,
             structlog.processors.format_exc_info,
+            redact_event,
             rename_event_to_msg,
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],

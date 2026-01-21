@@ -26,6 +26,10 @@ async def request_context_middleware(
     set_request_id(rid)
     set_user_id(None)
     try:
+        request.state.request_id = rid
+    except Exception:
+        pass
+    try:
         resp = await call_next(request)
         resp.headers.setdefault("x-request-id", rid)
         return resp
@@ -37,5 +41,10 @@ async def request_context_middleware(
 def audit_event(
     event: str, *, request: Request, user_id: str | None, meta: dict | None = None
 ) -> None:
-    rid = request_id_var.get() or request.headers.get("x-request-id") or None
+    rid = (
+        request_id_var.get()
+        or getattr(getattr(request, "state", None), "request_id", None)
+        or request.headers.get("x-request-id")
+        or None
+    )
     audit.emit(event, request_id=rid, user_id=user_id, meta=meta or None)

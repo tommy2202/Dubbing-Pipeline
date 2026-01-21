@@ -38,7 +38,7 @@ from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.security.runtime_db import UnsafeRuntimeDbPath, assert_safe_runtime_db_path
 from dubbing_pipeline.utils.crypto import PasswordHasher, random_id
-from dubbing_pipeline.utils.log import logger
+from dubbing_pipeline.utils.log import logger, safe_log
 from dubbing_pipeline.utils.net import get_client_ip, install_egress_policy, is_trusted_proxy
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 from dubbing_pipeline.queue.manager import AutoQueueBackend
@@ -331,7 +331,7 @@ async def log_requests(request: Request, call_next):
     finally:
         dt_ms = (time.perf_counter() - t0) * 1000.0
         status_code = getattr(locals().get("response"), "status_code", 0)
-        logger.info(
+        safe_log(
             "http_done",
             ip=ip,
             method=request.method,
