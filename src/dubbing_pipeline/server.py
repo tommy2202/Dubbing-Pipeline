@@ -496,13 +496,18 @@ async def video(request: Request, job: str, ident: Identity = Depends(require_sc
     ctype, _ = mimetypes.guess_type(str(p))
     ctype = ctype or ("video/mp4" if p.suffix.lower() == ".mp4" else "video/x-matroska")
 
-    gen, start, end, size = _range_stream(p, request.headers.get("range"))
+    range_header = request.headers.get("range")
+    gen, start, end, size = _range_stream(p, range_header)
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Range": f"bytes {start}-{end}/{size}",
         "Content-Length": str(end - start + 1),
     }
-    return StreamingResponse(gen, status_code=206, media_type=ctype, headers=headers)
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        status_code = 206
+    else:
+        status_code = 200
+    return StreamingResponse(gen, status_code=status_code, media_type=ctype, headers=headers)
 
 
 @app.get("/files/{path:path}")
@@ -522,10 +527,15 @@ async def files(request: Request, path: str, ident: Identity = Depends(require_s
         else:
             ctype = "application/octet-stream"
 
-    gen, start, end, size = _range_stream(p, request.headers.get("range"))
+    range_header = request.headers.get("range")
+    gen, start, end, size = _range_stream(p, range_header)
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Range": f"bytes {start}-{end}/{size}",
         "Content-Length": str(end - start + 1),
     }
-    return StreamingResponse(gen, status_code=206, media_type=ctype, headers=headers)
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        status_code = 206
+    else:
+        status_code = 200
+    return StreamingResponse(gen, status_code=status_code, media_type=ctype, headers=headers)
