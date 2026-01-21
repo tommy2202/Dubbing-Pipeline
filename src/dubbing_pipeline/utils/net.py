@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ipaddress
 import socket
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 
 from dubbing_pipeline.config import get_settings
 
@@ -86,3 +88,111 @@ def egress_guard() -> Iterator[None]:
     """
     install_egress_policy()
     yield
+
+
+def _split_list(spec: str) -> list[str]:
+    s = (spec or "").strip()
+    if not s:
+        return []
+    parts: list[str] = []
+    for tok in s.replace(",", " ").split():
+        t = tok.strip()
+        if t:
+            parts.append(t)
+    return parts
+
+
+def _parse_networks(spec: str) -> list[ipaddress._BaseNetwork]:
+    nets: list[ipaddress._BaseNetwork] = []
+    for item in _split_list(spec):
+        try:
+            nets.append(ipaddress.ip_network(item, strict=False))
+        except Exception:
+            continue
+    return nets
+
+
+def trusted_proxy_networks() -> list[ipaddress._BaseNetwork]:
+    s = get_settings()
+    spec = str(getattr(s, "trusted_proxy_subnets", "") or "")
+    return _parse_networks(spec)
+
+
+def is_trusted_proxy(peer_ip: str) -> bool:
+    ip = None
+    try:
+        ip = ipaddress.ip_address((peer_ip or "").strip())
+    except Exception:
+        return False
+    nets = trusted_proxy_networks()
+    if not nets:
+        return False
+    for n in nets:
+        try:
+            if ip in n:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _forwarded_ip_candidates(headers: Mapping[str, Any]) -> list[str]:
+    out: list[str] = []
+    cf = headers.get("cf-connecting-ip")
+    if cf:
+        out.append(str(cf).strip())
+    xff = headers.get("x-forwarded-for")
+    if xff:
+        for part in str(xff).split(","):
+            tok = part.strip()
+            if tok:
+                out.append(tok)
+    xr = headers.get("x-real-ip")
+    if xr:
+        out.append(str(xr).strip())
+    return out
+
+
+def _is_public_ip(ip: ipaddress._BaseAddress) -> bool:
+    try:
+        return bool(getattr(ip, "is_global", False))
+    except Exception:
+        return False
+
+
+def get_client_ip_from_headers(*, peer_ip: str, headers: Mapping[str, Any]) -> str:
+    """
+    Return the effective client IP using trusted proxy configuration.
+    """
+    peer = (peer_ip or "").strip() or "unknown"
+    s = get_settings()
+    if not bool(getattr(s, "trust_proxy_headers", False)):
+        return peer
+    if not is_trusted_proxy(peer):
+        return peer
+    cands = _forwarded_ip_candidates(headers)
+    first_valid: str | None = None
+    for raw in cands:
+        try:
+            ip = ipaddress.ip_address(raw)
+        except Exception:
+            continue
+        if first_valid is None:
+            first_valid = str(ip)
+        if _is_public_ip(ip):
+            return str(ip)
+    return first_valid or peer
+
+
+def get_client_ip(request: Any) -> str:
+    """
+    Canonical client IP extractor.
+    """
+    peer = ""
+    try:
+        if getattr(request, "client", None) and getattr(request.client, "host", None):
+            peer = str(request.client.host)
+    except Exception:
+        peer = ""
+    headers = getattr(request, "headers", {}) or {}
+    return get_client_ip_from_headers(peer_ip=peer, headers=headers)

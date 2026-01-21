@@ -16,6 +16,7 @@ from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState
 from dubbing_pipeline.utils.log import logger
+from dubbing_pipeline.utils.net import get_client_ip
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 
 router = APIRouter()
@@ -182,7 +183,7 @@ async def webrtc_offer(
         request, job_id=job_id, ident=ident, video_path=str(video_path) if video_path else None
     )
 
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request)
     # Rate limit offers (per IP) to avoid resource exhaustion.
     rl = _get_rl(request)
     if not rl.allow(f"webrtc:offer:ip:{ip}", limit=10, per_seconds=60):

@@ -39,7 +39,7 @@ from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.security.runtime_db import UnsafeRuntimeDbPath, assert_safe_runtime_db_path
 from dubbing_pipeline.utils.crypto import PasswordHasher, random_id
 from dubbing_pipeline.utils.log import logger
-from dubbing_pipeline.utils.net import install_egress_policy
+from dubbing_pipeline.utils.net import get_client_ip, install_egress_policy, is_trusted_proxy
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 from dubbing_pipeline.queue.manager import AutoQueueBackend
 from dubbing_pipeline.web.routes_jobs import router as jobs_router
@@ -271,9 +271,9 @@ def _is_https_request(request: Request) -> bool:
     except Exception:
         pass
     s = get_settings()
-    mode = str(getattr(s, "remote_access_mode", "off") or "off").strip().lower()
-    trust = bool(getattr(s, "trust_proxy_headers", False)) and mode == "cloudflare"
-    if not trust:
+    trust = bool(getattr(s, "trust_proxy_headers", False))
+    peer = request.client.host if request.client else ""
+    if not trust or not is_trusted_proxy(peer):
         return False
     xf = (request.headers.get("x-forwarded-proto") or "").strip().lower()
     if xf == "https":
@@ -324,7 +324,7 @@ async def security_headers(request: Request, call_next):
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     t0 = time.perf_counter()
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request)
     path = request.url.path
     try:
         response = await call_next(request)

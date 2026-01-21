@@ -161,7 +161,10 @@ class PublicConfig(BaseSettings):
     remote_access_mode: str = Field(default="off", alias="REMOTE_ACCESS_MODE")  # off|tailscale|cloudflare
     allowed_subnets: str = Field(default="", alias="ALLOWED_SUBNETS")  # comma/space separated CIDRs
     trust_proxy_headers: bool = Field(default=False, alias="TRUST_PROXY_HEADERS")
-    trusted_proxy_subnets: str = Field(default="", alias="TRUSTED_PROXY_SUBNETS")  # CIDRs
+    trusted_proxy_subnets: str = Field(
+        default="",
+        alias=AliasChoices("TRUSTED_PROXY_SUBNETS", "TRUSTED_PROXIES"),
+    )  # CIDRs or IPs
 
     # Optional Cloudflare Access verification (recommended when REMOTE_ACCESS_MODE=cloudflare)
     # These are not secrets (they identify the Access app), but verification may require fetching JWKS.

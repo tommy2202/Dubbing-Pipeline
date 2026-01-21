@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.utils.log import logger
+from dubbing_pipeline.utils.net import get_client_ip, is_trusted_proxy, trusted_proxy_networks
 
 
 def _split_list(s: str) -> list[str]:
@@ -248,19 +249,8 @@ def decide_remote_access(request: Request) -> RemoteDecision:
     if not allowed_nets:
         allowed_nets = _default_allowed_subnets_for_mode(mode)
 
-    trusted_proxy_nets = _parse_networks(str(getattr(s, "trusted_proxy_subnets", "") or ""))
-    if not trusted_proxy_nets:
-        trusted_proxy_nets = _default_trusted_proxy_subnets()
-
-    eff_ip = raw_ip
-    via_proxy = False
-    trust_proxy = bool(getattr(s, "trust_proxy_headers", False)) and mode == "cloudflare"
-    if trust_proxy and _ip_in_any(raw_ip, trusted_proxy_nets):
-        fwd = _extract_forwarded_ip(request)
-        fwd_ip = _parse_ip(fwd or "")
-        if fwd_ip is not None:
-            eff_ip = fwd_ip
-            via_proxy = True
+    eff_ip = _parse_ip(get_client_ip(request) or "") or raw_ip
+    via_proxy = bool(is_trusted_proxy(raw_peer) and str(eff_ip) != str(raw_ip))
 
     if mode == "off":
         return RemoteDecision(
@@ -385,9 +375,7 @@ def log_remote_access_boot_summary() -> None:
     allowed = _parse_networks(str(getattr(s, "allowed_subnets", "") or ""))
     if not allowed:
         allowed = _default_allowed_subnets_for_mode(mode)
-    trusted = _parse_networks(str(getattr(s, "trusted_proxy_subnets", "") or ""))
-    if not trusted:
-        trusted = _default_trusted_proxy_subnets()
+    trusted = trusted_proxy_networks()
     logger.info(
         "remote_access_mode",
         mode=mode,

@@ -46,6 +46,7 @@ from dubbing_pipeline.security.crypto import (
 from dubbing_pipeline.utils.crypto import verify_secret
 from dubbing_pipeline.utils.ffmpeg_safe import FFmpegError, ffprobe_media_info
 from dubbing_pipeline.utils.log import request_id_var
+from dubbing_pipeline.utils.net import get_client_ip, get_client_ip_from_headers
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 
 router = APIRouter()
@@ -166,39 +167,9 @@ def _safe_filename(name: str) -> str:
 def _client_ip_for_limits(request: Request) -> str:
     """
     Proxy-safe client IP for rate limiting.
-    Only trusts forwarded headers in Cloudflare mode when peer is a trusted proxy subnet.
+    Only trusts forwarded headers when peer is a trusted proxy.
     """
-    peer = request.client.host if request.client else ""
-    s = get_settings()
-    mode = str(getattr(s, "remote_access_mode", "off") or "off").strip().lower()
-    trust = bool(getattr(s, "trust_proxy_headers", False)) and mode == "cloudflare"
-    if not trust:
-        return peer or "unknown"
-
-    # Only accept forwarded headers if the immediate peer is trusted.
-    try:
-        trusted = str(getattr(s, "trusted_proxy_subnets", "") or "").strip()
-        nets = [
-            ipaddress.ip_network(x.strip(), strict=False) for x in trusted.split(",") if x.strip()
-        ]
-        if not nets:
-            # conservative: if not configured, do not trust
-            return peer or "unknown"
-        pip = ipaddress.ip_address(peer) if peer else None
-        if pip is None or not any(pip in n for n in nets):
-            return peer or "unknown"
-    except Exception:
-        return peer or "unknown"
-
-    # Cloudflare headers (preferred)
-    cf = (request.headers.get("cf-connecting-ip") or "").strip()
-    if cf:
-        return cf
-    # Fall back to X-Forwarded-For (first hop)
-    xff = (request.headers.get("x-forwarded-for") or "").strip()
-    if xff:
-        return xff.split(",")[0].strip()
-    return peer or "unknown"
+    return get_client_ip(request)
 
 
 def _enforce_rate_limit(request: Request, *, key: str, limit: int, per_seconds: int) -> None:
@@ -4383,10 +4354,9 @@ async def ws_job(websocket: WebSocket, id: str):
         # 4) Legacy query token (unsafe) - gated
         if not token and allow_legacy:
             try:
-                import ipaddress
-
                 peer = websocket.client.host if websocket.client else ""
-                ip = ipaddress.ip_address(peer) if peer else None
+                client_ip = get_client_ip_from_headers(peer_ip=peer, headers=websocket.headers)
+                ip = ipaddress.ip_address(client_ip) if client_ip else None
                 if ip and (ip.is_private or ip.is_loopback):
                     token = websocket.query_params.get("token") or ""
             except Exception:
