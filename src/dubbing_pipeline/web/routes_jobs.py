@@ -20,7 +20,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from fastapi.responses import PlainTextResponse, Response
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from sse_starlette.sse import EventSourceResponse  # type: ignore
 
 from dubbing_pipeline.api.access import require_job_access, require_library_access, require_upload_access
@@ -848,28 +848,93 @@ def _review_audio_path(base_dir: Path, segment_id: int) -> Path | None:
     return None
 
 
-def _file_range_response(request: Request, path: Path, *, media_type: str) -> Response:
+def _file_range_response(
+    request: Request,
+    path: Path,
+    *,
+    media_type: str,
+    allowed_roots: list[Path] | None = None,
+) -> Response:
     """
-    Minimal HTTP Range support for audio preview.
+    Minimal HTTP Range support for previews.
+    Streams from disk to avoid loading full files into memory.
     """
-    data = path.read_bytes()
-    size = len(data)
-    rng = request.headers.get("range")
+    p = Path(path).resolve()
+    if allowed_roots:
+        ok = False
+        for root in allowed_roots:
+            try:
+                p.relative_to(Path(root).resolve())
+                ok = True
+                break
+            except Exception:
+                continue
+        if not ok:
+            raise HTTPException(status_code=404, detail="Not found")
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    size = p.stat().st_size
+    rng = (request.headers.get("range") or "").strip().lower()
+
+    def _iter_range(start: int, end: int):
+        with p.open("rb") as f:
+            f.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                chunk = f.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
     if not rng:
-        return Response(content=data, media_type=media_type)
-    m = re.match(r"bytes=(\d+)-(\d+)?", rng)
+        headers = {"Accept-Ranges": "bytes", "Content-Length": str(size)}
+        return StreamingResponse(_iter_range(0, max(0, size - 1)), media_type=media_type, headers=headers)
+
+    m = re.match(r"bytes=(\d*)-(\d*)", rng)
     if not m:
-        return Response(content=data, media_type=media_type)
-    start = int(m.group(1))
-    end = int(m.group(2)) if m.group(2) else size - 1
-    start = max(0, min(start, size))
+        headers = {"Accept-Ranges": "bytes", "Content-Length": str(size)}
+        return StreamingResponse(_iter_range(0, max(0, size - 1)), media_type=media_type, headers=headers)
+
+    start_s, end_s = m.group(1), m.group(2)
+    if not start_s and not end_s:
+        headers = {"Accept-Ranges": "bytes", "Content-Length": str(size)}
+        return StreamingResponse(_iter_range(0, max(0, size - 1)), media_type=media_type, headers=headers)
+
+    if start_s:
+        start = int(start_s)
+        end = int(end_s) if end_s else size - 1
+    else:
+        # Suffix range: bytes=-N
+        suffix = int(end_s or 0)
+        if suffix <= 0:
+            headers = {"Accept-Ranges": "bytes", "Content-Length": str(size)}
+            return StreamingResponse(
+                _iter_range(0, max(0, size - 1)), media_type=media_type, headers=headers
+            )
+        start = max(0, size - suffix)
+        end = size - 1
+
+    if start >= size:
+        return Response(
+            status_code=416,
+            headers={"Content-Range": f"bytes */{size}"},
+            media_type=media_type,
+        )
     end = max(start, min(end, size - 1))
-    chunk = data[start : end + 1]
+
     headers = {
         "Content-Range": f"bytes {start}-{end}/{size}",
         "Accept-Ranges": "bytes",
+        "Content-Length": str(end - start + 1),
     }
-    return Response(content=chunk, status_code=206, headers=headers, media_type=media_type)
+    return StreamingResponse(
+        _iter_range(start, end),
+        status_code=206,
+        media_type=media_type,
+        headers=headers,
+    )
 
 
 def _stream_manifest_path(base_dir: Path) -> Path:
@@ -3255,7 +3320,9 @@ async def get_job_review_audio(
     p = _review_audio_path(base_dir, int(segment_id))
     if p is None:
         raise HTTPException(status_code=404, detail="audio not found")
-    return _file_range_response(request, p, media_type="audio/wav")
+    return _file_range_response(
+        request, p, media_type="audio/wav", allowed_roots=[_job_base_dir(job)]
+    )
 
 
 def _voice_refs_manifest_path(base_dir: Path) -> Path:
@@ -3470,7 +3537,9 @@ async def get_job_voice_ref_audio(
     p = _voice_ref_audio_path_from_manifest(base_dir=base_dir, speaker_id=speaker_id, manifest=man)
     if p is None:
         raise HTTPException(status_code=404, detail="voice ref not found")
-    resp = _file_range_response(request, p, media_type="audio/wav")
+    resp = _file_range_response(
+        request, p, media_type="audio/wav", allowed_roots=_voice_ref_allowed_roots(base_dir)
+    )
     if download:
         # best-effort attachment name
         name = f"{Path(str(speaker_id)).name.strip() or 'speaker'}.wav"
@@ -3678,7 +3747,12 @@ async def get_series_character_audio(
     p = get_character_ref(slug, character_slug)
     if p is None or not p.exists():
         raise HTTPException(status_code=404, detail="ref not found")
-    resp = _file_range_response(request, p, media_type="audio/wav")
+    resp = _file_range_response(
+        request,
+        p,
+        media_type="audio/wav",
+        allowed_roots=[Path(get_settings().voice_store_dir).resolve()],
+    )
     if download:
         name = f"{Path(str(character_slug)).name.strip() or 'character'}.wav"
         resp.headers["content-disposition"] = f'attachment; filename="{name}"'
@@ -4239,7 +4313,7 @@ async def job_stream_chunk(
     p = _stream_chunk_mp4_path(base_dir, int(chunk_idx))
     if p is None:
         raise HTTPException(status_code=404, detail="chunk not found")
-    return _file_range_response(request, p, media_type="video/mp4")
+    return _file_range_response(request, p, media_type="video/mp4", allowed_roots=[base_dir])
 
 
 @router.get("/api/jobs/{id}/qrcode")
