@@ -72,6 +72,9 @@ Add these settings (example):
 NTFY_ENABLED=1
 NTFY_BASE_URL=http://127.0.0.1:8081
 NTFY_TOPIC=<random-topic>
+# Optional: send a copy to an admin-only topic
+# NTFY_NOTIFY_ADMIN=1
+# NTFY_ADMIN_TOPIC=<admin-topic>
 # Optional: for absolute click URLs in notifications
 PUBLIC_BASE_URL=http://<tailscale-ip>:8000
 ```
@@ -100,11 +103,33 @@ NTFY_AUTH=userpass:<username>:<password>
 
 ---
 
+## Per-user topics (recommended)
+
+Each user can opt-in and set **their own topic**:
+
+- Open `/ui/settings/notifications`
+- Enable notifications
+- Enter a topic (letters/numbers/`-`/`_`/`.`; max 64 chars)
+
+This keeps notifications private per user (no shared channel).
+
+Each user must set a topic when enabling notifications.
+
+---
+
 ## Privacy mode behavior
 
 When privacy mode is enabled for a job (or when the job uses **minimal retention**), notifications avoid including file names. They include only:
 - job id
 - status
+
+---
+
+## Security notes
+
+- Notification auth tokens are **server-only** (`NTFY_AUTH` in `.env.secrets`).
+- User settings store **no secrets** — only enable/disable + topic.
+- Notifications never include transcripts or secret env values.
 
 ---
 

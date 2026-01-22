@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
+import re
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,10 @@ def _default_user_settings() -> dict[str, Any]:
             "tts_lang": str(s.tts_lang or "en"),
             "tts_speaker": str(s.tts_speaker or "default"),
         },
+        "notifications": {
+            "enabled": False,
+            "topic": "",
+        },
         "updated_at": _now_ts(),
     }
 
@@ -61,6 +66,17 @@ def _validate_lang(v: str) -> str:
     vv = (v or "").strip().lower()
     if not vv or len(vv) > 12:
         raise HTTPException(status_code=400, detail="Invalid language code")
+    return vv
+
+
+def _validate_notify_topic(v: str) -> str:
+    vv = (v or "").strip()
+    if not vv:
+        return ""
+    if len(vv) > 64:
+        raise HTTPException(status_code=400, detail="Invalid notification topic (too long)")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", vv):
+        raise HTTPException(status_code=400, detail="Invalid notification topic format")
     return vv
 
 
@@ -148,6 +164,17 @@ class UserSettingsStore:
             if "tts_speaker" in d:
                 out_defaults["tts_speaker"] = str(d.get("tts_speaker") or "").strip() or "default"
 
+        out_notifications: dict[str, Any] = {}
+        if isinstance(patch.get("notifications"), dict):
+            n = patch["notifications"]
+            if "enabled" in n:
+                out_notifications["enabled"] = bool(n.get("enabled"))
+            if "topic" in n:
+                out_notifications["topic"] = _validate_notify_topic(str(n.get("topic") or ""))
+
+        if out_notifications.get("enabled") and not str(out_notifications.get("topic") or "").strip():
+            raise HTTPException(status_code=400, detail="Notification topic required")
+
         with self._lock:
             all_data = self._load_all()
             users = all_data.get("users")
@@ -162,6 +189,10 @@ class UserSettingsStore:
                 if not isinstance(cur.get("defaults"), dict):
                     cur["defaults"] = {}
                 cur["defaults"].update(out_defaults)
+            if out_notifications:
+                if not isinstance(cur.get("notifications"), dict):
+                    cur["notifications"] = {}
+                cur["notifications"].update(out_notifications)
             cur["updated_at"] = _now_ts()
             users[uid] = cur
             self._save_all(all_data)
@@ -199,8 +230,12 @@ async def get_settings_me(
     store = _get_user_settings_store(request)
     user_cfg = store.get_user(ident.user.id)
     s = get_settings()
+    ntfy_enabled = bool(getattr(s, "ntfy_enabled", False))
+    ntfy_base = str(getattr(s, "ntfy_base_url", "") or "").strip()
+    ntfy_default_topic = str(getattr(s, "ntfy_topic", "") or "").strip()
     return {
         "defaults": user_cfg.get("defaults", {}),
+        "notifications": user_cfg.get("notifications", {}),
         "system": {
             "limits": {
                 "max_concurrency_global": int(s.max_concurrency_global),
@@ -214,7 +249,9 @@ async def get_settings_me(
                 "budget_mux_sec": int(s.budget_mux_sec),
             },
             "notifications": {
-                "ntfy_enabled": bool(getattr(s, "ntfy_enabled", False)),
+                "ntfy_enabled": ntfy_enabled,
+                "ntfy_base_configured": bool(ntfy_base),
+                "ntfy_default_topic_configured": bool(ntfy_default_topic),
             },
         },
         "updated_at": user_cfg.get("updated_at"),
@@ -230,6 +267,7 @@ async def put_settings_me(
     updated = store.update_user(ident.user.id, body if isinstance(body, dict) else {})
     return {
         "defaults": updated.get("defaults", {}),
+        "notifications": updated.get("notifications", {}),
         "updated_at": updated.get("updated_at"),
     }
 

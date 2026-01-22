@@ -3797,6 +3797,8 @@ class JobQueue:
         settings = get_settings()
         if not bool(getattr(settings, "ntfy_enabled", False)):
             return
+        if not str(getattr(settings, "ntfy_base_url", "") or "").strip():
+            return
 
         job = self.store.get(job_id)
         if job is None:
@@ -3836,19 +3838,68 @@ class JobQueue:
 
         # Run sync notifier in a thread to avoid blocking the async worker.
         import asyncio as _asyncio
+        import re as _re
+
+        def _topic_ok(v: str) -> bool:
+            vv = str(v or "").strip()
+            if not vv:
+                return False
+            return bool(_re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", vv))
+
+        def _user_notify_topic(user_id: str) -> str | None:
+            try:
+                from dubbing_pipeline.api.routes_settings import UserSettingsStore
+
+                st = UserSettingsStore()
+                cfg = st.get_user(user_id)
+                n = cfg.get("notifications") if isinstance(cfg, dict) else None
+                if not isinstance(n, dict):
+                    return None
+                if not bool(n.get("enabled")):
+                    return None
+                topic = str(n.get("topic") or "").strip()
+                if topic and _topic_ok(topic):
+                    return topic
+                return None
+            except Exception:
+                return None
 
         def _send() -> bool:
             from dubbing_pipeline.notify.ntfy import notify as _notify
 
-            return _notify(
-                event=f"job.{str(state).lower()}",
-                title=title,
-                message=msg,
-                url=click,
-                tags=tags,
-                priority=prio,
-                user_id=str(job.owner_id or "") or None,
-                job_id=str(job_id),
-            )
+            ok_any = False
+            owner_id = str(job.owner_id or "").strip()
+            if owner_id:
+                topic = _user_notify_topic(owner_id)
+                if topic:
+                    ok_any = bool(
+                        _notify(
+                            event=f"job.{str(state).lower()}",
+                            title=title,
+                            message=msg,
+                            url=click,
+                            tags=tags,
+                            priority=prio,
+                            user_id=owner_id,
+                            job_id=str(job_id),
+                            topic=topic,
+                        )
+                    )
+
+            admin_topic = str(getattr(settings, "ntfy_admin_topic", "") or "").strip()
+            if bool(getattr(settings, "ntfy_notify_admin", False)) and _topic_ok(admin_topic):
+                ok_admin = _notify(
+                    event=f"job.{str(state).lower()}",
+                    title=title,
+                    message=msg,
+                    url=click,
+                    tags=tags + ["admin"],
+                    priority=prio,
+                    user_id="admin",
+                    job_id=str(job_id),
+                    topic=admin_topic,
+                )
+                ok_any = bool(ok_any or ok_admin)
+            return ok_any
 
         await _asyncio.to_thread(_send)

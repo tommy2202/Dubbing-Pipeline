@@ -105,6 +105,7 @@ def notify(
     priority: int | None = None,
     user_id: str | None = None,
     job_id: str | None = None,
+    topic: str | None = None,
 ) -> bool:
     """
     Best-effort ntfy notification.
@@ -117,8 +118,8 @@ def notify(
     if not bool(getattr(s, "ntfy_enabled", False)):
         return False
     base = str(getattr(s, "ntfy_base_url", "") or "").strip()
-    topic = str(getattr(s, "ntfy_topic", "") or "").strip()
-    if not base or not topic:
+    topic_eff = str(topic or "").strip() or str(getattr(s, "ntfy_topic", "") or "").strip()
+    if not base or not topic_eff:
         return False
 
     auth_raw = None
@@ -143,7 +144,7 @@ def notify(
         try:
             st = _post_ntfy(
                 base_url=base,
-                topic=topic,
+                topic=topic_eff,
                 payload=n,
                 auth_headers=auth_headers,
                 timeout_sec=timeout_sec,
@@ -187,6 +188,7 @@ def notify(
                 "ok": bool(ok),
                 "event": str(event),
                 "job_id": str(job_id or "") or None,
+                "topic_set": bool(topic_eff),
                 "status": int(last_status) if last_status is not None else None,
                 "error": last_error,
             },

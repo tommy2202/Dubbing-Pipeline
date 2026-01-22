@@ -1,0 +1,132 @@
+{% extends "_base.html" %}
+
+{% block title %}Notifications • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Notifications</h1>
+    <p class="mt-1 text-sm text-slate-400">Private, self-hosted <code>ntfy</code> alerts for your jobs.</p>
+  </div>
+  <a class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" href="/ui/settings">Back</a>
+</div>
+
+<div class="mt-6 grid gap-4 lg:grid-cols-2" x-data="notifySettings()" x-init="init()">
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <div class="text-sm text-slate-300">Your preferences</div>
+    <div class="mt-3 space-y-4 text-sm">
+      <label class="flex items-center gap-3" for="notifyEnabled">
+        <input id="notifyEnabled" type="checkbox" class="h-5 w-5"
+               x-model="form.enabled" :disabled="!systemReady" />
+        <span>Enable notifications</span>
+      </label>
+      <div>
+        <label class="block text-sm text-slate-300" for="notifyTopic">Topic / channel</label>
+        <input id="notifyTopic"
+               class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+               placeholder="my-private-topic"
+               x-model="form.topic"
+               :disabled="!systemReady" />
+        <div class="mt-1 text-xs text-slate-500">
+          Allowed: letters, numbers, <code>-</code>, <code>_</code>, <code>.</code> (max 64 chars).
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      <button class="rounded bg-emerald-600 hover:bg-emerald-500 px-4 py-3 text-sm font-medium"
+              :disabled="!systemReady" :class="!systemReady ? 'opacity-50 cursor-not-allowed' : ''"
+              @click="save()">
+        Save
+      </button>
+      <div class="text-sm text-red-200" role="alert" aria-live="polite" x-show="error" x-cloak x-text="error"></div>
+      <div class="text-sm text-emerald-200" aria-live="polite" x-show="toast" x-cloak x-text="toast"></div>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <div class="text-sm text-slate-300">System status</div>
+    <div class="mt-3 text-sm text-slate-200 space-y-2">
+      <div>
+        <span class="text-slate-500">NTFY_ENABLED:</span>
+        <span x-text="system.ntfy_enabled ? '1' : '0'"></span>
+      </div>
+      <div>
+        <span class="text-slate-500">NTFY_BASE_URL:</span>
+        <span x-text="system.ntfy_base_configured ? 'configured' : 'missing'"></span>
+      </div>
+      <div>
+        <span class="text-slate-500">Default topic:</span>
+        <span x-text="system.ntfy_default_topic_configured ? 'configured' : 'missing'"></span>
+      </div>
+      <div class="mt-2 text-xs text-slate-500" x-show="!systemReady" x-cloak>
+        Notifications are disabled until the server configures <code>NTFY_ENABLED</code> and <code>NTFY_BASE_URL</code>.
+      </div>
+      <div class="mt-2 text-xs text-slate-500">
+        See <code>docs/notifications.md</code> for private setup steps.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function notifySettings() {
+    return {
+      form: { enabled: false, topic: "" },
+      system: { ntfy_enabled: false, ntfy_base_configured: false, ntfy_default_topic_configured: false },
+      error: "",
+      toast: "",
+      get systemReady() {
+        return !!(this.system.ntfy_enabled && this.system.ntfy_base_configured);
+      },
+      async init() {
+        await this.load();
+      },
+      async load() {
+        this.error = "";
+        try {
+          const r = await fetch("/api/settings", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.error = d.detail || ("Failed to load settings (" + r.status + ")");
+            return;
+          }
+          const n = d.notifications || {};
+          this.form.enabled = !!n.enabled;
+          this.form.topic = String(n.topic || "");
+          this.system = d.system && d.system.notifications ? d.system.notifications : this.system;
+        } catch (e) {
+          this.error = "Failed to load settings";
+        }
+      },
+      async save() {
+        this.error = "";
+        this.toast = "";
+        try {
+          if (this.form.enabled && !String(this.form.topic || "").trim()) {
+            this.error = "Topic is required when notifications are enabled.";
+            return;
+          }
+          const csrf = document.getElementById("csrf")?.value || "";
+          const payload = { notifications: { enabled: !!this.form.enabled, topic: String(this.form.topic || "").trim() } };
+          const r = await fetch("/api/settings", {
+            method: "PUT",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.error = d.detail || ("Save failed (" + r.status + ")");
+            return;
+          }
+          this.toast = "Saved";
+          await this.load();
+        } catch (e) {
+          this.error = "Save failed";
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

@@ -462,10 +462,24 @@ async def ui_settings(request: Request) -> HTMLResponse:
                 },
                 "notifications": {
                     "ntfy_enabled": bool(getattr(s, "ntfy_enabled", False)),
+                    "ntfy_base_configured": bool(str(getattr(s, "ntfy_base_url", "") or "").strip()),
+                    "ntfy_default_topic_configured": bool(
+                        str(getattr(s, "ntfy_topic", "") or "").strip()
+                    ),
                 },
             },
         },
     )
+
+
+@router.get("/settings/notifications")
+async def ui_settings_notifications(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="settings_notifications")
+    return _render(request, "settings_notifications.html", {})
 
 
 @router.get("/admin/queue")

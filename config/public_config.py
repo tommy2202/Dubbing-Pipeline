@@ -210,6 +210,8 @@ class PublicConfig(BaseSettings):
     ntfy_tls_insecure: bool = Field(default=False, alias="NTFY_TLS_INSECURE")
     ntfy_timeout_sec: float = Field(default=5.0, alias="NTFY_TIMEOUT_SEC")
     ntfy_retries: int = Field(default=3, alias="NTFY_RETRIES")
+    ntfy_notify_admin: bool = Field(default=False, alias="NTFY_NOTIFY_ADMIN")
+    ntfy_admin_topic: str = Field(default="", alias="NTFY_ADMIN_TOPIC")
 
     # Optional public base URL used to generate absolute links in notifications/QRs.
     # If unset, notifications will omit the click URL.
