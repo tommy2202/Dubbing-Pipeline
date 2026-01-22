@@ -24,6 +24,8 @@ def _protected_by_scope_or_role(route: APIRoute) -> bool:
             continue
         mod = getattr(call, "__module__", "")
         qual = getattr(call, "__qualname__", "")
+        if mod == "dubbing_pipeline.api.deps" and qual == "current_identity":
+            return True
         if mod == "dubbing_pipeline.api.deps" and qual.endswith("require_scope.<locals>.dep"):
             return True
         if mod == "dubbing_pipeline.api.deps" and qual.endswith("require_role.<locals>.dep"):
