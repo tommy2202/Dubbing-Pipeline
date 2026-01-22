@@ -69,6 +69,19 @@ This starts the server in **Tailscale mode** (IP allowlist enforced) and prints 
 python3 -m pip install -e .
 ```
 
+---
+
+## Developer quickstart
+
+```bash
+python3 -m pip install -e ".[dev]"
+pytest -q
+python3 scripts/polish_gate.py  # v0 gate
+```
+
+Notes:
+- Some tests are skipped when optional dependencies (e.g., whisper) are missing.
+
 ### Runtime directories (important)
 
 - `Input/` and `Output/` are **runtime folders**. They are intentionally kept **empty in git** (only `.gitkeep`) and must **not** be committed.

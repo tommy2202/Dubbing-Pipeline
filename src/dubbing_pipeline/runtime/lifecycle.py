@@ -172,6 +172,14 @@ def _ensure_writable_dir(path: Path, *, label: str) -> None:
 
 def _startup_self_check(app_state: Any) -> None:
     s = get_settings()
+    if str(os.environ.get("DUBBING_SKIP_STARTUP_CHECK", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        logger.warning("startup_self_check_skipped", reason="env")
+        return
     logger.info("startup_self_check_begin")
 
     ffmpeg_v = _run_version([str(s.ffmpeg_bin), "-version"])

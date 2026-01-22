@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from dubbing_pipeline.config import get_settings
@@ -12,6 +14,8 @@ from dubbing_pipeline.server import app
 
 def _runtime_video_path(tmp_path: Path) -> str:
     root = tmp_path.resolve()
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not available")
     in_dir = root / "Input"
     out_dir = root / "Output"
     logs_dir = root / "logs"
@@ -73,12 +77,26 @@ def test_idempotency_key_returns_same_job_id(tmp_path: Path) -> None:
         r1 = c.post(
             "/api/jobs",
             headers=headers,
-            json={"video_path": video_path, "device": "cpu", "mode": "low"},
+            json={
+                "video_path": video_path,
+                "device": "cpu",
+                "mode": "low",
+                "series_title": "Series A",
+                "season_number": 1,
+                "episode_number": 1,
+            },
         )
         r2 = c.post(
             "/api/jobs",
             headers=headers,
-            json={"video_path": video_path, "device": "cpu", "mode": "low"},
+            json={
+                "video_path": video_path,
+                "device": "cpu",
+                "mode": "low",
+                "series_title": "Series A",
+                "season_number": 1,
+                "episode_number": 1,
+            },
         )
         assert r1.status_code == 200
         assert r2.status_code == 200

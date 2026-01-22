@@ -118,6 +118,7 @@ include = ["dubbing_pipeline*", "dubbing_pipeline_legacy*", "config*"]
 [tool.pytest.ini_options]
 markers = [
   "smoke: minimal integration smoke tests",
+  "optional_deps: tests requiring optional dependencies",
 ]
 
 [tool.black]
