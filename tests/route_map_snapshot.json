@@ -1,0 +1,727 @@
+[
+  {
+    "method": "GET",
+    "name": "home",
+    "path": "/"
+  },
+  {
+    "method": "POST",
+    "name": "admin_job_cancel",
+    "path": "/api/admin/jobs/{id}/cancel"
+  },
+  {
+    "method": "POST",
+    "name": "admin_job_priority",
+    "path": "/api/admin/jobs/{id}/priority"
+  },
+  {
+    "method": "POST",
+    "name": "admin_job_visibility",
+    "path": "/api/admin/jobs/{id}/visibility"
+  },
+  {
+    "method": "GET",
+    "name": "admin_queue",
+    "path": "/api/admin/queue"
+  },
+  {
+    "method": "POST",
+    "name": "admin_user_quotas",
+    "path": "/api/admin/users/{id}/quotas"
+  },
+  {
+    "method": "GET",
+    "name": "admin_get_user_settings",
+    "path": "/api/admin/users/{user_id}/settings"
+  },
+  {
+    "method": "PUT",
+    "name": "admin_put_user_settings",
+    "path": "/api/admin/users/{user_id}/settings"
+  },
+  {
+    "method": "GET",
+    "name": "audit_recent",
+    "path": "/api/audit/recent"
+  },
+  {
+    "method": "POST",
+    "name": "login",
+    "path": "/api/auth/login"
+  },
+  {
+    "method": "POST",
+    "name": "logout",
+    "path": "/api/auth/logout"
+  },
+  {
+    "method": "POST",
+    "name": "qr_init",
+    "path": "/api/auth/qr/init"
+  },
+  {
+    "method": "POST",
+    "name": "qr_redeem",
+    "path": "/api/auth/qr/redeem"
+  },
+  {
+    "method": "POST",
+    "name": "refresh",
+    "path": "/api/auth/refresh"
+  },
+  {
+    "method": "GET",
+    "name": "list_sessions",
+    "path": "/api/auth/sessions"
+  },
+  {
+    "method": "POST",
+    "name": "revoke_all_sessions",
+    "path": "/api/auth/sessions/revoke_all"
+  },
+  {
+    "method": "POST",
+    "name": "revoke_session",
+    "path": "/api/auth/sessions/{device_id}/revoke"
+  },
+  {
+    "method": "POST",
+    "name": "totp_setup",
+    "path": "/api/auth/totp/setup"
+  },
+  {
+    "method": "POST",
+    "name": "totp_verify",
+    "path": "/api/auth/totp/verify"
+  },
+  {
+    "method": "GET",
+    "name": "list_server_files",
+    "path": "/api/files"
+  },
+  {
+    "method": "GET",
+    "name": "list_jobs",
+    "path": "/api/jobs"
+  },
+  {
+    "method": "POST",
+    "name": "create_job",
+    "path": "/api/jobs"
+  },
+  {
+    "method": "POST",
+    "name": "create_jobs_batch",
+    "path": "/api/jobs/batch"
+  },
+  {
+    "method": "GET",
+    "name": "jobs_events",
+    "path": "/api/jobs/events"
+  },
+  {
+    "method": "DELETE",
+    "name": "delete_job",
+    "path": "/api/jobs/{id}"
+  },
+  {
+    "method": "GET",
+    "name": "get_job",
+    "path": "/api/jobs/{id}"
+  },
+  {
+    "method": "POST",
+    "name": "archive_job",
+    "path": "/api/jobs/{id}/archive"
+  },
+  {
+    "method": "POST",
+    "name": "cancel_job",
+    "path": "/api/jobs/{id}/cancel"
+  },
+  {
+    "method": "GET",
+    "name": "get_job_characters",
+    "path": "/api/jobs/{id}/characters"
+  },
+  {
+    "method": "PUT",
+    "name": "put_job_characters",
+    "path": "/api/jobs/{id}/characters"
+  },
+  {
+    "method": "GET",
+    "name": "job_files",
+    "path": "/api/jobs/{id}/files"
+  },
+  {
+    "method": "POST",
+    "name": "kill_job_admin",
+    "path": "/api/jobs/{id}/kill"
+  },
+  {
+    "method": "GET",
+    "name": "logs_alias",
+    "path": "/api/jobs/{id}/logs"
+  },
+  {
+    "method": "GET",
+    "name": "stream_logs",
+    "path": "/api/jobs/{id}/logs/stream"
+  },
+  {
+    "method": "GET",
+    "name": "tail_logs",
+    "path": "/api/jobs/{id}/logs/tail"
+  },
+  {
+    "method": "GET",
+    "name": "job_outputs_alias",
+    "path": "/api/jobs/{id}/outputs"
+  },
+  {
+    "method": "GET",
+    "name": "get_job_overrides",
+    "path": "/api/jobs/{id}/overrides"
+  },
+  {
+    "method": "PUT",
+    "name": "put_job_overrides",
+    "path": "/api/jobs/{id}/overrides"
+  },
+  {
+    "method": "POST",
+    "name": "apply_job_overrides",
+    "path": "/api/jobs/{id}/overrides/apply"
+  },
+  {
+    "method": "GET",
+    "name": "get_job_music_regions_effective",
+    "path": "/api/jobs/{id}/overrides/music/effective"
+  },
+  {
+    "method": "POST",
+    "name": "set_speaker_overrides_from_ui",
+    "path": "/api/jobs/{id}/overrides/speaker"
+  },
+  {
+    "method": "POST",
+    "name": "pause_job",
+    "path": "/api/jobs/{id}/pause"
+  },
+  {
+    "method": "GET",
+    "name": "job_qrcode",
+    "path": "/api/jobs/{id}/qrcode"
+  },
+  {
+    "method": "POST",
+    "name": "resume_job",
+    "path": "/api/jobs/{id}/resume"
+  },
+  {
+    "method": "GET",
+    "name": "get_job_review_segments",
+    "path": "/api/jobs/{id}/review/segments"
+  },
+  {
+    "method": "GET",
+    "name": "get_job_review_audio",
+    "path": "/api/jobs/{id}/review/segments/{segment_id}/audio"
+  },
+  {
+    "method": "POST",
+    "name": "post_job_review_edit",
+    "path": "/api/jobs/{id}/review/segments/{segment_id}/edit"
+  },
+  {
+    "method": "POST",
+    "name": "post_job_review_helper",
+    "path": "/api/jobs/{id}/review/segments/{segment_id}/helper"
+  },
+  {
+    "method": "POST",
+    "name": "post_job_review_lock",
+    "path": "/api/jobs/{id}/review/segments/{segment_id}/lock"
+  },
+  {
+    "method": "POST",
+    "name": "post_job_review_regen",
+    "path": "/api/jobs/{id}/review/segments/{segment_id}/regen"
+  },
+  {
+    "method": "POST",
+    "name": "post_job_review_unlock",
+    "path": "/api/jobs/{id}/review/segments/{segment_id}/unlock"
+  },
+  {
+    "method": "GET",
+    "name": "job_stream_chunk",
+    "path": "/api/jobs/{id}/stream/chunks/{chunk_idx}"
+  },
+  {
+    "method": "GET",
+    "name": "job_stream_manifest",
+    "path": "/api/jobs/{id}/stream/manifest"
+  },
+  {
+    "method": "PUT",
+    "name": "set_job_tags",
+    "path": "/api/jobs/{id}/tags"
+  },
+  {
+    "method": "GET",
+    "name": "get_job_timeline",
+    "path": "/api/jobs/{id}/timeline"
+  },
+  {
+    "method": "GET",
+    "name": "get_job_transcript",
+    "path": "/api/jobs/{id}/transcript"
+  },
+  {
+    "method": "PUT",
+    "name": "put_job_transcript",
+    "path": "/api/jobs/{id}/transcript"
+  },
+  {
+    "method": "POST",
+    "name": "synthesize_from_approved",
+    "path": "/api/jobs/{id}/transcript/synthesize"
+  },
+  {
+    "method": "POST",
+    "name": "rerun_two_pass_admin",
+    "path": "/api/jobs/{id}/two_pass/rerun"
+  },
+  {
+    "method": "POST",
+    "name": "unarchive_job",
+    "path": "/api/jobs/{id}/unarchive"
+  },
+  {
+    "method": "GET",
+    "name": "get_job_voice_refs",
+    "path": "/api/jobs/{id}/voice_refs"
+  },
+  {
+    "method": "GET",
+    "name": "get_job_voice_ref_audio",
+    "path": "/api/jobs/{id}/voice_refs/{speaker_id}/audio"
+  },
+  {
+    "method": "POST",
+    "name": "post_job_voice_ref_override",
+    "path": "/api/jobs/{id}/voice_refs/{speaker_id}/override"
+  },
+  {
+    "method": "GET",
+    "name": "get_job_speaker_mapping",
+    "path": "/api/jobs/{job_id}/speaker-mapping"
+  },
+  {
+    "method": "POST",
+    "name": "post_job_speaker_mapping",
+    "path": "/api/jobs/{job_id}/speaker-mapping"
+  },
+  {
+    "method": "GET",
+    "name": "library_series",
+    "path": "/api/library/series"
+  },
+  {
+    "method": "GET",
+    "name": "library_seasons",
+    "path": "/api/library/{series_slug}/seasons"
+  },
+  {
+    "method": "GET",
+    "name": "library_episodes",
+    "path": "/api/library/{series_slug}/{season_number}/episodes"
+  },
+  {
+    "method": "DELETE",
+    "name": "delete_library_episode",
+    "path": "/api/library/{series_slug}/{season_number}/{episode_number}"
+  },
+  {
+    "method": "GET",
+    "name": "list_presets",
+    "path": "/api/presets"
+  },
+  {
+    "method": "POST",
+    "name": "create_preset",
+    "path": "/api/presets"
+  },
+  {
+    "method": "DELETE",
+    "name": "delete_preset",
+    "path": "/api/presets/{id}"
+  },
+  {
+    "method": "GET",
+    "name": "list_project_profiles",
+    "path": "/api/project-profiles"
+  },
+  {
+    "method": "GET",
+    "name": "list_projects",
+    "path": "/api/projects"
+  },
+  {
+    "method": "POST",
+    "name": "create_project",
+    "path": "/api/projects"
+  },
+  {
+    "method": "DELETE",
+    "name": "delete_project",
+    "path": "/api/projects/{id}"
+  },
+  {
+    "method": "GET",
+    "name": "runtime_models",
+    "path": "/api/runtime/models"
+  },
+  {
+    "method": "POST",
+    "name": "runtime_models_prewarm",
+    "path": "/api/runtime/models/prewarm"
+  },
+  {
+    "method": "GET",
+    "name": "runtime_queue_status",
+    "path": "/api/runtime/queue"
+  },
+  {
+    "method": "GET",
+    "name": "runtime_state",
+    "path": "/api/runtime/state"
+  },
+  {
+    "method": "GET",
+    "name": "list_series_characters",
+    "path": "/api/series/{series_slug}/characters"
+  },
+  {
+    "method": "POST",
+    "name": "create_series_character",
+    "path": "/api/series/{series_slug}/characters"
+  },
+  {
+    "method": "DELETE",
+    "name": "delete_series_character",
+    "path": "/api/series/{series_slug}/characters/{character_slug}"
+  },
+  {
+    "method": "GET",
+    "name": "get_series_character_audio",
+    "path": "/api/series/{series_slug}/characters/{character_slug}/audio"
+  },
+  {
+    "method": "POST",
+    "name": "promote_series_character_ref_from_job",
+    "path": "/api/series/{series_slug}/characters/{character_slug}/promote-ref"
+  },
+  {
+    "method": "POST",
+    "name": "upload_series_character_ref",
+    "path": "/api/series/{series_slug}/characters/{character_slug}/ref"
+  },
+  {
+    "method": "GET",
+    "name": "get_settings_me",
+    "path": "/api/settings"
+  },
+  {
+    "method": "PUT",
+    "name": "put_settings_me",
+    "path": "/api/settings"
+  },
+  {
+    "method": "GET",
+    "name": "system_readiness",
+    "path": "/api/system/readiness"
+  },
+  {
+    "method": "POST",
+    "name": "uploads_init",
+    "path": "/api/uploads/init"
+  },
+  {
+    "method": "GET",
+    "name": "uploads_status",
+    "path": "/api/uploads/{upload_id}"
+  },
+  {
+    "method": "POST",
+    "name": "uploads_chunk",
+    "path": "/api/uploads/{upload_id}/chunk"
+  },
+  {
+    "method": "POST",
+    "name": "uploads_complete",
+    "path": "/api/uploads/{upload_id}/complete"
+  },
+  {
+    "method": "GET",
+    "name": "uploads_status_minimal",
+    "path": "/api/uploads/{upload_id}/status"
+  },
+  {
+    "method": "POST",
+    "name": "login",
+    "path": "/auth/login"
+  },
+  {
+    "method": "POST",
+    "name": "logout",
+    "path": "/auth/logout"
+  },
+  {
+    "method": "POST",
+    "name": "qr_init",
+    "path": "/auth/qr/init"
+  },
+  {
+    "method": "POST",
+    "name": "qr_redeem",
+    "path": "/auth/qr/redeem"
+  },
+  {
+    "method": "POST",
+    "name": "refresh",
+    "path": "/auth/refresh"
+  },
+  {
+    "method": "GET",
+    "name": "list_sessions",
+    "path": "/auth/sessions"
+  },
+  {
+    "method": "POST",
+    "name": "revoke_all_sessions",
+    "path": "/auth/sessions/revoke_all"
+  },
+  {
+    "method": "POST",
+    "name": "revoke_session",
+    "path": "/auth/sessions/{device_id}/revoke"
+  },
+  {
+    "method": "POST",
+    "name": "totp_setup",
+    "path": "/auth/totp/setup"
+  },
+  {
+    "method": "POST",
+    "name": "totp_verify",
+    "path": "/auth/totp/verify"
+  },
+  {
+    "method": "GET",
+    "name": "swagger_ui_html",
+    "path": "/docs"
+  },
+  {
+    "method": "HEAD",
+    "name": "swagger_ui_html",
+    "path": "/docs"
+  },
+  {
+    "method": "GET",
+    "name": "swagger_ui_redirect",
+    "path": "/docs/oauth2-redirect"
+  },
+  {
+    "method": "HEAD",
+    "name": "swagger_ui_redirect",
+    "path": "/docs/oauth2-redirect"
+  },
+  {
+    "method": "GET",
+    "name": "sse_job",
+    "path": "/events/jobs/{id}"
+  },
+  {
+    "method": "GET",
+    "name": "files",
+    "path": "/files/{path:path}"
+  },
+  {
+    "method": "GET",
+    "name": "health",
+    "path": "/health"
+  },
+  {
+    "method": "GET",
+    "name": "healthz",
+    "path": "/healthz"
+  },
+  {
+    "method": "GET",
+    "name": "list_keys",
+    "path": "/keys"
+  },
+  {
+    "method": "POST",
+    "name": "create_key",
+    "path": "/keys"
+  },
+  {
+    "method": "POST",
+    "name": "revoke_key",
+    "path": "/keys/{key_id}/revoke"
+  },
+  {
+    "method": "GET",
+    "name": "login_redirect",
+    "path": "/login"
+  },
+  {
+    "method": "GET",
+    "name": "metrics",
+    "path": "/metrics"
+  },
+  {
+    "method": "GET",
+    "name": "openapi",
+    "path": "/openapi.json"
+  },
+  {
+    "method": "HEAD",
+    "name": "openapi",
+    "path": "/openapi.json"
+  },
+  {
+    "method": "GET",
+    "name": "readyz",
+    "path": "/readyz"
+  },
+  {
+    "method": "GET",
+    "name": "redoc_html",
+    "path": "/redoc"
+  },
+  {
+    "method": "HEAD",
+    "name": "redoc_html",
+    "path": "/redoc"
+  },
+  {
+    "method": "MOUNT",
+    "name": "static",
+    "path": "/static"
+  },
+  {
+    "method": "GET",
+    "name": "ui_system_readiness",
+    "path": "/system/readiness"
+  },
+  {
+    "method": "GET",
+    "name": "ui_admin_queue",
+    "path": "/ui/admin/queue"
+  },
+  {
+    "method": "GET",
+    "name": "ui_dashboard",
+    "path": "/ui/dashboard"
+  },
+  {
+    "method": "GET",
+    "name": "ui_health",
+    "path": "/ui/health"
+  },
+  {
+    "method": "GET",
+    "name": "ui_job_detail",
+    "path": "/ui/jobs/{job_id}"
+  },
+  {
+    "method": "GET",
+    "name": "ui_library_series",
+    "path": "/ui/library"
+  },
+  {
+    "method": "GET",
+    "name": "ui_library_seasons",
+    "path": "/ui/library/{series_slug}"
+  },
+  {
+    "method": "GET",
+    "name": "ui_library_episodes",
+    "path": "/ui/library/{series_slug}/season/{season_number}"
+  },
+  {
+    "method": "GET",
+    "name": "ui_library_episode_detail",
+    "path": "/ui/library/{series_slug}/season/{season_number}/episode/{episode_number}"
+  },
+  {
+    "method": "GET",
+    "name": "ui_login",
+    "path": "/ui/login"
+  },
+  {
+    "method": "GET",
+    "name": "ui_models",
+    "path": "/ui/models"
+  },
+  {
+    "method": "GET",
+    "name": "ui_jobs_table",
+    "path": "/ui/partials/jobs_table"
+  },
+  {
+    "method": "GET",
+    "name": "ui_presets",
+    "path": "/ui/presets"
+  },
+  {
+    "method": "GET",
+    "name": "ui_projects",
+    "path": "/ui/projects"
+  },
+  {
+    "method": "GET",
+    "name": "ui_qr_redeem",
+    "path": "/ui/qr"
+  },
+  {
+    "method": "GET",
+    "name": "ui_settings",
+    "path": "/ui/settings"
+  },
+  {
+    "method": "GET",
+    "name": "ui_settings_notifications",
+    "path": "/ui/settings/notifications"
+  },
+  {
+    "method": "GET",
+    "name": "ui_upload",
+    "path": "/ui/upload"
+  },
+  {
+    "method": "GET",
+    "name": "video",
+    "path": "/video/{job}"
+  },
+  {
+    "method": "GET",
+    "name": "webrtc_demo",
+    "path": "/webrtc/demo"
+  },
+  {
+    "method": "POST",
+    "name": "webrtc_offer",
+    "path": "/webrtc/offer"
+  },
+  {
+    "method": "WEBSOCKET",
+    "name": "ws_job",
+    "path": "/ws/jobs/{id}"
+  }
+]
