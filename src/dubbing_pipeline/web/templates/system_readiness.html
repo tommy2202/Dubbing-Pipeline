@@ -1,0 +1,77 @@
+{% extends "_base.html" %}
+
+{% block title %}System Readiness • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div x-data="readinessPage()" x-init="load()">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold">System Readiness</h1>
+      <p class="mt-1 text-sm text-slate-400">Admin-only capability matrix (no secrets shown).</p>
+    </div>
+    <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" @click="load()">Refresh</button>
+  </div>
+
+  <div class="mt-4 text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
+  <div class="mt-4 text-sm text-slate-500" x-show="loading">Loading…</div>
+
+  <div class="mt-6 grid gap-4 sm:grid-cols-2" x-show="!loading">
+    <template x-for="item in items" :key="item.key">
+      <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="text-sm text-slate-200" x-text="item.label"></div>
+          <span class="rounded border px-2 py-0.5 text-xs"
+                :class="badgeClass(item.status)"
+                x-text="item.status"></span>
+        </div>
+        <div class="mt-2 text-xs text-slate-400" x-text="item.reason || ''"></div>
+        <div class="mt-2 text-xs text-slate-500" x-show="item.action" x-cloak>
+          <span class="text-slate-400">Action:</span>
+          <span x-text="item.action"></span>
+        </div>
+        <details class="mt-3 text-xs text-slate-400" x-show="item.details && Object.keys(item.details || {}).length" x-cloak>
+          <summary class="cursor-pointer">Details</summary>
+          <pre class="mt-2 whitespace-pre-wrap text-slate-300" x-text="formatDetails(item.details)"></pre>
+        </details>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+  function readinessPage() {
+    return {
+      items: [],
+      loading: false,
+      error: "",
+      async load() {
+        this.loading = true;
+        this.error = "";
+        try {
+          const r = await fetch("/api/system/readiness", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.error = d.detail || ("Failed to load (" + r.status + ")");
+            this.loading = false;
+            return;
+          }
+          this.items = Array.isArray(d.items) ? d.items : [];
+        } catch (e) {
+          this.error = "Failed to load readiness";
+        } finally {
+          this.loading = false;
+        }
+      },
+      badgeClass(status) {
+        const s = String(status || "").toLowerCase();
+        if (s === "ok") return "bg-emerald-900/30 border-emerald-800 text-emerald-200";
+        if (s === "missing") return "bg-red-900/30 border-red-800 text-red-200";
+        return "bg-amber-900/30 border-amber-800 text-amber-200";
+      },
+      formatDetails(d) {
+        try { return JSON.stringify(d || {}, null, 2); } catch (e) { return ""; }
+      },
+    };
+  }
+</script>
+{% endblock %}

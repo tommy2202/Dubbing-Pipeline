@@ -26,6 +26,7 @@ from dubbing_pipeline.api.routes_admin import router as admin_router
 from dubbing_pipeline.api.routes_keys import router as keys_router
 from dubbing_pipeline.api.routes_library import router as library_router
 from dubbing_pipeline.api.routes_runtime import router as runtime_router
+from dubbing_pipeline.api.routes_system import router as system_router
 from dubbing_pipeline.api.routes_settings import UserSettingsStore
 from dubbing_pipeline.api.routes_settings import router as settings_router
 from dubbing_pipeline.config import get_settings
@@ -44,6 +45,7 @@ from dubbing_pipeline.utils.ratelimit import RateLimiter
 from dubbing_pipeline.queue.manager import AutoQueueBackend
 from dubbing_pipeline.web.routes_jobs import router as jobs_router
 from dubbing_pipeline.web.routes_ui import router as ui_router
+from dubbing_pipeline.web.routes_system import router as system_ui_router
 from dubbing_pipeline.web.routes_webrtc import router as webrtc_router
 
 
@@ -254,11 +256,13 @@ app.include_router(audit_router)
 app.include_router(admin_router)
 app.include_router(keys_router)
 app.include_router(runtime_router)
+app.include_router(system_router)
 app.include_router(settings_router)
 app.include_router(library_router)
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
 app.include_router(ui_router)
+app.include_router(system_ui_router)
 
 
 def _is_https_request(request: Request) -> bool:

@@ -79,6 +79,16 @@ Fix options:
 
 ---
 
+## System readiness dashboard
+
+If you are unsure which capabilities are available, use the admin readiness page:
+
+- `http://<SERVER>/system/readiness`
+
+It reports status (OK/Missing/Disabled), reason, and next steps without showing secrets.
+
+---
+
 ## Diarization not available
 
 Symptoms:
