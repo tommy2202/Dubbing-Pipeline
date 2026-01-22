@@ -111,6 +111,47 @@
         </template>
       </div>
     </div>
+
+    <!-- Timeline -->
+    <div class="mt-4 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="text-sm text-slate-300">Job timeline</div>
+        <div class="text-xs text-slate-400">
+          <a class="underline" href="#jobLogs">View logs</a>
+        </div>
+      </div>
+      <div class="mt-2 text-xs text-slate-500" x-show="lastLogLine" x-cloak>
+        <span class="text-slate-400">Last log:</span>
+        <span x-text="lastLogLine"></span>
+        <a class="underline ml-2" :href="logTailUrl" target="_blank" rel="noreferrer">Full logs</a>
+      </div>
+      <div class="mt-2 text-xs text-slate-500" x-show="!lastLogLine && !timelineError">
+        No log lines yet.
+      </div>
+      <div class="mt-2 text-xs text-red-200" x-show="timelineError" x-cloak x-text="timelineError"></div>
+      <div class="mt-4 space-y-3" x-show="timeline && timeline.length" x-cloak>
+        <template x-for="st in timeline" :key="st.key">
+          <div class="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="text-sm text-slate-200" x-text="st.label"></div>
+              <span class="rounded border px-2 py-0.5 text-xs"
+                    :class="stageBadgeClass(st.status)"
+                    x-text="st.status_label || st.status"></span>
+            </div>
+            <div class="mt-1 text-xs text-slate-500" x-show="st.started_at">
+              <span x-text="formatStageTime(st.started_at, st.ended_at)"></span>
+            </div>
+            <div class="mt-1 text-xs text-slate-500" x-show="st.duration_s">
+              <span class="text-slate-400">Duration:</span>
+              <span x-text="formatDuration(st.duration_s)"></span>
+            </div>
+            <div class="mt-1 text-xs text-amber-200" x-show="st.status==='skipped' && st.reason">
+              <span x-text="'Skipped (' + st.reason + ')'"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
   </div>
 
   <!-- Quality -->
@@ -534,7 +575,7 @@
   </div>
 
   <!-- Logs -->
-  <div class="mt-4" x-show="activeTab==='overview'" x-cloak>
+  <div class="mt-4" x-show="activeTab==='overview'" x-cloak id="jobLogs">
     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
       <div class="text-sm text-slate-300">Logs (live)</div>
       <div class="mt-3 h-80 overflow-auto rounded-lg bg-black/40 border border-slate-800 p-3 text-xs font-mono text-slate-200"
@@ -666,6 +707,12 @@
     return {
       jobId,
       job: null,
+      timeline: [],
+      timelineError: "",
+      lastLogLine: "",
+      logTailUrl: "",
+      logStreamUrl: "",
+      _timelineLastFetch: 0,
       currentUserId: {% if user %}"{{ user.id }}"{% else %}""{% endif %},
       currentUserRole: {% if user and user.role and user.role.value %}"{{ user.role.value }}"{% else %}""{% endif %},
       activeTab: "artifacts",
@@ -752,6 +799,7 @@
       _playerInit: false,
       async init() {
         await this.refresh();
+        await this.loadTimeline(true);
         await this.loadVoiceMap();
         await this.loadFiles();
         await this.loadQA();
@@ -899,6 +947,58 @@
           if (!r.ok) return;
           this.job = await r.json();
         } catch (e) {}
+        await this.loadTimeline();
+      },
+      async loadTimeline(force) {
+        const now = Date.now();
+        if (!force && (now - this._timelineLastFetch) < 1200) return;
+        this._timelineLastFetch = now;
+        this.timelineError = "";
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/timeline", { credentials: "include" });
+          if (!r.ok) {
+            this.timelineError = "Timeline unavailable (" + r.status + ")";
+            return;
+          }
+          const d = await r.json();
+          this.timeline = Array.isArray(d.stages) ? d.stages : [];
+          this.lastLogLine = String(d.last_log_line || "");
+          this.logTailUrl = String(d.log_tail_url || "");
+          this.logStreamUrl = String(d.log_stream_url || "");
+        } catch (e) {
+          this.timelineError = "Timeline unavailable";
+        }
+      },
+      stageBadgeClass(status) {
+        const s = String(status || "").toLowerCase();
+        if (s === "running") return "bg-indigo-900/30 border-indigo-800 text-indigo-200";
+        if (s === "done") return "bg-emerald-900/30 border-emerald-800 text-emerald-200";
+        if (s === "skipped") return "bg-amber-900/30 border-amber-800 text-amber-200";
+        return "bg-slate-900/60 border-slate-800 text-slate-200";
+      },
+      formatStageTime(startTs, endTs) {
+        try {
+          const s = Number(startTs || 0);
+          const e = endTs ? Number(endTs || 0) : null;
+          const sIso = s ? new Date(s * 1000).toISOString() : "";
+          if (!e) return sIso ? ("Started " + sIso) : "";
+          const eIso = new Date(e * 1000).toISOString();
+          return sIso ? ("Started " + sIso + " → " + eIso) : eIso;
+        } catch (e) {
+          return "";
+        }
+      },
+      formatDuration(sec) {
+        try {
+          const s = Math.max(0, Number(sec || 0));
+          if (!Number.isFinite(s) || s <= 0) return "";
+          if (s < 60) return s.toFixed(1) + "s";
+          const m = Math.floor(s / 60);
+          const r = s - (m * 60);
+          return m + "m " + r.toFixed(0) + "s";
+        } catch (e) {
+          return "";
+        }
       },
       async doAction(action) {
         try {

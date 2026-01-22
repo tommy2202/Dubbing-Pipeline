@@ -40,6 +40,33 @@ def _ckpt_path_from(meta: dict[str, Any] | None, *, ckpt_path: Path | None = Non
     raise RuntimeError("checkpoint path not provided (pass ckpt_path=... or meta['work_dir'])")
 
 
+def _init_ckpt(job_id: str, cur: dict[str, Any] | None) -> dict[str, Any]:
+    base = cur or {"version": 1, "job_id": job_id, "stages": {}}
+    if not isinstance(base, dict):
+        base = {"version": 1, "job_id": job_id, "stages": {}}
+    if not isinstance(base.get("stages"), dict):
+        base["stages"] = {}
+    base["job_id"] = job_id
+    return base
+
+
+def _write_ckpt_data(path: Path, data: dict[str, Any]) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _append_event(entry: dict[str, Any], kind: str, *, ts: float, reason: str | None = None) -> None:
+    events = entry.get("events")
+    if not isinstance(events, list):
+        events = []
+    ev = {"type": str(kind), "ts": float(ts)}
+    if reason:
+        ev["reason"] = str(reason)
+    events.append(ev)
+    entry["events"] = events
+
+
 def read_ckpt(
     job_id: str, *, ckpt_path: Path | None = None, meta: dict[str, Any] | None = None
 ) -> dict[str, Any] | None:
@@ -105,9 +132,7 @@ def write_ckpt(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # read existing
-    cur = read_ckpt(job_id, ckpt_path=path) or {"version": 1, "job_id": job_id, "stages": {}}
-    if not isinstance(cur.get("stages"), dict):
-        cur["stages"] = {}
+    cur = _init_ckpt(job_id, read_ckpt(job_id, ckpt_path=path))
 
     recs: dict[str, Any] = {}
     for k, p in (artifacts or {}).items():
@@ -116,15 +141,81 @@ def write_ckpt(
             continue
         recs[str(k)] = _artifact_record(pp)
 
-    entry = {"done": True, "done_at": time.time(), "artifacts": recs, "meta": (meta or {})}
+    now = time.time()
+    prior = cur.get("stages", {}).get(str(stage))
+    prior = dict(prior) if isinstance(prior, dict) else {}
+    entry = {"done": True, "done_at": now, "artifacts": recs, "meta": (meta or {})}
+    if prior.get("started_at"):
+        entry["started_at"] = prior.get("started_at")
+    if prior.get("skipped_at"):
+        entry["skipped_at"] = prior.get("skipped_at")
+    if prior.get("skip_reason"):
+        entry["skip_reason"] = prior.get("skip_reason")
+    status = "skipped" if prior.get("skip_reason") or prior.get("status") == "skipped" else "done"
+    entry["status"] = status
+    _append_event(entry, "stage_finished", ts=now)
     cur["job_id"] = job_id
     cur["last_stage"] = str(stage)
-    cur["updated_at"] = time.time()
+    cur["updated_at"] = now
     cur["stages"][str(stage)] = entry
 
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cur, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
+    _write_ckpt_data(path, cur)
+    return path
+
+
+def record_stage_started(
+    job_id: str,
+    stage: str,
+    *,
+    meta: dict[str, Any] | None = None,
+    ckpt_path: Path | None = None,
+) -> Path:
+    path = _ckpt_path_from(meta, ckpt_path=ckpt_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cur = _init_ckpt(job_id, read_ckpt(job_id, ckpt_path=path))
+    entry = cur.get("stages", {}).get(str(stage))
+    entry = dict(entry) if isinstance(entry, dict) else {}
+    now = time.time()
+    if not entry.get("started_at"):
+        entry["started_at"] = now
+    entry["status"] = "started"
+    if isinstance(meta, dict):
+        em = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        em.update(meta)
+        entry["meta"] = em
+    _append_event(entry, "stage_started", ts=now)
+    cur["updated_at"] = now
+    cur["stages"][str(stage)] = entry
+    _write_ckpt_data(path, cur)
+    return path
+
+
+def record_stage_skipped(
+    job_id: str,
+    stage: str,
+    reason: str,
+    *,
+    meta: dict[str, Any] | None = None,
+    ckpt_path: Path | None = None,
+) -> Path:
+    path = _ckpt_path_from(meta, ckpt_path=ckpt_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cur = _init_ckpt(job_id, read_ckpt(job_id, ckpt_path=path))
+    entry = cur.get("stages", {}).get(str(stage))
+    entry = dict(entry) if isinstance(entry, dict) else {}
+    now = time.time()
+    entry.setdefault("started_at", now)
+    entry["skipped_at"] = now
+    entry["skip_reason"] = str(reason or "skipped")
+    entry["status"] = "skipped"
+    if isinstance(meta, dict):
+        em = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        em.update(meta)
+        entry["meta"] = em
+    _append_event(entry, "stage_skipped", ts=now, reason=entry["skip_reason"])
+    cur["updated_at"] = now
+    cur["stages"][str(stage)] = entry
+    _write_ckpt_data(path, cur)
     return path
 
 

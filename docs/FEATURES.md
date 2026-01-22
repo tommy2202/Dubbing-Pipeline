@@ -39,6 +39,12 @@ These are normalized and stored as:
 - `season_number` (int)
 - `episode_number` (int)
 
+### Job timeline (web UI)
+- **What it does**: shows ordered stage progress (queued → extract → ASR → translate → TTS → mix → export)
+  with timestamps, durations, and skip reasons.
+- **Where it shows**: `/ui/jobs/<job_id>` in the “Progress/Logs” tab.
+- **How it works**: uses existing checkpoint + log metadata (no separate status system).
+
 ---
 
 ## Modes: high / medium / low
