@@ -162,6 +162,14 @@ def main() -> int:
                 job_id="job_a2",
                 opened_at=20.0,
             )
+            store.record_view(
+                user_id=user_b.id,
+                series_slug="charlie",
+                season_number=3,
+                episode_number=1,
+                job_id="job_b1",
+                opened_at=30.0,
+            )
 
             r = c.get("/api/library/continue?limit=10", headers=headers_a)
             assert r.status_code == 200, r.text
