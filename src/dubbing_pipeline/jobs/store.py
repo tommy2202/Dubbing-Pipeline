@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,9 @@ class JobStore:
         # Schema for persistent character voice + per-job speaker mapping.
         with suppress(Exception):
             self._init_voice_schema()
+        # Schema for user view history (library continue panel).
+        with suppress(Exception):
+            self._init_view_history_schema()
 
     def _jobs(self) -> SqliteDict:
         # Open/close per operation (safe + avoids cross-thread SQLite handle issues)
@@ -184,6 +188,110 @@ class JobStore:
                 con.commit()
             finally:
                 con.close()
+
+    def _init_view_history_schema(self) -> None:
+        """
+        Create/migrate the SQL table used for minimal view history (continue panel).
+        """
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS view_history (
+                      user_id TEXT NOT NULL,
+                      series_slug TEXT NOT NULL,
+                      season_number INTEGER NOT NULL,
+                      episode_number INTEGER NOT NULL,
+                      job_id TEXT,
+                      last_opened_at REAL NOT NULL,
+                      PRIMARY KEY(user_id, series_slug, season_number, episode_number)
+                    );
+                    """
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_view_history_user_last ON view_history(user_id, last_opened_at);"
+                )
+                con.commit()
+            finally:
+                con.close()
+
+    def record_view(
+        self,
+        *,
+        user_id: str,
+        series_slug: str,
+        season_number: int,
+        episode_number: int,
+        job_id: str | None = None,
+        opened_at: float | None = None,
+    ) -> None:
+        uid = str(user_id or "").strip()
+        slug = str(series_slug or "").strip()
+        if not uid or not slug:
+            return
+        try:
+            season = int(season_number)
+            episode = int(episode_number)
+        except Exception:
+            return
+        if season < 1 or episode < 1:
+            return
+        ts = float(opened_at or time.time())
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO view_history (
+                      user_id, series_slug, season_number, episode_number, job_id, last_opened_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, series_slug, season_number, episode_number)
+                    DO UPDATE SET job_id=excluded.job_id, last_opened_at=excluded.last_opened_at;
+                    """,
+                    (
+                        uid,
+                        slug,
+                        int(season),
+                        int(episode),
+                        str(job_id) if job_id else None,
+                        float(ts),
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+    def list_view_history(self, *, user_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        uid = str(user_id or "").strip()
+        if not uid:
+            return []
+        lim = max(1, min(100, int(limit)))
+        con = self._conn()
+        try:
+            rows = con.execute(
+                """
+                SELECT user_id, series_slug, season_number, episode_number, job_id, last_opened_at
+                FROM view_history
+                WHERE user_id = ?
+                ORDER BY last_opened_at DESC
+                LIMIT ?;
+                """,
+                (uid, lim),
+            ).fetchall()
+            return [
+                {
+                    "user_id": str(r["user_id"]),
+                    "series_slug": str(r["series_slug"]),
+                    "season_number": int(r["season_number"] or 0),
+                    "episode_number": int(r["episode_number"] or 0),
+                    "job_id": str(r["job_id"] or "") or None,
+                    "last_opened_at": float(r["last_opened_at"] or 0.0),
+                }
+                for r in rows
+            ]
+        finally:
+            con.close()
 
     # --- persistent character voices ---
     def upsert_character(

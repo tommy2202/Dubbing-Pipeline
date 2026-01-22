@@ -14,6 +14,7 @@ from dubbing_pipeline.api.routes_settings import UserSettingsStore
 from dubbing_pipeline.api.security import issue_csrf_token
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import Job
+from dubbing_pipeline.library import queries
 from dubbing_pipeline.library.paths import get_job_output_root
 from dubbing_pipeline.utils.io import read_json
 from dubbing_pipeline.ops import audit
@@ -244,6 +245,21 @@ async def ui_library_episode_detail(
             season_number=int(season_number),
             episode_number=int(episode_number),
         )
+        with suppress(Exception):
+            job_id = queries.latest_episode_job_id(
+                store=store,
+                ident=ident,
+                series_slug=series_slug,
+                season_number=int(season_number),
+                episode_number=int(episode_number),
+            )
+            store.record_view(
+                user_id=str(ident.user.id),
+                series_slug=series_slug,
+                season_number=int(season_number),
+                episode_number=int(episode_number),
+                job_id=job_id,
+            )
     except HTTPException:
         raise
     except Exception:

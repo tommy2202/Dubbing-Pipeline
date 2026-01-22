@@ -20,6 +20,16 @@
     </div>
     <div class="flex flex-wrap items-end gap-2">
       <div>
+        <label class="block text-xs text-slate-500" for="seriesOrder">Sort</label>
+        <select id="seriesOrder"
+                class="mt-1 rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
+                x-model="order"
+                @change="reload(true)">
+          <option value="title">Series A-Z</option>
+          <option value="recent">Recently added</option>
+        </select>
+      </div>
+      <div>
         <label class="block text-xs text-slate-500" for="seriesSearch">Search</label>
         <input id="seriesSearch"
                class="mt-1 w-[min(92vw,280px)] rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
@@ -43,8 +53,74 @@
     </div>
   </div>
 
+  <div class="mt-4 grid gap-4 lg:grid-cols-2">
+    <div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+      <div class="flex items-center justify-between gap-2">
+        <div class="text-sm text-slate-300">Continue</div>
+        <div class="text-xs text-slate-500" x-text="continueItems.length ? (continueItems.length + ' items') : ''"></div>
+      </div>
+      <div class="mt-2 text-xs text-slate-500">Last opened items for you.</div>
+      <div class="mt-3 space-y-2" x-show="continueLoading" x-cloak>
+        <div class="text-xs text-slate-500">Loading…</div>
+      </div>
+      <div class="mt-3 space-y-2" x-show="!continueLoading" x-cloak>
+        <template x-for="c in continueItems" :key="c.key">
+          <a class="block rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3 hover:bg-slate-950/60"
+             :href="c.url">
+            <div class="flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <div class="text-sm font-medium truncate" x-text="c.title"></div>
+                <div class="mt-1 text-xs text-slate-500" x-text="c.subtitle"></div>
+              </div>
+              <div class="text-[11px] text-slate-500 whitespace-nowrap" x-text="c.opened"></div>
+            </div>
+          </a>
+        </template>
+        <div class="text-sm text-slate-500" x-show="continueItems.length===0">No recent views yet.</div>
+      </div>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+      <div class="flex items-center justify-between gap-2">
+        <div class="text-sm text-slate-300">Recently added</div>
+        <div class="text-xs text-slate-500" x-text="recentItems.length ? (recentItems.length + ' items') : ''"></div>
+      </div>
+      <div class="mt-2 text-xs text-slate-500">Newest episodes in your library.</div>
+      <div class="mt-3 space-y-2" x-show="recentLoading" x-cloak>
+        <div class="text-xs text-slate-500">Loading…</div>
+      </div>
+      <div class="mt-3 space-y-2" x-show="!recentLoading" x-cloak>
+        <template x-for="r in recentItems" :key="r.key">
+          <a class="block rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3 hover:bg-slate-950/60"
+             :href="r.url">
+            <div class="text-sm font-medium truncate" x-text="r.title"></div>
+            <div class="mt-1 text-xs text-slate-500" x-text="r.subtitle"></div>
+          </a>
+        </template>
+        <div class="text-sm text-slate-500" x-show="recentItems.length===0">No recent items.</div>
+      </div>
+    </div>
+  </div>
+
   <div class="mt-4" x-show="loading" x-cloak>
     <div class="text-sm text-slate-500">Loading…</div>
+  </div>
+
+  <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/30 p-4"
+       x-show="!loading && q && searchItems.length"
+       x-cloak>
+    <div class="flex items-center justify-between gap-2">
+      <div class="text-sm text-slate-300">Search results</div>
+      <div class="text-xs text-slate-500" x-text="searchItems.length + ' matches'"></div>
+    </div>
+    <div class="mt-3 grid gap-2 sm:grid-cols-2">
+      <template x-for="s in searchItems" :key="s.key">
+        <a class="block rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3 hover:bg-slate-950/60"
+           :href="s.url">
+          <div class="text-sm font-medium truncate" x-text="s.title"></div>
+          <div class="mt-1 text-xs text-slate-500" x-text="s.subtitle"></div>
+        </a>
+      </template>
+    </div>
   </div>
 
   <div class="mt-4 grid gap-3 sm:grid-cols-2" x-show="!loading" x-cloak>
@@ -80,9 +156,15 @@
     return {
       q: "",
       view: "all",
+      order: "title",
       limit: 50,
       offset: 0,
       items: [],
+      searchItems: [],
+      continueItems: [],
+      recentItems: [],
+      continueLoading: true,
+      recentLoading: true,
       loading: true,
       busy: false,
       async init() {
@@ -90,7 +172,9 @@
           const url = new URL(window.location.href);
           this.q = url.searchParams.get("q") || "";
           this.view = url.searchParams.get("view") || "all";
+          this.order = url.searchParams.get("order") || "title";
         } catch (e) {}
+        await Promise.all([this.loadContinue(), this.loadRecent()]);
         await this.reload(true);
       },
       async reload(reset) {
@@ -105,7 +189,7 @@
           const url = "/api/library/series"
             + "?limit=" + encodeURIComponent(this.limit)
             + "&offset=" + encodeURIComponent(this.offset)
-            + "&order=title"
+            + "&order=" + encodeURIComponent(this.order || "title")
             + (this.q ? ("&q=" + encodeURIComponent(this.q)) : "")
             + (this.view ? ("&view=" + encodeURIComponent(this.view)) : "");
           const r = await fetch(url, { credentials: "include" });
@@ -120,8 +204,10 @@
             const u = new URL(window.location.href);
             if (this.q) u.searchParams.set("q", this.q); else u.searchParams.delete("q");
             if (this.view && this.view !== "all") u.searchParams.set("view", this.view); else u.searchParams.delete("view");
+            if (this.order && this.order !== "title") u.searchParams.set("order", this.order); else u.searchParams.delete("order");
             window.history.replaceState({}, "", u.toString());
           } catch (e) {}
+          await Promise.all([this.loadSearch(), this.loadRecent()]);
         } catch (e) {
           window.showToast("Failed to load series", "error");
         } finally {
@@ -131,6 +217,78 @@
       },
       async loadMore() {
         await this.reload(false);
+      },
+      async loadSearch() {
+        if (!this.q) {
+          this.searchItems = [];
+          return;
+        }
+        try {
+          const url = "/api/library/search"
+            + "?q=" + encodeURIComponent(this.q)
+            + "&limit=50"
+            + "&offset=0"
+            + (this.view ? ("&view=" + encodeURIComponent(this.view)) : "");
+          const r = await fetch(url, { credentials: "include" });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          this.searchItems = Array.isArray(data) ? data.map((it) => ({
+            key: (it.series_slug || "") + ":" + (it.season_number || 0) + ":" + (it.episode_number || 0),
+            title: (it.series_title || it.series_slug || "Series") + " - S" + String(it.season_number || 0).padStart(2, "0") + "E" + String(it.episode_number || 0).padStart(2, "0"),
+            subtitle: (it.series_slug || "") + " / episode " + (it.episode_number || 0),
+            url: "/ui/library/" + encodeURIComponent(it.series_slug || "")
+              + "/season/" + encodeURIComponent(it.season_number || 0)
+              + "/episode/" + encodeURIComponent(it.episode_number || 0),
+          })) : [];
+        } catch (e) {
+          this.searchItems = [];
+        }
+      },
+      async loadContinue() {
+        this.continueLoading = true;
+        try {
+          const r = await fetch("/api/library/continue?limit=10", { credentials: "include" });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          const items = Array.isArray(data) ? data : [];
+          this.continueItems = items.map((it) => {
+            const opened = it.last_opened_at ? new Date(it.last_opened_at * 1000).toLocaleString() : "";
+            return {
+              key: (it.series_slug || "") + ":" + (it.season_number || 0) + ":" + (it.episode_number || 0),
+              title: (it.series_title || it.series_slug || "Series") + " - S" + String(it.season_number || 0).padStart(2, "0") + "E" + String(it.episode_number || 0).padStart(2, "0"),
+              subtitle: (it.series_slug || "") + " / episode " + (it.episode_number || 0),
+              opened,
+              url: "/ui/library/" + encodeURIComponent(it.series_slug || "")
+                + "/season/" + encodeURIComponent(it.season_number || 0)
+                + "/episode/" + encodeURIComponent(it.episode_number || 0),
+            };
+          });
+        } catch (e) {
+          this.continueItems = [];
+        } finally {
+          this.continueLoading = false;
+        }
+      },
+      async loadRecent() {
+        this.recentLoading = true;
+        try {
+          const r = await fetch("/api/library/recent?limit=10" + (this.view ? ("&view=" + encodeURIComponent(this.view)) : ""), { credentials: "include" });
+          if (!r.ok) throw new Error("failed (" + r.status + ")");
+          const data = await r.json();
+          const items = Array.isArray(data) ? data : [];
+          this.recentItems = items.map((it) => ({
+            key: (it.series_slug || "") + ":" + (it.season_number || 0) + ":" + (it.episode_number || 0),
+            title: (it.series_title || it.series_slug || "Series") + " - S" + String(it.season_number || 0).padStart(2, "0") + "E" + String(it.episode_number || 0).padStart(2, "0"),
+            subtitle: (it.series_slug || "") + " / episode " + (it.episode_number || 0),
+            url: "/ui/library/" + encodeURIComponent(it.series_slug || "")
+              + "/season/" + encodeURIComponent(it.season_number || 0)
+              + "/episode/" + encodeURIComponent(it.episode_number || 0),
+          }));
+        } catch (e) {
+          this.recentItems = [];
+        } finally {
+          this.recentLoading = false;
+        }
       }
     };
   }

@@ -336,6 +336,21 @@
   },
   {
     "method": "GET",
+    "name": "library_continue",
+    "path": "/api/library/continue"
+  },
+  {
+    "method": "GET",
+    "name": "library_recent",
+    "path": "/api/library/recent"
+  },
+  {
+    "method": "GET",
+    "name": "library_search",
+    "path": "/api/library/search"
+  },
+  {
+    "method": "GET",
     "name": "library_series",
     "path": "/api/library/series"
   },

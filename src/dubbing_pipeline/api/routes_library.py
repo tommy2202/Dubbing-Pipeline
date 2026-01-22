@@ -55,6 +55,101 @@ async def library_series(
     return items
 
 
+@router.get("/search")
+async def library_search(
+    request: Request,
+    q: str,
+    limit: int = 50,
+    offset: int = 0,
+    view: str = "all",
+    ident: Identity = Depends(require_scope("read:job")),
+):
+    store = _store(request)
+    items, meta = queries.search_library(
+        store=store, ident=ident, q=q, limit=limit, offset=offset, view=view
+    )
+    for it in items:
+        require_library_access(
+            store=store,
+            ident=ident,
+            series_slug=str(it.get("series_slug") or ""),
+            season_number=int(it.get("season_number") or 0),
+            episode_number=int(it.get("episode_number") or 0),
+        )
+    logger.info(
+        "library_search",
+        user_id=str(ident.user.id),
+        role=str(getattr(ident.user.role, "value", ident.user.role)),
+        count=len(items),
+        visibility_filter=str(meta.get("visibility_filter")),
+        limit=int(meta.get("limit") or limit),
+        offset=int(meta.get("offset") or offset),
+        q=str(meta.get("q") or ""),
+        view=str(view or "all"),
+    )
+    return items
+
+
+@router.get("/recent")
+async def library_recent(
+    request: Request,
+    limit: int = 20,
+    offset: int = 0,
+    view: str = "all",
+    ident: Identity = Depends(require_scope("read:job")),
+):
+    store = _store(request)
+    items, meta = queries.list_recent_episodes(
+        store=store, ident=ident, limit=limit, offset=offset, view=view
+    )
+    for it in items:
+        require_library_access(
+            store=store,
+            ident=ident,
+            series_slug=str(it.get("series_slug") or ""),
+            season_number=int(it.get("season_number") or 0),
+            episode_number=int(it.get("episode_number") or 0),
+        )
+    logger.info(
+        "library_recent",
+        user_id=str(ident.user.id),
+        role=str(getattr(ident.user.role, "value", ident.user.role)),
+        count=len(items),
+        visibility_filter=str(meta.get("visibility_filter")),
+        limit=int(meta.get("limit") or limit),
+        offset=int(meta.get("offset") or offset),
+        view=str(view or "all"),
+    )
+    return items
+
+
+@router.get("/continue")
+async def library_continue(
+    request: Request,
+    limit: int = 10,
+    ident: Identity = Depends(require_scope("read:job")),
+):
+    store = _store(request)
+    items, meta = queries.list_continue(store=store, ident=ident, user_id=str(ident.user.id), limit=limit)
+    for it in items:
+        require_library_access(
+            store=store,
+            ident=ident,
+            series_slug=str(it.get("series_slug") or ""),
+            season_number=int(it.get("season_number") or 0),
+            episode_number=int(it.get("episode_number") or 0),
+        )
+    logger.info(
+        "library_continue",
+        user_id=str(ident.user.id),
+        role=str(getattr(ident.user.role, "value", ident.user.role)),
+        count=len(items),
+        visibility_filter=str(meta.get("visibility_filter")),
+        limit=int(meta.get("limit") or limit),
+    )
+    return items
+
+
 @router.get("/{series_slug}/seasons")
 async def library_seasons(
     request: Request,
