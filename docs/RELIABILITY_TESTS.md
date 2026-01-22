@@ -1,3 +1,60 @@
+## Reliability tests (lightweight, no GPU)
+
+These scripts exercise reliability flows using tiny synthetic media (1–2 seconds).
+They should run without GPUs and skip gracefully when optional components are missing.
+
+### Setup
+
+Ensure `ffmpeg` is installed:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ffmpeg
+```
+
+### Scripts
+
+1) Two users submit simultaneously
+
+```bash
+python3 scripts/e2e_two_users_submit.py
+```
+
+2) Upload interrupted and resumed
+
+```bash
+python3 scripts/e2e_upload_resume.py
+```
+
+3) Cancel mid-run
+
+```bash
+python3 scripts/e2e_cancel_midrun.py
+```
+
+4) Restart worker mid-run
+
+```bash
+python3 scripts/e2e_restart_worker_midrun.py
+```
+
+5) Redis down → fallback → Redis back
+
+```bash
+python3 scripts/e2e_redis_fallback.py
+```
+
+Notes:
+- Set `REDIS_URL_REAL` to a reachable Redis URL to exercise the “Redis back” phase.
+- Scripts emit `OK`/`SKIP` and use polling with timeouts to avoid flaky sleeps.
+
+### P1 gate
+
+Run all P1 verifiers + E2E scripts:
+
+```bash
+python3 scripts/p1_gate.py
+```
 # Reliability tests & runbook
 
 This document describes **real-world failure scenarios** and the corresponding **end-to-end reliability tests** included in this repository.
