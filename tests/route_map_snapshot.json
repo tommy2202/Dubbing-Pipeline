@@ -211,6 +211,16 @@
   },
   {
     "method": "GET",
+    "name": "job_preview_audio",
+    "path": "/api/jobs/{id}/preview/audio"
+  },
+  {
+    "method": "GET",
+    "name": "job_preview_lowres",
+    "path": "/api/jobs/{id}/preview/lowres"
+  },
+  {
+    "method": "GET",
     "name": "job_qrcode",
     "path": "/api/jobs/{id}/qrcode"
   },

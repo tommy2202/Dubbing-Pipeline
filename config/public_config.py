@@ -131,6 +131,9 @@ class PublicConfig(BaseSettings):
     # Mobile playback artifacts (does not change master outputs)
     mobile_outputs: bool = Field(default=True, alias="MOBILE_OUTPUTS")
     mobile_hls: bool = Field(default=False, alias="MOBILE_HLS")
+    enable_audio_preview: bool = Field(default=False, alias="ENABLE_AUDIO_PREVIEW")
+    enable_lowres_preview: bool = Field(default=False, alias="ENABLE_LOWRES_PREVIEW")
+    lowres_preview_preset: str = Field(default="480p", alias="LOWRES_PREVIEW_PRESET")
 
     # Feature B: retention/cache policy (opt-in; default keep everything)
     cache_policy: str = Field(default="full", alias="CACHE_POLICY")  # full|balanced|minimal

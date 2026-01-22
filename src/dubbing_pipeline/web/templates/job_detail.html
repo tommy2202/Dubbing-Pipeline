@@ -618,6 +618,29 @@
             </div>
           </template>
 
+          <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+            <div class="text-sm text-slate-300">Previews (mobile)</div>
+            <div class="mt-1 text-xs text-slate-500">Lightweight audio/video previews for quick playback.</div>
+            <div class="mt-2 text-xs text-red-200" x-show="previewError" x-cloak x-text="previewError"></div>
+            <template x-if="previewAudioUrl">
+              <div class="mt-2">
+                <div class="text-xs text-slate-400">Audio-only</div>
+                <audio class="mt-2 w-full" controls preload="metadata" :src="previewAudioUrl"></audio>
+                <a class="underline text-xs text-slate-300" :href="previewAudioUrl" target="_blank" rel="noreferrer">Download</a>
+              </div>
+            </template>
+            <template x-if="previewLowresUrl">
+              <div class="mt-3">
+                <div class="text-xs text-slate-400">Low-res MP4</div>
+                <video class="mt-2 w-full rounded border border-slate-800" controls playsinline preload="metadata" :src="previewLowresUrl"></video>
+                <a class="underline text-xs text-slate-300" :href="previewLowresUrl" target="_blank" rel="noreferrer">Download</a>
+              </div>
+            </template>
+            <template x-if="!previewAudioUrl && !previewLowresUrl">
+              <div class="mt-2 text-xs text-slate-500">No previews available yet.</div>
+            </template>
+          </div>
+
           <div class="mt-4 text-sm text-slate-200 space-y-2">
             <template x-if="files && files.mobile_mp4">
               <div>
@@ -779,6 +802,9 @@
         return "Suggested";
       },
       files: null,
+      previewAudioUrl: "",
+      previewLowresUrl: "",
+      previewError: "",
       qaLoaded: false,
       qaSummary: null,
       qaTopMd: "",
@@ -802,6 +828,7 @@
         await this.loadTimeline(true);
         await this.loadVoiceMap();
         await this.loadFiles();
+        await this.loadPreviews();
         await this.loadQA();
         // deep-link to a tab (and optionally a segment)
         try {
@@ -1028,6 +1055,34 @@
           // init player if artifacts tab active
           if (this.activeTab === "artifacts") this.initPlayer();
         } catch (e) {}
+      },
+      async loadPreviews() {
+        this.previewError = "";
+        this.previewAudioUrl = "";
+        this.previewLowresUrl = "";
+        try {
+          const base = "/api/jobs/" + encodeURIComponent(this.jobId) + "/preview";
+          const audioUrl = base + "/audio";
+          const lowresUrl = base + "/lowres";
+          const okAudio = await this._probePreview(audioUrl);
+          if (okAudio) this.previewAudioUrl = audioUrl;
+          const okLow = await this._probePreview(lowresUrl);
+          if (okLow) this.previewLowresUrl = lowresUrl;
+        } catch (e) {
+          this.previewError = "Failed to load previews";
+        }
+      },
+      async _probePreview(url) {
+        try {
+          const r = await fetch(url, {
+            method: "GET",
+            headers: { "Range": "bytes=0-0" },
+            credentials: "include"
+          });
+          return (r.status === 200 || r.status === 206);
+        } catch (e) {
+          return false;
+        }
       },
       vlcLink(relUrl) {
         try {

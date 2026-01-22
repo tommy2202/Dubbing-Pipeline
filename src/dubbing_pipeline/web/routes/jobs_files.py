@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from dubbing_pipeline.api.access import require_job_access
 from dubbing_pipeline.api.deps import Identity, require_scope
+from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.web.routes.jobs_common import (
     _file_range_response,
     _get_store,
@@ -18,6 +19,22 @@ from dubbing_pipeline.web.routes.jobs_common import (
 )
 
 router = APIRouter()
+
+
+def _audio_preview_path(base_dir: Path) -> tuple[Path, str] | None:
+    for name, media_type in [
+        ("audio_preview.m4a", "audio/mp4"),
+        ("audio_preview.mp3", "audio/mpeg"),
+    ]:
+        p = (base_dir / "preview" / name).resolve()
+        if p.exists() and p.is_file():
+            return p, media_type
+    return None
+
+
+def _lowres_preview_path(base_dir: Path) -> Path | None:
+    p = (base_dir / "preview" / "preview_lowres.mp4").resolve()
+    return p if p.exists() and p.is_file() else None
 
 
 @router.get("/api/jobs/{id}/files")
@@ -263,6 +280,37 @@ async def job_outputs_alias(
 ) -> dict[str, Any]:
     # Alias endpoint name expected by some mobile clients.
     return await job_files(request, id, ident=ident)
+
+
+@router.get("/api/jobs/{id}/preview/audio")
+async def job_preview_audio(
+    request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
+) -> Response:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=id)
+    if not bool(getattr(get_settings(), "enable_audio_preview", False)):
+        raise HTTPException(status_code=404, detail="preview disabled")
+    base_dir = _job_base_dir(job)
+    found = _audio_preview_path(base_dir)
+    if not found:
+        raise HTTPException(status_code=404, detail="preview not found")
+    path, media_type = found
+    return _file_range_response(request, path, media_type=media_type, allowed_roots=[base_dir])
+
+
+@router.get("/api/jobs/{id}/preview/lowres")
+async def job_preview_lowres(
+    request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
+) -> Response:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=id)
+    if not bool(getattr(get_settings(), "enable_lowres_preview", False)):
+        raise HTTPException(status_code=404, detail="preview disabled")
+    base_dir = _job_base_dir(job)
+    p = _lowres_preview_path(base_dir)
+    if p is None:
+        raise HTTPException(status_code=404, detail="preview not found")
+    return _file_range_response(request, p, media_type="video/mp4", allowed_roots=[base_dir])
 
 
 @router.get("/api/jobs/{id}/stream/manifest")

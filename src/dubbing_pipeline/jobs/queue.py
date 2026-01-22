@@ -3445,6 +3445,106 @@ class JobQueue:
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] mobile outputs skipped: {ex}")
 
+            # Preview variants (optional; off by default).
+            try:
+                if is_pass2_outer:
+                    _note_pass2_skip("previews", "pass2_skip")
+                    raise _Pass2Skip()
+                enable_audio = bool(getattr(settings, "enable_audio_preview", False))
+                enable_lowres = bool(getattr(settings, "enable_lowres_preview", False))
+                if not enable_audio and not enable_lowres:
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] preview_generation_skipped: disabled"
+                    )
+                else:
+                    from dubbing_pipeline.stages.export import export_audio_preview, export_lowres_mp4
+
+                    preview_dir = (base_dir / "preview").resolve()
+                    preview_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Prefer enhanced final mix when present, else TTS track.
+                    audio_src = (
+                        (base_dir / "audio" / "final_mix.wav")
+                        if (base_dir / "audio" / "final_mix.wav").exists()
+                        else tts_wav
+                    )
+
+                    if enable_audio:
+                        if audio_src and audio_src.exists():
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] preview_generation_started: audio"
+                            )
+                            run_with_timeout(
+                                "export_audio_preview",
+                                timeout_s=limits.timeout_export_s,
+                                fn=export_audio_preview,
+                                kwargs={
+                                    "audio_in": audio_src,
+                                    "out_path": preview_dir / "audio_preview.m4a",
+                                    "bitrate": "96k",
+                                },
+                                cancel_check=_cancel_check_sync,
+                                cancel_exc=JobCanceled(),
+                            )
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] preview_generation_finished: audio"
+                            )
+                        else:
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] preview_generation_skipped: audio_missing"
+                            )
+                    else:
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] preview_generation_skipped: audio_disabled"
+                        )
+
+                    if enable_lowres:
+                        preset = str(getattr(settings, "lowres_preview_preset", "480p") or "480p")
+                        source_video = None
+                        for cand in [
+                            final_mp4,
+                            final_mkv,
+                            Path(out_mp4) if out_mp4 else None,
+                            Path(out_mkv) if out_mkv else None,
+                        ]:
+                            if cand is not None and cand.exists():
+                                source_video = cand
+                                break
+                        if source_video is None:
+                            self.store.append_log(
+                                job_id,
+                                f"[{now_utc()}] preview_generation_skipped: lowres_missing_source",
+                            )
+                        else:
+                            self.store.append_log(
+                                job_id,
+                                f"[{now_utc()}] preview_generation_started: lowres preset={preset}",
+                            )
+                            run_with_timeout(
+                                "export_lowres_preview",
+                                timeout_s=limits.timeout_export_s,
+                                fn=export_lowres_mp4,
+                                kwargs={
+                                    "video_in": source_video,
+                                    "audio_wav": None,
+                                    "out_path": preview_dir / "preview_lowres.mp4",
+                                    "preset": preset,
+                                },
+                                cancel_check=_cancel_check_sync,
+                                cancel_exc=JobCanceled(),
+                            )
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] preview_generation_finished: lowres"
+                            )
+                    else:
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] preview_generation_skipped: lowres_disabled"
+                        )
+            except _Pass2Skip:
+                pass
+            except Exception as ex:
+                self.store.append_log(job_id, f"[{now_utc()}] preview_generation_skipped: {ex}")
+
             # Tier-3A: optional lip-sync plugin (default off).
             try:
                 if is_pass2_outer:
