@@ -23,6 +23,13 @@ FORBIDDEN_DIR_PREFIXES = (
     "backups/",
     "_tmp",
     "__pycache__/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    ".tox/",
+    ".nox/",
+    ".venv/",
+    ".cache/",
     "logs/",
 )
 
@@ -34,6 +41,17 @@ FORBIDDEN_GLOBS = (
     "**/*.sqlite",
     "**/*.sqlite3",
     "**/*.log",
+    "**/.pytest_cache/**",
+    "**/.mypy_cache/**",
+    "**/.ruff_cache/**",
+    "**/.tox/**",
+    "**/.nox/**",
+    "**/.venv/**",
+    "**/.cache/**",
+    "**/.coverage",
+    "**/.coverage.*",
+    "**/*.zip",
+    "**/*.tar.gz",
 )
 
 

@@ -67,8 +67,29 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
+      - name: Detect release pro steps
+        id: pro
+        run: |
+          push="false"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            push="true"
+          elif [ "${{ inputs.push_image }}" = "true" ]; then
+            push="true"
+          fi
+          if [ -n "${{ steps.build.outputs.digest }}" ] && [ "${push}" = "true" ]; then
+            echo "pro_enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pro_enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Note (pro steps skipped)
+        if: steps.pro.outputs.pro_enabled != 'true'
+        run: |
+          echo "Release hardening steps skipped (image not pushed or digest missing)."
+
       - name: Generate SBOM (Syft)
         id: syft
+        if: steps.pro.outputs.pro_enabled == 'true'
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -76,12 +97,14 @@ jobs:
           output-file: sbom.spdx.json
 
       - name: Upload SBOM artifact
+        if: steps.pro.outputs.pro_enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: sbom-spdx-json
           path: sbom.spdx.json
 
       - name: Scan image (Trivy)
+        if: steps.pro.outputs.pro_enabled == 'true'
         uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -104,16 +127,16 @@ jobs:
           fi
 
       - name: Note (signing keys missing -> skip)
-        if: steps.keys.outputs.present != 'true'
+        if: steps.keys.outputs.present != 'true' || steps.pro.outputs.pro_enabled != 'true'
         run: |
-          echo "Signing/attestation keys not configured; skipping signing steps."
+          echo "Signing/attestation skipped (missing keys or image not pushed)."
 
       - name: Install Cosign (key-based)
-        if: steps.keys.outputs.present == 'true'
+        if: steps.keys.outputs.present == 'true' && steps.pro.outputs.pro_enabled == 'true'
         uses: sigstore/cosign-installer@v3
 
       - name: Prepare Cosign key file
-        if: steps.keys.outputs.present == 'true'
+        if: steps.keys.outputs.present == 'true' && steps.pro.outputs.pro_enabled == 'true'
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
         run: |
@@ -127,21 +150,21 @@ jobs:
           PY
 
       - name: Cosign sign (key-based)
-        if: steps.keys.outputs.present == 'true'
+        if: steps.keys.outputs.present == 'true' && steps.pro.outputs.pro_enabled == 'true'
         env:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           cosign sign --yes --key /tmp/cosign.key "${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
 
       - name: Cosign attest SBOM (key-based)
-        if: steps.keys.outputs.present == 'true'
+        if: steps.keys.outputs.present == 'true' && steps.pro.outputs.pro_enabled == 'true'
         env:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           cosign attest --yes --key /tmp/cosign.key --type spdxjson --predicate sbom.spdx.json "${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
 
       - name: Attest build provenance (optional)
-        if: steps.keys.outputs.present == 'true'
+        if: steps.keys.outputs.present == 'true' && steps.pro.outputs.pro_enabled == 'true'
         uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018
         with:
           subject-name: ${{ env.IMAGE_NAME }}

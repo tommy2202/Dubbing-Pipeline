@@ -24,6 +24,12 @@ Before inviting others, run:
 python3 scripts/v0_gate.py
 ```
 
+For P1 reliability checks:
+
+```bash
+python3 scripts/p1_gate.py
+```
+
 ### Documentation index (start here)
 - **Quickstart (Tailscale recommended)**: `docs/GOLDEN_PATH_TAILSCALE.md`
 - Clean setup guide (brand-new computer): `docs/CLEAN_SETUP_GUIDE.txt`
