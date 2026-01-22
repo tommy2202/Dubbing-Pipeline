@@ -415,7 +415,7 @@ async def post_job_speaker_mapping(
 
 @router.post("/api/jobs/{id}/voice-mapping")
 async def post_job_voice_mapping(
-    request: Request, id: str, ident: Identity = Depends(require_scope("edit:job"))
+    request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
     job = require_job_access(store=store, ident=ident, job_id=id)
