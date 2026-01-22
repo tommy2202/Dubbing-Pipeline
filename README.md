@@ -18,6 +18,12 @@ Outputs are written under:
 - **Security & privacy**: cookie sessions + CSRF, strict CORS, rate limits, RBAC + scoped API keys, audit logging, optional encryption-at-rest, privacy mode + retention.
 - **Ops**: model cache status + optional prewarm, library management (tags/archive/delete), verification gates.
 
+Before inviting others, run:
+
+```bash
+python3 scripts/v0_gate.py
+```
+
 ### Documentation index (start here)
 - **Quickstart (Tailscale recommended)**: `docs/GOLDEN_PATH_TAILSCALE.md`
 - Clean setup guide (brand-new computer): `docs/CLEAN_SETUP_GUIDE.txt`
