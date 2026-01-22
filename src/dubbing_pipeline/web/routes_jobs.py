@@ -339,6 +339,52 @@ async def uploads_status(
     }
 
 
+@router.get("/api/uploads/{upload_id}/status")
+async def uploads_status_minimal(
+    request: Request, upload_id: str, ident: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    """
+    Minimal upload state for mobile resume flows.
+    """
+    store = _get_store(request)
+    rec = require_upload_access(store=store, ident=ident, upload_id=upload_id)
+    total_bytes = int(rec.get("total_bytes") or 0)
+    chunk_bytes = int(rec.get("chunk_bytes") or 0)
+    received = rec.get("received") if isinstance(rec.get("received"), dict) else {}
+    chunks_received = int(len(received))
+    total_chunks = int((total_bytes + chunk_bytes - 1) // chunk_bytes) if chunk_bytes > 0 else 0
+    next_expected = 0
+    if total_chunks > 0:
+        for i in range(total_chunks):
+            if str(i) not in received:
+                next_expected = i
+                break
+        else:
+            next_expected = total_chunks
+    state = "completed" if bool(rec.get("completed")) else "in_progress"
+    with suppress(Exception):
+        audit_event(
+            "upload.status",
+            request=request,
+            user_id=ident.user.id,
+            meta={
+                "upload_id": str(upload_id),
+                "state": state,
+                "bytes_received": int(rec.get("received_bytes") or 0),
+            },
+        )
+    return {
+        "upload_id": str(rec.get("id") or upload_id),
+        "state": state,
+        "bytes_received": int(rec.get("received_bytes") or 0),
+        "chunks_received": int(chunks_received),
+        "next_expected_chunk": int(next_expected),
+        "total_bytes": int(total_bytes),
+        "chunk_bytes": int(chunk_bytes),
+        "total_chunks": int(total_chunks),
+    }
+
+
 @router.post("/api/uploads/{upload_id}/chunk")
 async def uploads_chunk(
     request: Request,

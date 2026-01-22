@@ -101,8 +101,16 @@ The server supports resumable uploads:
 - `POST /api/uploads/init`
 - `POST /api/uploads/{upload_id}/chunk`
 - `POST /api/uploads/{upload_id}/complete`
+- `GET /api/uploads/{upload_id}/status` (minimal state for resume/progress)
 
 The UI uses this under the hood for reliability on mobile networks.
+It shows:
+- bytes uploaded, percent, and estimated speed
+- chunk progress (X/Y)
+- automatic retry with backoff on transient failures
+- “Resuming…” when a previous upload can be continued
+
+If resume is unavailable, the UI explains why (e.g., previous upload expired or file changed).
 
 ---
 
