@@ -266,6 +266,11 @@
   },
   {
     "method": "GET",
+    "name": "get_job_speakers",
+    "path": "/api/jobs/{id}/speakers"
+  },
+  {
+    "method": "GET",
     "name": "job_stream_chunk",
     "path": "/api/jobs/{id}/stream/chunks/{chunk_idx}"
   },
@@ -308,6 +313,11 @@
     "method": "POST",
     "name": "unarchive_job",
     "path": "/api/jobs/{id}/unarchive"
+  },
+  {
+    "method": "POST",
+    "name": "post_job_voice_mapping",
+    "path": "/api/jobs/{id}/voice-mapping"
   },
   {
     "method": "GET",

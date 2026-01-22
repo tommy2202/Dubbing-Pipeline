@@ -417,6 +417,80 @@
       <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="voicesError" x-cloak x-text="voicesError"></div>
 
       <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/20 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div class="text-sm text-slate-300">Voice Mapping Review</div>
+            <div class="mt-1 text-xs text-slate-500">Confirm speaker voices before synthesis.</div>
+          </div>
+          <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+                  @click="loadSpeakers()">Reload speakers</button>
+        </div>
+        <div class="mt-2 text-xs text-amber-200" x-show="speakersLoaded && !speakersAvailable" x-cloak>
+          Diarization not available. Using a single speaker fallback.
+        </div>
+        <div class="mt-2 text-sm text-red-200" role="alert" aria-live="polite" x-show="speakersError" x-cloak x-text="speakersError"></div>
+
+        <div class="mt-3 space-y-3" x-show="speakersLoaded && speakers.length" x-cloak>
+          <template x-for="sp in speakers" :key="sp.speaker_id">
+            <div class="rounded border border-slate-800 bg-slate-950/30 p-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="text-sm text-slate-200">
+                  <span class="font-mono" x-text="sp.speaker_id"></span>
+                  <span class="text-slate-500">·</span>
+                  <span class="text-xs text-slate-400" x-text="sp.label || ''"></span>
+                </div>
+              </div>
+
+              <div class="mt-3">
+                <div class="text-xs text-slate-500">Extracted ref preview</div>
+                <template x-if="sp.audio_url">
+                  <audio class="mt-2 w-full" controls preload="none" :src="sp.audio_url"></audio>
+                </template>
+                <template x-if="!sp.audio_url">
+                  <div class="mt-2 text-xs text-slate-500">No sample available.</div>
+                </template>
+                <div class="mt-2 text-xs text-slate-500 break-all" x-text="sp.ref_path || ''"></div>
+              </div>
+
+              <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <div class="text-xs text-slate-500">Voice choice</div>
+                  <select class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-3 text-sm text-slate-100"
+                          x-model="speakerVoiceMode[sp.speaker_id]">
+                    <option value="clone">Clone from ref</option>
+                    <option value="preset">Preset voice</option>
+                    <option value="original">Keep original</option>
+                  </select>
+                  <div class="mt-2" x-show="speakerVoiceMode[sp.speaker_id]==='preset'" x-cloak>
+                    <label class="block text-xs text-slate-500">Preset voice id</label>
+                    <input class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100"
+                           x-model="speakerPreset[sp.speaker_id]" placeholder="default" />
+                  </div>
+                  <div class="mt-2 text-xs text-slate-500" x-show="speakerVoiceMode[sp.speaker_id]==='original'" x-cloak>
+                    Original audio will be preserved for this speaker.
+                  </div>
+                </div>
+                <div>
+                  <div class="text-xs text-slate-500">Actions</div>
+                  <div class="mt-1 grid gap-2">
+                    <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium disabled:opacity-50"
+                            :disabled="!canEditVoices"
+                            @click="saveVoiceMapping(sp.speaker_id)">
+                      Save voice mapping
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div class="mt-3 text-sm text-slate-500" x-show="speakersLoaded && speakers.length===0" x-cloak>
+          No speakers detected yet.
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/20 p-4">
         <div class="text-sm text-slate-300">Speaker refs & character mapping</div>
         <div class="mt-1 text-xs text-slate-500">Select a character and save mapping. Promote writes to the series voice store.</div>
 
@@ -764,6 +838,7 @@
           if (!this.overridesLoaded) this.loadOverrides();
         }
         if (tab === "voices") {
+          if (!this.speakersLoaded) this.loadSpeakers();
           if (!this.voiceRefsLoaded) this.loadVoiceRefs();
           if (!this.seriesCharsLoaded) this.loadSeriesCharacters();
           if (!this.speakerMappingsLoaded) this.loadSpeakerMappings();
@@ -773,6 +848,12 @@
       speakerOptions: [],
       voiceSaved: false,
       voiceError: "",
+      speakersLoaded: false,
+      speakersAvailable: false,
+      speakers: [],
+      speakersError: "",
+      speakerVoiceMode: {},
+      speakerPreset: {},
       voiceRefsLoaded: false,
       voiceRefs: null,
       voiceRefsError: "",
@@ -862,7 +943,54 @@
 
       async loadVoices() {
         this.voicesError = "";
-        await Promise.all([this.loadVoiceRefs(), this.loadSeriesCharacters(), this.loadSpeakerMappings()]);
+        await Promise.all([
+          this.loadSpeakers(),
+          this.loadVoiceRefs(),
+          this.loadSeriesCharacters(),
+          this.loadSpeakerMappings()
+        ]);
+      },
+
+      async loadSpeakers() {
+        this.speakersLoaded = true;
+        this.speakersError = "";
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/speakers", { credentials: "include" });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.speakersError = data.detail || ("Speakers load failed (" + r.status + ")");
+            this.speakers = [];
+            this.speakersAvailable = false;
+            return;
+          }
+          const items = Array.isArray(data.items) ? data.items : [];
+          this.speakers = items;
+          this.speakersAvailable = !!data.available;
+          const modes = { ...this.speakerVoiceMode };
+          const presets = { ...this.speakerPreset };
+          for (const it of items) {
+            const sid = String(it && it.speaker_id ? it.speaker_id : "").trim();
+            if (!sid) continue;
+            const mapping = (it && it.mapping) ? it.mapping : {};
+            let strat = String(mapping.strategy || mapping.speaker_strategy || "").toLowerCase().trim();
+            if (["keep_original", "keep-original", "original", "keep"].includes(strat)) strat = "original";
+            if (["zero-shot", "zeroshot"].includes(strat)) strat = "clone";
+            if (!strat) strat = (it.audio_url && it.allow_audio) ? "clone" : "preset";
+            modes[sid] = strat || "clone";
+            if (modes[sid] === "preset") {
+              const p = String(mapping.preset || mapping.tts_speaker || presets[sid] || "default").trim() || "default";
+              presets[sid] = p;
+            } else if (!presets[sid]) {
+              presets[sid] = "default";
+            }
+          }
+          this.speakerVoiceMode = modes;
+          this.speakerPreset = presets;
+        } catch (e) {
+          this.speakersError = "Speakers load failed";
+          this.speakers = [];
+          this.speakersAvailable = false;
+        }
       },
 
       async loadSeriesCharacters() {
@@ -945,6 +1073,28 @@
           window.showToast("Mapping saved", "success");
         } catch (e) {
           window.showToast("Failed to save mapping", "error");
+        }
+      },
+
+      async saveVoiceMapping(speakerId) {
+        try {
+          const strategy = String(this.speakerVoiceMode[speakerId] || "clone").trim();
+          if (!strategy) return;
+          const preset = strategy === "preset" ? String(this.speakerPreset[speakerId] || "default").trim() : "";
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/voice-mapping", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "x-csrf-token": csrf },
+            body: JSON.stringify({ items: [{ speaker_id: speakerId, strategy: strategy, preset: preset }] })
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data.detail || ("failed (" + r.status + ")"));
+          await this.loadVoiceMap();
+          await this.loadSpeakers();
+          window.showToast("Saved voice mapping", "success");
+        } catch (e) {
+          window.showToast("Failed to save voice mapping", "error");
         }
       },
 

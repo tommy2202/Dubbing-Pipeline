@@ -28,6 +28,55 @@ from dubbing_pipeline.web.routes.jobs_common import (
 router = APIRouter()
 
 
+def _normalize_voice_strategy(value: Any) -> str:
+    v = str(value or "").strip().lower()
+    if v in {"clone", "zero-shot", "zeroshot"}:
+        return "clone"
+    if v in {"preset", "voice"}:
+        return "preset"
+    if v in {"original", "keep-original", "keep_original", "keep"}:
+        return "original"
+    return ""
+
+
+def _voice_mapping_from_job(job) -> dict[str, dict[str, Any]]:
+    try:
+        rt = dict(job.runtime or {})
+    except Exception:
+        rt = {}
+    items = rt.get("voice_map", [])
+    if not isinstance(items, list):
+        items = []
+    out: dict[str, dict[str, Any]] = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        sid = str(it.get("speaker_id") or it.get("character_id") or "").strip()
+        if not sid:
+            continue
+        strat = _normalize_voice_strategy(it.get("speaker_strategy") or it.get("strategy") or "")
+        preset = str(it.get("tts_speaker") or "").strip()
+        if strat:
+            out[sid] = {"strategy": strat, "preset": preset}
+        elif preset:
+            out[sid] = {"strategy": "preset", "preset": preset}
+    return out
+
+
+def _speaker_label(speaker_id: str) -> str:
+    sid = str(speaker_id or "").strip()
+    if not sid:
+        return "Speaker"
+    if sid.upper().startswith("SPEAKER_"):
+        tail = sid.split("_", 1)[1]
+        try:
+            n = int(tail)
+            return f"Speaker {n}"
+        except Exception:
+            return sid.replace("_", " ").title()
+    return sid
+
+
 @router.get("/api/jobs/{id}/voice_refs")
 async def get_job_voice_refs(
     request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
@@ -145,6 +194,50 @@ async def get_job_voice_refs(
         "allow_audio": bool(allow_audio),
         "items": items_out,
     }
+
+
+@router.get("/api/jobs/{id}/speakers")
+async def get_job_speakers(
+    request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=id)
+    voice_map = _voice_mapping_from_job(job)
+    data = await get_job_voice_refs(request, id, ident)
+    items: list[dict[str, Any]] = []
+    if data.get("available") and isinstance(data.get("items"), dict):
+        for sid, rec in sorted((data.get("items") or {}).items()):
+            if not isinstance(rec, dict):
+                continue
+            speaker_id = str(rec.get("speaker_id") or sid or "").strip()
+            if not speaker_id:
+                continue
+            items.append(
+                {
+                    "speaker_id": speaker_id,
+                    "label": _speaker_label(speaker_id),
+                    "audio_url": rec.get("audio_url"),
+                    "download_url": rec.get("download_url"),
+                    "ref_path": rec.get("effective_ref_path"),
+                    "allow_audio": bool(rec.get("allow_audio")),
+                    "mapping": voice_map.get(speaker_id, {}),
+                }
+            )
+        return {"ok": True, "available": True, "items": items}
+
+    fallback_sid = "SPEAKER_01"
+    items.append(
+        {
+            "speaker_id": fallback_sid,
+            "label": _speaker_label(fallback_sid),
+            "audio_url": None,
+            "download_url": None,
+            "ref_path": None,
+            "allow_audio": False,
+            "mapping": voice_map.get(fallback_sid, {}),
+        }
+    )
+    return {"ok": True, "available": False, "items": items}
 
 
 @router.get("/api/jobs/{id}/voice_refs/{speaker_id}/audio")
@@ -318,6 +411,70 @@ async def post_job_speaker_mapping(
         },
     )
     return {"ok": True, "mapping": rec}
+
+
+@router.post("/api/jobs/{id}/voice-mapping")
+async def post_job_voice_mapping(
+    request: Request, id: str, ident: Identity = Depends(require_scope("edit:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=id)
+    body = await request.json()
+    items_in: list[dict[str, Any]] = []
+    if isinstance(body, dict) and isinstance(body.get("items"), list):
+        items_in = [dict(x) for x in body.get("items", []) if isinstance(x, dict)]
+    elif isinstance(body, list):
+        items_in = [dict(x) for x in body if isinstance(x, dict)]
+    else:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not items_in:
+        raise HTTPException(status_code=422, detail="items required")
+
+    try:
+        rt = dict(job.runtime or {})
+    except Exception:
+        rt = {}
+    existing = rt.get("voice_map", [])
+    if not isinstance(existing, list):
+        existing = []
+    merged: dict[str, dict[str, Any]] = {}
+    for it in existing:
+        if not isinstance(it, dict):
+            continue
+        sid = str(it.get("speaker_id") or it.get("character_id") or "").strip()
+        if not sid:
+            continue
+        merged[sid] = dict(it)
+
+    for it in items_in:
+        sid = Path(str(it.get("speaker_id") or it.get("character_id") or "")).name.strip()
+        if not sid:
+            raise HTTPException(status_code=422, detail="speaker_id required")
+        strat = _normalize_voice_strategy(it.get("strategy") or it.get("speaker_strategy") or "")
+        if not strat:
+            raise HTTPException(status_code=422, detail="strategy required")
+        rec = merged.get(sid, {})
+        rec["character_id"] = sid
+        rec["speaker_id"] = sid
+        label = str(it.get("label") or rec.get("label") or "").strip()
+        if label:
+            rec["label"] = label
+        rec["speaker_strategy"] = strat
+        if strat == "preset":
+            preset = str(it.get("preset") or it.get("tts_speaker") or "").strip() or "default"
+            rec["tts_speaker"] = preset
+        merged[sid] = rec
+
+    items_out = [merged[k] for k in sorted(merged.keys())]
+    rt["voice_map"] = items_out
+    store.update(id, runtime=rt)
+    audit_event(
+        "voice.mapping.save",
+        request=request,
+        user_id=ident.user.id,
+        meta={"job_id": id, "count": len(items_out)},
+    )
+    return {"ok": True, "items": items_out}
 
 
 @router.get("/api/jobs/{job_id}/speaker-mapping")
