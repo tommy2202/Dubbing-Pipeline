@@ -657,3 +657,15 @@ async def revoke_all_sessions(request: Request) -> dict[str, Any]:
     _get_store(request).revoke_all_refresh_tokens_for_user(str(ident.user.id))
     audit_event("auth.session_revoke_all", request=request, user_id=ident.user.id, meta=None)
     return {"ok": True}
+
+
+@router.api_route("/register", methods=["GET", "POST"])
+async def register_disabled() -> dict[str, Any]:
+    # Invite-only access: self-registration is disabled.
+    raise HTTPException(status_code=404, detail="Registration disabled")
+
+
+@router.api_route("/signup", methods=["GET", "POST"])
+async def signup_disabled() -> dict[str, Any]:
+    # Invite-only access: self-registration is disabled.
+    raise HTTPException(status_code=404, detail="Registration disabled")

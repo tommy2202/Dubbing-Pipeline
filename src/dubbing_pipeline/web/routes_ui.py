@@ -543,6 +543,21 @@ async def ui_admin_queue(request: Request) -> HTMLResponse:
     return _render(request, "admin_queue.html", {})
 
 
+@router.get("/admin/invites")
+async def ui_admin_invites(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        if not (user.role and user.role.value == "admin"):
+            return RedirectResponse(url="/ui/dashboard", status_code=302)
+    except Exception:
+        return RedirectResponse(url="/ui/dashboard", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="admin_invites")
+    return _render(request, "admin_invites.html", {})
+
+
 @router.get("/qr")
 async def ui_qr_redeem(request: Request, code: str = "") -> HTMLResponse:
     # QR redeem does not require prior auth; it will call /api/auth/qr/redeem.
@@ -550,3 +565,10 @@ async def ui_qr_redeem(request: Request, code: str = "") -> HTMLResponse:
     if not c:
         return _render(request, "qr_redeem.html", {"code": ""})
     return _render(request, "qr_redeem.html", {"code": c})
+
+
+@router.get("/invite/{token}")
+async def ui_invite_redeem(request: Request, token: str) -> HTMLResponse:
+    # Invite redeem does not require prior auth; it will call /api/invites/redeem.
+    tok = str(token or "").strip()
+    return _render(request, "invite_redeem.html", {"token": tok})

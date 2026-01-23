@@ -1,0 +1,165 @@
+{% extends "_base.html" %}
+
+{% block title %}Invites • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-5xl space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold">Invites</h1>
+    <p class="mt-1 text-sm text-slate-400">Invite-only access. Tokens are shown once on creation.</p>
+  </div>
+
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <div class="flex flex-wrap items-end gap-3">
+      <div>
+        <label class="block text-xs uppercase text-slate-400" for="inviteTtl">Expires in hours</label>
+        <input id="inviteTtl" type="number" min="1" max="168" value="24"
+               class="mt-1 w-32 rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100" />
+      </div>
+      <button id="inviteCreateBtn"
+              class="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium">
+        Create invite
+      </button>
+      <span id="inviteCreateStatus" class="text-sm text-slate-400"></span>
+    </div>
+
+    <div id="inviteResult" class="mt-4 hidden rounded-lg border border-slate-700 bg-slate-950/40 p-3">
+      <div class="text-xs uppercase text-slate-400">Invite link</div>
+      <div class="mt-1 flex flex-wrap items-center gap-2">
+        <code id="inviteUrl" class="break-all text-sm text-emerald-300"></code>
+        <button id="inviteCopyBtn" class="rounded bg-slate-800 hover:bg-slate-700 px-2 py-1 text-xs">
+          Copy
+        </button>
+      </div>
+      <div class="mt-1 text-xs text-slate-500">This token will not be shown again.</div>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-lg font-semibold">Recent invites</h2>
+      <button id="inviteRefreshBtn"
+              class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs">
+        Refresh
+      </button>
+    </div>
+    <div class="mt-3 overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="text-xs uppercase text-slate-400">
+          <tr class="text-left border-b border-slate-800">
+            <th class="py-2 pr-3">Hash</th>
+            <th class="py-2 pr-3">Status</th>
+            <th class="py-2 pr-3">Created</th>
+            <th class="py-2 pr-3">Expires</th>
+            <th class="py-2 pr-3">Used</th>
+            <th class="py-2 pr-3">Created by</th>
+            <th class="py-2 pr-3">Used by</th>
+          </tr>
+        </thead>
+        <tbody id="inviteRows" class="divide-y divide-slate-800"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const csrf = document.getElementById("csrf")?.value || "";
+    const rows = document.getElementById("inviteRows");
+    const refreshBtn = document.getElementById("inviteRefreshBtn");
+    const createBtn = document.getElementById("inviteCreateBtn");
+    const createStatus = document.getElementById("inviteCreateStatus");
+    const ttlInput = document.getElementById("inviteTtl");
+    const inviteResult = document.getElementById("inviteResult");
+    const inviteUrl = document.getElementById("inviteUrl");
+    const inviteCopyBtn = document.getElementById("inviteCopyBtn");
+
+    function fmtTs(ts) {
+      try {
+        if (!ts) return "-";
+        const d = new Date(parseInt(ts, 10) * 1000);
+        return d.toLocaleString();
+      } catch (e) {
+        return "-";
+      }
+    }
+
+    function render(items) {
+      rows.innerHTML = "";
+      if (!Array.isArray(items) || items.length === 0) {
+        rows.innerHTML = '<tr><td class="py-3 text-slate-500" colspan="7">No invites yet.</td></tr>';
+        return;
+      }
+      for (const it of items) {
+        const tr = document.createElement("tr");
+        const status = (it.status || "active").toString();
+        const badge =
+          status === "used" ? "bg-emerald-900/40 text-emerald-200" :
+          status === "expired" ? "bg-red-900/40 text-red-200" :
+          "bg-slate-800 text-slate-200";
+        tr.innerHTML = `
+          <td class="py-2 pr-3 font-mono text-xs text-slate-300">${it.token_hash_prefix || "—"}</td>
+          <td class="py-2 pr-3"><span class="rounded px-2 py-1 text-xs ${badge}">${status}</span></td>
+          <td class="py-2 pr-3 text-slate-300">${fmtTs(it.created_at)}</td>
+          <td class="py-2 pr-3 text-slate-300">${fmtTs(it.expires_at)}</td>
+          <td class="py-2 pr-3 text-slate-300">${fmtTs(it.used_at)}</td>
+          <td class="py-2 pr-3 text-slate-400">${it.created_by || "—"}</td>
+          <td class="py-2 pr-3 text-slate-400">${it.used_by || "—"}</td>
+        `;
+        rows.appendChild(tr);
+      }
+    }
+
+    async function loadInvites() {
+      try {
+        const r = await fetch("/api/admin/invites", { credentials: "include" });
+        if (!r.ok) throw new Error("Failed to load invites");
+        const d = await r.json();
+        render(d.items || []);
+      } catch (e) {
+        rows.innerHTML = '<tr><td class="py-3 text-red-200" colspan="7">Failed to load invites.</td></tr>';
+      }
+    }
+
+    async function createInvite() {
+      createStatus.textContent = "";
+      inviteResult.classList.add("hidden");
+      const ttl = parseInt(ttlInput?.value || "24", 10) || 24;
+      try {
+        const r = await fetch("/api/admin/invites", {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify({ expires_in_hours: ttl }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          createStatus.textContent = d.detail || "Failed to create invite";
+          return;
+        }
+        inviteUrl.textContent = d.invite_url || "";
+        inviteResult.classList.remove("hidden");
+        createStatus.textContent = "Invite created";
+        loadInvites();
+      } catch (e) {
+        createStatus.textContent = "Failed to create invite";
+      }
+    }
+
+    if (refreshBtn) refreshBtn.addEventListener("click", loadInvites);
+    if (createBtn) createBtn.addEventListener("click", createInvite);
+    if (inviteCopyBtn) {
+      inviteCopyBtn.addEventListener("click", async () => {
+        const text = inviteUrl.textContent || "";
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          inviteCopyBtn.textContent = "Copied";
+          setTimeout(() => (inviteCopyBtn.textContent = "Copy"), 1200);
+        } catch (e) {}
+      });
+    }
+    loadInvites();
+  })();
+</script>
+{% endblock %}

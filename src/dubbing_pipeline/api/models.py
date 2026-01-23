@@ -126,6 +126,7 @@ class AuthStore:
                 self._ensure_refresh_token_columns(con)
                 self._ensure_qr_tables(con)
                 self._ensure_recovery_tables(con)
+                self._ensure_invite_tables(con)
                 con.commit()
             finally:
                 con.close()
@@ -192,6 +193,25 @@ class AuthStore:
             con.execute(
                 "CREATE INDEX IF NOT EXISTS totp_recovery_codes_user_id ON totp_recovery_codes(user_id);"
             )
+        except Exception:
+            return
+
+    def _ensure_invite_tables(self, con: sqlite3.Connection) -> None:
+        try:
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS invites (
+                  token_hash TEXT PRIMARY KEY,
+                  created_by TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  expires_at INTEGER NOT NULL,
+                  used_at INTEGER,
+                  used_by TEXT
+                );
+                """
+            )
+            con.execute("CREATE INDEX IF NOT EXISTS invites_created_by ON invites(created_by);")
+            con.execute("CREATE INDEX IF NOT EXISTS invites_used_by ON invites(used_by);")
         except Exception:
             return
 
@@ -502,6 +522,172 @@ class AuthStore:
                 )
                 con.commit()
                 return int(getattr(cur, "rowcount", 0) or 0)
+            finally:
+                con.close()
+
+    # --- invite tokens (invite-only access) ---
+
+    def create_invite(
+        self,
+        *,
+        token_hash: str,
+        created_by: str,
+        created_at: int,
+        expires_at: int,
+    ) -> dict[str, object]:
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO invites (token_hash, created_by, created_at, expires_at, used_at, used_by)
+                    VALUES (?, ?, ?, ?, NULL, NULL)
+                    """,
+                    (str(token_hash), str(created_by), int(created_at), int(expires_at)),
+                )
+                con.commit()
+            finally:
+                con.close()
+        return {
+            "token_hash": str(token_hash),
+            "created_by": str(created_by),
+            "created_at": int(created_at),
+            "expires_at": int(expires_at),
+            "used_at": None,
+            "used_by": None,
+        }
+
+    def list_invites(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, object]]:
+        lim = max(1, min(500, int(limit)))
+        off = max(0, int(offset))
+        con = self._conn()
+        try:
+            rows = con.execute(
+                """
+                SELECT token_hash, created_by, created_at, expires_at, used_at, used_by
+                FROM invites
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?;
+                """,
+                (lim, off),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            con.close()
+
+    def _invite_row(self, *, con: sqlite3.Connection, token_hash: str) -> dict[str, object] | None:
+        row = con.execute(
+            """
+            SELECT token_hash, created_by, created_at, expires_at, used_at, used_by
+            FROM invites
+            WHERE token_hash = ?
+            LIMIT 1;
+            """,
+            (str(token_hash),),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def create_user(
+        self,
+        *,
+        username: str,
+        password_hash: str,
+        role: Role,
+        created_at: int,
+    ) -> User:
+        from dubbing_pipeline.utils.crypto import random_id
+
+        user_id = random_id("u_", 16)
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO users (id, username, password_hash, role, totp_secret, totp_enabled, created_at)
+                    VALUES (?, ?, ?, ?, NULL, 0, ?)
+                    """,
+                    (str(user_id), str(username), str(password_hash), str(role.value), int(created_at)),
+                )
+                con.commit()
+                return User(
+                    id=str(user_id),
+                    username=str(username),
+                    password_hash=str(password_hash),
+                    role=role,
+                    totp_secret=None,
+                    totp_enabled=False,
+                    created_at=int(created_at),
+                )
+            finally:
+                con.close()
+
+    def redeem_invite(
+        self,
+        *,
+        token_hash: str,
+        username: str,
+        password_hash: str,
+        role: Role,
+    ) -> tuple[User | None, str, dict[str, object] | None]:
+        """
+        Redeem an invite token:
+        - validate token (exists, not used, not expired)
+        - create user with provided credentials
+        - mark invite used
+
+        Returns (user, status, invite_row)
+        status: ok|not_found|used|expired|username_taken|invalid
+        """
+        now = now_ts()
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute("BEGIN IMMEDIATE;")
+                invite = self._invite_row(con=con, token_hash=token_hash)
+                if invite is None:
+                    return None, "not_found", None
+                if invite.get("used_at"):
+                    return None, "used", invite
+                exp = int(invite.get("expires_at") or 0)
+                if exp and int(now) > exp:
+                    return None, "expired", invite
+
+                # Ensure username is unique
+                row = con.execute(
+                    "SELECT 1 FROM users WHERE username = ? LIMIT 1;", (str(username),)
+                ).fetchone()
+                if row is not None:
+                    return None, "username_taken", invite
+
+                from dubbing_pipeline.utils.crypto import random_id
+
+                user_id = random_id("u_", 16)
+                con.execute(
+                    """
+                    INSERT INTO users (id, username, password_hash, role, totp_secret, totp_enabled, created_at)
+                    VALUES (?, ?, ?, ?, NULL, 0, ?)
+                    """,
+                    (str(user_id), str(username), str(password_hash), str(role.value), int(now)),
+                )
+                con.execute(
+                    """
+                    UPDATE invites
+                    SET used_at = ?, used_by = ?
+                    WHERE token_hash = ?;
+                    """,
+                    (int(now), str(user_id), str(token_hash)),
+                )
+                con.commit()
+                user = User(
+                    id=str(user_id),
+                    username=str(username),
+                    password_hash=str(password_hash),
+                    role=role,
+                    totp_secret=None,
+                    totp_enabled=False,
+                    created_at=int(now),
+                )
+                return user, "ok", invite
             finally:
                 con.close()
 

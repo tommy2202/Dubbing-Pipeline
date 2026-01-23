@@ -1,20 +1,36 @@
 from __future__ import annotations
 
+import secrets
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from dubbing_pipeline.api.deps import Identity, require_role
+from dubbing_pipeline.api.deps import Identity, get_limiter, require_role
+from dubbing_pipeline.api.invites import invite_token_hash
 from dubbing_pipeline.api.models import Role
+from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.ops import audit
 from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.utils.log import logger
+from dubbing_pipeline.utils.net import get_client_ip
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+_INVITE_TTL_DEFAULT_HOURS = 24
+_INVITE_TTL_MAX_HOURS = 168
 
 
 def _store(request: Request):
     st = getattr(request.app.state, "job_store", None)
     if st is None:
         raise HTTPException(status_code=500, detail="Job store not initialized")
+    return st
+
+
+def _auth_store(request: Request):
+    st = getattr(request.app.state, "auth_store", None)
+    if st is None:
+        raise HTTPException(status_code=500, detail="Auth store not initialized")
     return st
 
 
@@ -200,4 +216,96 @@ async def admin_job_visibility(
     )
     logger.info("admin_job_visibility", user_id=str(ident.user.id), job_id=str(id), visibility=vis)
     return {"ok": True, "job_id": str(id), "visibility": vis}
+
+
+@router.get("/invites")
+async def admin_list_invites(
+    request: Request,
+    limit: int = 200,
+    offset: int = 0,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict[str, object]:
+    store = _auth_store(request)
+    items = store.list_invites(limit=int(limit), offset=int(offset))
+    now = int(time.time())
+    out: list[dict[str, object]] = []
+    for it in items:
+        token_hash = str(it.get("token_hash") or "")
+        created_at = int(it.get("created_at") or 0)
+        expires_at = int(it.get("expires_at") or 0)
+        used_at = int(it.get("used_at") or 0) if it.get("used_at") else None
+        status = "active"
+        if used_at:
+            status = "used"
+        elif expires_at and expires_at < now:
+            status = "expired"
+        out.append(
+            {
+                "token_hash_prefix": token_hash[:8] if token_hash else "",
+                "created_by": str(it.get("created_by") or ""),
+                "created_at": created_at,
+                "expires_at": expires_at,
+                "used_at": used_at,
+                "used_by": str(it.get("used_by") or ""),
+                "status": status,
+            }
+        )
+    return {"items": out, "limit": int(limit), "offset": int(offset)}
+
+
+@router.post("/invites")
+async def admin_create_invite(
+    request: Request, ident: Identity = Depends(require_role(Role.admin))
+) -> dict[str, object]:
+    body = await request.json()
+    if not isinstance(body, dict):
+        body = {}
+    ttl_in = body.get("expires_in_hours")
+    try:
+        ttl_hours = int(ttl_in) if ttl_in is not None else _INVITE_TTL_DEFAULT_HOURS
+    except Exception:
+        raise HTTPException(status_code=400, detail="expires_in_hours must be int") from None
+    ttl_hours = max(1, min(int(ttl_hours), int(_INVITE_TTL_MAX_HOURS)))
+
+    rl = get_limiter(request)
+    ip = get_client_ip(request)
+    if not rl.allow(f"invites:create:admin:{ident.user.id}", limit=20, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if not rl.allow(f"invites:create:ip:{ip}", limit=60, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    token = secrets.token_urlsafe(32)
+    token_hash = invite_token_hash(token)
+    created_at = int(time.time())
+    expires_at = int(created_at + ttl_hours * 3600)
+    store = _auth_store(request)
+    store.create_invite(
+        token_hash=token_hash,
+        created_by=str(ident.user.id),
+        created_at=int(created_at),
+        expires_at=int(expires_at),
+    )
+
+    s = get_settings()
+    base = str(getattr(s, "public_base_url", "") or "").strip().rstrip("/")
+    if not base:
+        base = str(request.base_url).rstrip("/")
+    invite_url = f"{base}/invite/{token}"
+
+    audit.emit(
+        "invite.create",
+        user_id=str(ident.user.id),
+        meta={
+            "expires_at": int(expires_at),
+            "ttl_hours": int(ttl_hours),
+            "token_hash_prefix": token_hash[:8],
+        },
+    )
+    return {
+        "ok": True,
+        "invite_url": invite_url,
+        "created_at": int(created_at),
+        "expires_at": int(expires_at),
+        "token_hash_prefix": token_hash[:8],
+    }
 

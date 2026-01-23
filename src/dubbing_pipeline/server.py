@@ -25,6 +25,7 @@ from dubbing_pipeline.api.routes_auth import router as auth_router
 from dubbing_pipeline.api.routes_admin import router as admin_router
 from dubbing_pipeline.api.routes_keys import router as keys_router
 from dubbing_pipeline.api.routes_library import router as library_router
+from dubbing_pipeline.api.routes_invites import router as invites_router
 from dubbing_pipeline.api.routes_runtime import router as runtime_router
 from dubbing_pipeline.api.routes_system import router as system_router
 from dubbing_pipeline.api.routes_settings import UserSettingsStore
@@ -259,6 +260,7 @@ app.include_router(runtime_router)
 app.include_router(system_router)
 app.include_router(settings_router)
 app.include_router(library_router)
+app.include_router(invites_router)
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
 app.include_router(ui_router)
