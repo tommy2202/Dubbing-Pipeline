@@ -11,7 +11,10 @@ def _login(c: TestClient, *, username: str, password: str) -> dict[str, str]:
     r = c.post("/api/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
     data = r.json()
-    return {"Authorization": f"Bearer {data['access_token']}", "X-CSRF-Token": data["csrf_token"]}
+    headers = {"Authorization": f"Bearer {data['access_token']}", "X-CSRF-Token": data["csrf_token"]}
+    # Clear cookies so CSRF is not enforced for bearer-token API calls.
+    c.cookies.clear()
+    return headers
 
 
 def main() -> int:
