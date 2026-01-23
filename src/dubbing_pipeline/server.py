@@ -15,7 +15,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
-from dubbing_pipeline.api.deps import require_role, require_scope
+from dubbing_pipeline.api.access import require_file_access
+from dubbing_pipeline.api.deps import Identity, require_role, require_scope
 from dubbing_pipeline.api.middleware import request_context_middleware
 from dubbing_pipeline.api.models import AuthStore, Role, User, now_ts
 from dubbing_pipeline.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
@@ -25,24 +26,26 @@ from dubbing_pipeline.api.routes_admin import router as admin_router
 from dubbing_pipeline.api.routes_keys import router as keys_router
 from dubbing_pipeline.api.routes_library import router as library_router
 from dubbing_pipeline.api.routes_runtime import router as runtime_router
+from dubbing_pipeline.api.routes_system import router as system_router
 from dubbing_pipeline.api.routes_settings import UserSettingsStore
 from dubbing_pipeline.api.routes_settings import router as settings_router
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import Job
 from dubbing_pipeline.jobs.queue import JobQueue
-from dubbing_pipeline.jobs.store import JobStore
+from dubbing_pipeline.store_backend import build_store
 from dubbing_pipeline.ops import audit
 from dubbing_pipeline.ops.metrics import REGISTRY
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.security.runtime_db import UnsafeRuntimeDbPath, assert_safe_runtime_db_path
 from dubbing_pipeline.utils.crypto import PasswordHasher, random_id
-from dubbing_pipeline.utils.log import logger
-from dubbing_pipeline.utils.net import install_egress_policy
+from dubbing_pipeline.utils.log import logger, safe_log
+from dubbing_pipeline.utils.net import get_client_ip, install_egress_policy, is_trusted_proxy
 from dubbing_pipeline.utils.ratelimit import RateLimiter
-from dubbing_pipeline.queue.manager import AutoQueueBackend
+from dubbing_pipeline.queue.queue_backend import build_queue_backend
 from dubbing_pipeline.web.routes_jobs import router as jobs_router
 from dubbing_pipeline.web.routes_ui import router as ui_router
+from dubbing_pipeline.web.routes_system import router as system_ui_router
 from dubbing_pipeline.web.routes_webrtc import router as webrtc_router
 
 
@@ -106,7 +109,7 @@ async def lifespan(app: FastAPI):
     _maybe_migrate(out_root / "jobs.db", jobs_db)
     _maybe_migrate(out_root / "auth.db", auth_db)
 
-    store = JobStore(jobs_db)
+    store = build_store(jobs_db)
     q = JobQueue(store, concurrency=int(s.jobs_concurrency))
     app.state.job_store = store
     app.state.job_queue = q
@@ -134,7 +137,7 @@ async def lifespan(app: FastAPI):
 
     # Queue backend (Level 2 Redis with Level 1 fallback).
     # This extends the existing Scheduler/JobQueue flow without creating a parallel job system.
-    queue_backend = AutoQueueBackend(
+    queue_backend = build_queue_backend(
         scheduler=sched,
         get_store_cb=lambda: app.state.job_store,
         enqueue_job_id_cb=lambda job_id: q.enqueue_id(job_id),
@@ -253,11 +256,13 @@ app.include_router(audit_router)
 app.include_router(admin_router)
 app.include_router(keys_router)
 app.include_router(runtime_router)
+app.include_router(system_router)
 app.include_router(settings_router)
 app.include_router(library_router)
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
 app.include_router(ui_router)
+app.include_router(system_ui_router)
 
 
 def _is_https_request(request: Request) -> bool:
@@ -270,9 +275,9 @@ def _is_https_request(request: Request) -> bool:
     except Exception:
         pass
     s = get_settings()
-    mode = str(getattr(s, "remote_access_mode", "off") or "off").strip().lower()
-    trust = bool(getattr(s, "trust_proxy_headers", False)) and mode == "cloudflare"
-    if not trust:
+    trust = bool(getattr(s, "trust_proxy_headers", False))
+    peer = request.client.host if request.client else ""
+    if not trust or not is_trusted_proxy(peer):
         return False
     xf = (request.headers.get("x-forwarded-proto") or "").strip().lower()
     if xf == "https":
@@ -323,14 +328,14 @@ async def security_headers(request: Request, call_next):
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     t0 = time.perf_counter()
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request)
     path = request.url.path
     try:
         response = await call_next(request)
     finally:
         dt_ms = (time.perf_counter() - t0) * 1000.0
         status_code = getattr(locals().get("response"), "status_code", 0)
-        logger.info(
+        safe_log(
             "http_done",
             ip=ip,
             method=request.method,
@@ -486,23 +491,36 @@ async def login_redirect() -> Response:
 
 
 @app.get("/video/{job}")
-async def video(request: Request, job: str, _: object = Depends(require_scope("read:job"))):
+async def video(request: Request, job: str, ident: Identity = Depends(require_scope("read:job"))):
     p = _resolve_job(job)
+    store = getattr(request.app.state, "job_store", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="Job store not initialized")
+    require_file_access(store=store, ident=ident, path=p)
     ctype, _ = mimetypes.guess_type(str(p))
     ctype = ctype or ("video/mp4" if p.suffix.lower() == ".mp4" else "video/x-matroska")
 
-    gen, start, end, size = _range_stream(p, request.headers.get("range"))
+    range_header = request.headers.get("range")
+    gen, start, end, size = _range_stream(p, range_header)
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Range": f"bytes {start}-{end}/{size}",
         "Content-Length": str(end - start + 1),
     }
-    return StreamingResponse(gen, status_code=206, media_type=ctype, headers=headers)
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        status_code = 206
+    else:
+        status_code = 200
+    return StreamingResponse(gen, status_code=status_code, media_type=ctype, headers=headers)
 
 
 @app.get("/files/{path:path}")
-async def files(request: Request, path: str, _: object = Depends(require_scope("read:job"))):
+async def files(request: Request, path: str, ident: Identity = Depends(require_scope("read:job"))):
     p = _safe_output_path(path)
+    store = getattr(request.app.state, "job_store", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="Job store not initialized")
+    require_file_access(store=store, ident=ident, path=p)
     ctype, _ = mimetypes.guess_type(str(p))
     if not ctype:
         # HLS / TS
@@ -513,10 +531,15 @@ async def files(request: Request, path: str, _: object = Depends(require_scope("
         else:
             ctype = "application/octet-stream"
 
-    gen, start, end, size = _range_stream(p, request.headers.get("range"))
+    range_header = request.headers.get("range")
+    gen, start, end, size = _range_stream(p, range_header)
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Range": f"bytes {start}-{end}/{size}",
         "Content-Length": str(end - start + 1),
     }
-    return StreamingResponse(gen, status_code=206, media_type=ctype, headers=headers)
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        status_code = 206
+    else:
+        status_code = 200
+    return StreamingResponse(gen, status_code=status_code, media_type=ctype, headers=headers)

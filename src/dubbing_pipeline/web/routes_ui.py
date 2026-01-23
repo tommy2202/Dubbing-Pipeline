@@ -8,11 +8,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
+from dubbing_pipeline.api.access import require_job_access, require_library_access
 from dubbing_pipeline.api.deps import current_identity
 from dubbing_pipeline.api.routes_settings import UserSettingsStore
 from dubbing_pipeline.api.security import issue_csrf_token
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import Job
+from dubbing_pipeline.library import queries
 from dubbing_pipeline.library.paths import get_job_output_root
 from dubbing_pipeline.utils.io import read_json
 from dubbing_pipeline.ops import audit
@@ -173,6 +175,17 @@ async def ui_library_seasons(request: Request, series_slug: str) -> HTMLResponse
     user = _current_user_optional(request)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        store = getattr(request.app.state, "job_store", None)
+        auth_store = getattr(request.app.state, "auth_store", None)
+        if store is None or auth_store is None:
+            raise HTTPException(status_code=500, detail="Store not initialized")
+        ident = current_identity(request, auth_store)
+        require_library_access(store=store, ident=ident, series_slug=series_slug)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     with suppress(Exception):
         _audit_ui_page_view(
             request, user_id=str(user.id), page="library_seasons", meta={"series_slug": series_slug}
@@ -185,6 +198,19 @@ async def ui_library_episodes(request: Request, series_slug: str, season_number:
     user = _current_user_optional(request)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        store = getattr(request.app.state, "job_store", None)
+        auth_store = getattr(request.app.state, "auth_store", None)
+        if store is None or auth_store is None:
+            raise HTTPException(status_code=500, detail="Store not initialized")
+        ident = current_identity(request, auth_store)
+        require_library_access(
+            store=store, ident=ident, series_slug=series_slug, season_number=int(season_number)
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     with suppress(Exception):
         _audit_ui_page_view(
             request,
@@ -206,6 +232,38 @@ async def ui_library_episode_detail(
     user = _current_user_optional(request)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        store = getattr(request.app.state, "job_store", None)
+        auth_store = getattr(request.app.state, "auth_store", None)
+        if store is None or auth_store is None:
+            raise HTTPException(status_code=500, detail="Store not initialized")
+        ident = current_identity(request, auth_store)
+        require_library_access(
+            store=store,
+            ident=ident,
+            series_slug=series_slug,
+            season_number=int(season_number),
+            episode_number=int(episode_number),
+        )
+        with suppress(Exception):
+            job_id = queries.latest_episode_job_id(
+                store=store,
+                ident=ident,
+                series_slug=series_slug,
+                season_number=int(season_number),
+                episode_number=int(episode_number),
+            )
+            store.record_view(
+                user_id=str(ident.user.id),
+                series_slug=series_slug,
+                season_number=int(season_number),
+                episode_number=int(episode_number),
+                job_id=job_id,
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     with suppress(Exception):
         _audit_ui_page_view(
             request,
@@ -221,6 +279,36 @@ async def ui_library_episode_detail(
         request,
         "library_episode_detail.html",
         {"series_slug": series_slug, "season_number": int(season_number), "episode_number": int(episode_number)},
+    )
+
+
+@router.get("/voices/{series_slug}/{voice_id}")
+async def ui_voice_detail(request: Request, series_slug: str, voice_id: str) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        store = getattr(request.app.state, "job_store", None)
+        auth_store = getattr(request.app.state, "auth_store", None)
+        if store is None or auth_store is None:
+            raise HTTPException(status_code=500, detail="Store not initialized")
+        ident = current_identity(request, auth_store)
+        require_library_access(store=store, ident=ident, series_slug=series_slug)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Forbidden") from None
+    with suppress(Exception):
+        _audit_ui_page_view(
+            request,
+            user_id=str(user.id),
+            page="voice_detail",
+            meta={"series_slug": series_slug, "voice_id": voice_id},
+        )
+    return _render(
+        request,
+        "voice_detail.html",
+        {"series_slug": series_slug, "voice_id": voice_id},
     )
 
 
@@ -241,6 +329,13 @@ async def ui_jobs_table(
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         raise HTTPException(status_code=500, detail="Job store not initialized")
+    try:
+        auth_store = getattr(request.app.state, "auth_store", None)
+        if auth_store is None:
+            raise HTTPException(status_code=500, detail="Auth store not initialized")
+        ident = current_identity(request, auth_store)
+    except Exception:
+        return RedirectResponse(url="/ui/login", status_code=302)
     # mirror API defaults
     limit_i = max(1, min(200, int(limit)))
     jobs = store.list(limit=1000, state=(status or None))
@@ -279,7 +374,16 @@ async def ui_jobs_table(
                     continue
             out_jobs.append(j)
         jobs = out_jobs
-    jobs = jobs[:limit_i]
+    visible: list[Job] = []
+    for j in jobs:
+        try:
+            require_job_access(store=store, ident=ident, job=j)
+        except HTTPException as ex:
+            if ex.status_code == 403:
+                continue
+            raise
+        visible.append(j)
+    jobs = visible[:limit_i]
     # Template expects simple dicts with state as string.
     out: list[dict[str, Any]] = []
     for j in jobs:
@@ -313,6 +417,17 @@ async def ui_job_detail(request: Request, job_id: str) -> HTMLResponse:
     user = _current_user_optional(request)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        store = getattr(request.app.state, "job_store", None)
+        auth_store = getattr(request.app.state, "auth_store", None)
+        if store is None or auth_store is None:
+            raise HTTPException(status_code=500, detail="Store not initialized")
+        ident = current_identity(request, auth_store)
+        require_job_access(store=store, ident=ident, job_id=job_id)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     created = (request.query_params.get("created") or "").strip() == "1"
     return _render(request, "job_detail.html", {"job_id": job_id, "created": created})
 
@@ -393,10 +508,24 @@ async def ui_settings(request: Request) -> HTMLResponse:
                 },
                 "notifications": {
                     "ntfy_enabled": bool(getattr(s, "ntfy_enabled", False)),
+                    "ntfy_base_configured": bool(str(getattr(s, "ntfy_base_url", "") or "").strip()),
+                    "ntfy_default_topic_configured": bool(
+                        str(getattr(s, "ntfy_topic", "") or "").strip()
+                    ),
                 },
             },
         },
     )
+
+
+@router.get("/settings/notifications")
+async def ui_settings_notifications(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="settings_notifications")
+    return _render(request, "settings_notifications.html", {})
 
 
 @router.get("/admin/queue")

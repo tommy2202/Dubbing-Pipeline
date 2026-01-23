@@ -13,6 +13,7 @@ def _have(cmd: str) -> bool:
 
 
 @pytest.mark.smoke
+@pytest.mark.optional_deps
 def test_smoke_whisper_small_and_tts_one_line(tmp_path: Path) -> None:
     """
     Minimal ops smoke:

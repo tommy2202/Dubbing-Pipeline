@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from dubbing_pipeline.config import get_settings
-from dubbing_pipeline.jobs.checkpoint import read_ckpt, stage_is_done, write_ckpt
+from dubbing_pipeline.jobs.checkpoint import (
+    read_ckpt,
+    record_stage_skipped,
+    record_stage_started,
+    stage_is_done,
+    write_ckpt,
+)
 from dubbing_pipeline.jobs.limits import get_limits
 from dubbing_pipeline.jobs.models import Job, JobState, now_utc
 from dubbing_pipeline.jobs.store import JobStore
@@ -568,6 +574,8 @@ class JobQueue:
                         _note_pass2_skip("audio_extractor", "checkpoint_hit")
                 else:
                     _fail_if_forbidden_stage("audio_extractor")
+                    with suppress(Exception):
+                        record_stage_started(job_id, "audio", ckpt_path=ckpt_path)
                     if sched is None:
                         wav = run_with_timeout(
                             "audio_extract",
@@ -1578,6 +1586,13 @@ class JobQueue:
                                     ckpt_path=ckpt_path,
                                 )
                                 ckpt = read_ckpt(job_id, ckpt_path=ckpt_path) or ckpt
+                            with suppress(Exception):
+                                record_stage_skipped(
+                                    job_id,
+                                    "transcribe",
+                                    "imported_transcript",
+                                    ckpt_path=ckpt_path,
+                                )
                             # Record skip reason
                             try:
                                 curj2 = self.store.get(job_id)
@@ -1595,6 +1610,8 @@ class JobQueue:
                             )
                         else:
                             _fail_if_forbidden_stage("transcribe")
+                            with suppress(Exception):
+                                record_stage_started(job_id, "transcribe", ckpt_path=ckpt_path)
                             if sched is None:
                                 run_with_timeout(
                                     "transcribe",
@@ -1863,6 +1880,7 @@ class JobQueue:
             )
 
             do_translate = job.src_lang.lower() != job.tgt_lang.lower()
+            translate_skip_recorded = False
             subs_srt_path: Path | None = srt_out if no_store_tx else srt_public
             # Resynthesis path: if transcript edits exist and a resynth was requested,
             # we will skip MT and synthesize only approved segments (others become silence).
@@ -2075,6 +2093,14 @@ class JobQueue:
                         self.store.update(job_id, runtime=rt2)
                     except Exception:
                         pass
+                    with suppress(Exception):
+                        record_stage_skipped(
+                            job_id,
+                            "translate",
+                            "imported_target_srt",
+                            ckpt_path=ckpt_path,
+                        )
+                        translate_skip_recorded = True
                     self.store.append_log(
                         job_id, f"[{now_utc()}] translate skipped (import target srt)"
                     )
@@ -2131,6 +2157,14 @@ class JobQueue:
                                 self.store.update(job_id, runtime=rt2)
                             except Exception:
                                 pass
+                            with suppress(Exception):
+                                record_stage_skipped(
+                                    job_id,
+                                    "translate",
+                                    "imported_transcript_json",
+                                    ckpt_path=ckpt_path,
+                                )
+                                translate_skip_recorded = True
                             self.store.append_log(
                                 job_id, f"[{now_utc()}] translate skipped (import transcript json)"
                             )
@@ -2147,6 +2181,14 @@ class JobQueue:
                 self.store.append_log(job_id, f"[{now_utc()}] translate (checkpoint hit)")
                 subs_srt_path = translated_srt
                 do_translate = False
+                with suppress(Exception):
+                    record_stage_skipped(
+                        job_id,
+                        "translate",
+                        "checkpoint_hit",
+                        ckpt_path=ckpt_path,
+                    )
+                    translate_skip_recorded = True
                 if is_pass2_outer:
                     _note_pass2_skip("translate", "checkpoint_hit")
 
@@ -2168,7 +2210,15 @@ class JobQueue:
             if is_pass2_outer and not do_translate:
                 _note_pass2_skip("translate", "not_needed_or_already_done")
 
+            if not do_translate and not translate_skip_recorded:
+                reason = "same_language" if job.src_lang.lower() == job.tgt_lang.lower() else "not_needed"
+                with suppress(Exception):
+                    record_stage_skipped(job_id, "translate", reason, ckpt_path=ckpt_path)
+                    translate_skip_recorded = True
+
             if do_translate:
+                with suppress(Exception):
+                    record_stage_started(job_id, "translate", ckpt_path=ckpt_path)
                 self.store.update(job_id, progress=0.62, message="Translating subtitles")
                 self.store.append_log(
                     job_id, f"[{now_utc()}] translate src={job.src_lang} tgt={job.tgt_lang}"
@@ -2477,6 +2527,8 @@ class JobQueue:
 
             self.store.update(job_id, progress=0.76, message="Synthesizing TTS")
             self.store.append_log(job_id, f"[{now_utc()}] tts")
+            with suppress(Exception):
+                record_stage_started(job_id, "tts", ckpt_path=ckpt_path)
             try:
                 with time_hist(pipeline_tts_seconds) as elapsed:
                     t_tts0 = time.perf_counter()
@@ -2778,8 +2830,11 @@ class JobQueue:
             out_mp4 = work_dir / f"{video_path.stem}.dub.mp4"
             final_mkv = base_dir / f"{video_path.stem}.dub.mkv"
             final_mp4 = base_dir / f"{video_path.stem}.dub.mp4"
+            used_mux_fallback = False
             self.store.update(job_id, progress=0.97, message="Mixing & muxing")
             self.store.append_log(job_id, f"[{now_utc()}] mix")
+            with suppress(Exception):
+                record_stage_started(job_id, "mix", ckpt_path=ckpt_path)
             with time_hist(pipeline_mux_seconds) as elapsed_mux:
                 try:
                     # checkpoint-aware skip (accept either our "mix" stage marker or legacy "mux")
@@ -3186,7 +3241,17 @@ class JobQueue:
                     self.store.append_log(
                         job_id, f"[{now_utc()}] mix failed: {ex} (falling back to mux)"
                     )
+                    with suppress(Exception):
+                        record_stage_skipped(
+                            job_id,
+                            "mix",
+                            "fallback_to_export",
+                            ckpt_path=ckpt_path,
+                        )
                     if sched is None:
+                        with suppress(Exception):
+                            record_stage_started(job_id, "mux", ckpt_path=ckpt_path)
+                            used_mux_fallback = True
                         run_with_timeout(
                             "mux",
                             timeout_s=limits.timeout_mux_s,
@@ -3202,6 +3267,9 @@ class JobQueue:
                             cancel_exc=JobCanceled(),
                         )
                     else:
+                        with suppress(Exception):
+                            record_stage_started(job_id, "mux", ckpt_path=ckpt_path)
+                            used_mux_fallback = True
                         with sched.phase("mux"):
                             run_with_timeout(
                                 "mux",
@@ -3221,6 +3289,15 @@ class JobQueue:
                     dt = elapsed_mux()
                     if dt > float(settings.budget_mux_sec):
                         _mark_degraded("budget_mux_exceeded")
+
+            if not used_mux_fallback:
+                with suppress(Exception):
+                    record_stage_skipped(
+                        job_id,
+                        "mux",
+                        "combined_with_mix",
+                        ckpt_path=ckpt_path,
+                    )
 
             def _move_best_effort(src: Path, dst: Path) -> None:
                 try:
@@ -3367,6 +3444,106 @@ class JobQueue:
                 pass
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] mobile outputs skipped: {ex}")
+
+            # Preview variants (optional; off by default).
+            try:
+                if is_pass2_outer:
+                    _note_pass2_skip("previews", "pass2_skip")
+                    raise _Pass2Skip()
+                enable_audio = bool(getattr(settings, "enable_audio_preview", False))
+                enable_lowres = bool(getattr(settings, "enable_lowres_preview", False))
+                if not enable_audio and not enable_lowres:
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] preview_generation_skipped: disabled"
+                    )
+                else:
+                    from dubbing_pipeline.stages.export import export_audio_preview, export_lowres_mp4
+
+                    preview_dir = (base_dir / "preview").resolve()
+                    preview_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Prefer enhanced final mix when present, else TTS track.
+                    audio_src = (
+                        (base_dir / "audio" / "final_mix.wav")
+                        if (base_dir / "audio" / "final_mix.wav").exists()
+                        else tts_wav
+                    )
+
+                    if enable_audio:
+                        if audio_src and audio_src.exists():
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] preview_generation_started: audio"
+                            )
+                            run_with_timeout(
+                                "export_audio_preview",
+                                timeout_s=limits.timeout_export_s,
+                                fn=export_audio_preview,
+                                kwargs={
+                                    "audio_in": audio_src,
+                                    "out_path": preview_dir / "audio_preview.m4a",
+                                    "bitrate": "96k",
+                                },
+                                cancel_check=_cancel_check_sync,
+                                cancel_exc=JobCanceled(),
+                            )
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] preview_generation_finished: audio"
+                            )
+                        else:
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] preview_generation_skipped: audio_missing"
+                            )
+                    else:
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] preview_generation_skipped: audio_disabled"
+                        )
+
+                    if enable_lowres:
+                        preset = str(getattr(settings, "lowres_preview_preset", "480p") or "480p")
+                        source_video = None
+                        for cand in [
+                            final_mp4,
+                            final_mkv,
+                            Path(out_mp4) if out_mp4 else None,
+                            Path(out_mkv) if out_mkv else None,
+                        ]:
+                            if cand is not None and cand.exists():
+                                source_video = cand
+                                break
+                        if source_video is None:
+                            self.store.append_log(
+                                job_id,
+                                f"[{now_utc()}] preview_generation_skipped: lowres_missing_source",
+                            )
+                        else:
+                            self.store.append_log(
+                                job_id,
+                                f"[{now_utc()}] preview_generation_started: lowres preset={preset}",
+                            )
+                            run_with_timeout(
+                                "export_lowres_preview",
+                                timeout_s=limits.timeout_export_s,
+                                fn=export_lowres_mp4,
+                                kwargs={
+                                    "video_in": source_video,
+                                    "audio_wav": None,
+                                    "out_path": preview_dir / "preview_lowres.mp4",
+                                    "preset": preset,
+                                },
+                                cancel_check=_cancel_check_sync,
+                                cancel_exc=JobCanceled(),
+                            )
+                            self.store.append_log(
+                                job_id, f"[{now_utc()}] preview_generation_finished: lowres"
+                            )
+                    else:
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] preview_generation_skipped: lowres_disabled"
+                        )
+            except _Pass2Skip:
+                pass
+            except Exception as ex:
+                self.store.append_log(job_id, f"[{now_utc()}] preview_generation_skipped: {ex}")
 
             # Tier-3A: optional lip-sync plugin (default off).
             try:
@@ -3720,6 +3897,8 @@ class JobQueue:
         settings = get_settings()
         if not bool(getattr(settings, "ntfy_enabled", False)):
             return
+        if not str(getattr(settings, "ntfy_base_url", "") or "").strip():
+            return
 
         job = self.store.get(job_id)
         if job is None:
@@ -3759,19 +3938,68 @@ class JobQueue:
 
         # Run sync notifier in a thread to avoid blocking the async worker.
         import asyncio as _asyncio
+        import re as _re
+
+        def _topic_ok(v: str) -> bool:
+            vv = str(v or "").strip()
+            if not vv:
+                return False
+            return bool(_re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", vv))
+
+        def _user_notify_topic(user_id: str) -> str | None:
+            try:
+                from dubbing_pipeline.api.routes_settings import UserSettingsStore
+
+                st = UserSettingsStore()
+                cfg = st.get_user(user_id)
+                n = cfg.get("notifications") if isinstance(cfg, dict) else None
+                if not isinstance(n, dict):
+                    return None
+                if not bool(n.get("enabled")):
+                    return None
+                topic = str(n.get("topic") or "").strip()
+                if topic and _topic_ok(topic):
+                    return topic
+                return None
+            except Exception:
+                return None
 
         def _send() -> bool:
             from dubbing_pipeline.notify.ntfy import notify as _notify
 
-            return _notify(
-                event=f"job.{str(state).lower()}",
-                title=title,
-                message=msg,
-                url=click,
-                tags=tags,
-                priority=prio,
-                user_id=str(job.owner_id or "") or None,
-                job_id=str(job_id),
-            )
+            ok_any = False
+            owner_id = str(job.owner_id or "").strip()
+            if owner_id:
+                topic = _user_notify_topic(owner_id)
+                if topic:
+                    ok_any = bool(
+                        _notify(
+                            event=f"job.{str(state).lower()}",
+                            title=title,
+                            message=msg,
+                            url=click,
+                            tags=tags,
+                            priority=prio,
+                            user_id=owner_id,
+                            job_id=str(job_id),
+                            topic=topic,
+                        )
+                    )
+
+            admin_topic = str(getattr(settings, "ntfy_admin_topic", "") or "").strip()
+            if bool(getattr(settings, "ntfy_notify_admin", False)) and _topic_ok(admin_topic):
+                ok_admin = _notify(
+                    event=f"job.{str(state).lower()}",
+                    title=title,
+                    message=msg,
+                    url=click,
+                    tags=tags + ["admin"],
+                    priority=prio,
+                    user_id="admin",
+                    job_id=str(job_id),
+                    topic=admin_topic,
+                )
+                ok_any = bool(ok_any or ok_admin)
+            return ok_any
 
         await _asyncio.to_thread(_send)

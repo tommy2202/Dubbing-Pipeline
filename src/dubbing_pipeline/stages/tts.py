@@ -314,6 +314,8 @@ def run(
     # Format: {"items":[{"character_id": "...", "speaker_strategy": "preset|zero-shot", "tts_speaker": "...", "tts_speaker_wav": "..."}]}
     per_speaker_wav_override: dict[str, Path] = {}
     per_speaker_preset_override: dict[str, str] = {}
+    per_speaker_voice_mode: dict[str, str] = {}
+    per_speaker_keep_original: set[str] = set()
     try:
         vmj = str(eff_voice_map_json_path) if eff_voice_map_json_path else ""
         if vmj:
@@ -323,9 +325,17 @@ def run(
                     if not isinstance(it, dict):
                         continue
                     cid = str(it.get("character_id") or "").strip()
-                    strat = str(it.get("speaker_strategy") or "").strip().lower()
+                    strat = str(it.get("speaker_strategy") or it.get("strategy") or "").strip().lower()
                     if not cid:
                         continue
+                    if strat in {"original", "keep-original", "keep_original", "keep"}:
+                        per_speaker_keep_original.add(cid)
+                        per_speaker_voice_mode[cid] = "original"
+                        continue
+                    if strat in {"preset"}:
+                        per_speaker_voice_mode[cid] = "preset"
+                    if strat in {"zero-shot", "zeroshot", "clone"}:
+                        per_speaker_voice_mode[cid] = "clone"
                     if strat in {"zero-shot", "zeroshot", "clone"}:
                         wp = str(it.get("tts_speaker_wav") or "").strip()
                         if wp:
@@ -339,6 +349,8 @@ def run(
     except Exception:
         per_speaker_wav_override = {}
         per_speaker_preset_override = {}
+        per_speaker_voice_mode = {}
+        per_speaker_keep_original = set()
 
     # Determine lines to synthesize
     lines: list[dict]
@@ -784,6 +796,26 @@ def run(
             seg_voice_mode = "clone"
         if eff_no_clone and seg_voice_mode == "clone":
             seg_voice_mode = "preset"
+        per_mode = per_speaker_voice_mode.get(speaker_id)
+        if per_mode in {"clone", "preset", "single"}:
+            seg_voice_mode = per_mode
+        if per_mode == "original" or speaker_id in per_speaker_keep_original:
+            clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
+            _write_silence_wav(clip, duration_s=max(0.0, seg_end - seg_start))
+            _ffmpeg_to_pcm16k(clip, clip)
+            clip_paths.append(clip)
+            _note_segment(
+                speaker_id=speaker_id,
+                provider="silence",
+                ref_path=None,
+                clone_attempted=False,
+                clone_succeeded=False,
+                fallback_reason="keep_original",
+            )
+            if progress_cb is not None:
+                with suppress(Exception):
+                    progress_cb(i + 1, total)
+            continue
 
         # 2) Persistent character ref (series-scoped), if mapped.
         if (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.utils.ffmpeg_safe import run_ffmpeg
@@ -359,6 +360,133 @@ def export_mobile_mp4(
         str(out_path),
     ]
     run_ffmpeg(cmd, timeout_s=1200, retries=0, capture=True)
+    return out_path
+
+
+def export_audio_preview(
+    audio_in: Path,
+    out_path: Path,
+    *,
+    bitrate: str = "96k",
+) -> Path:
+    """
+    Lightweight audio-only preview (AAC or MP3 based on file suffix).
+    """
+    audio_in = Path(audio_in)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = out_path.suffix.lower()
+    if suffix == ".mp3":
+        codec = "libmp3lame"
+        media_tag = "mp3"
+    else:
+        codec = "aac"
+        media_tag = "aac"
+    cmd: list[str] = [
+        str(get_settings().ffmpeg_bin),
+        "-y",
+        "-i",
+        str(audio_in),
+        "-vn",
+        "-c:a",
+        codec,
+        "-b:a",
+        str(bitrate),
+        "-sn",
+        "-avoid_negative_ts",
+        "make_zero",
+        str(out_path),
+    ]
+    run_ffmpeg(cmd, timeout_s=300, retries=0, capture=True)
+    logger.info("[dp] export audio preview (%s) → %s", media_tag, out_path)
+    return out_path
+
+
+def _lowres_preset(preset: str) -> dict[str, Any]:
+    p = str(preset or "").strip().lower()
+    presets: dict[str, dict[str, Any]] = {
+        "360p": {"height": 360, "crf": 30, "video_bitrate": "600k", "audio_bitrate": "96k"},
+        "480p": {"height": 480, "crf": 28, "video_bitrate": "900k", "audio_bitrate": "96k"},
+        "480p_baseline": {
+            "height": 480,
+            "crf": 28,
+            "video_bitrate": "900k",
+            "audio_bitrate": "96k",
+        },
+        "540p": {"height": 540, "crf": 26, "video_bitrate": "1200k", "audio_bitrate": "128k"},
+    }
+    return presets.get(p, presets["480p"])
+
+
+def _double_rate(rate: str) -> str:
+    r = str(rate or "").strip().lower()
+    if r.endswith("k"):
+        try:
+            return f"{int(r[:-1]) * 2}k"
+        except Exception:
+            return r
+    return r
+
+
+def export_lowres_mp4(
+    *,
+    video_in: Path,
+    audio_wav: Path | None,
+    out_path: Path,
+    preset: str = "480p",
+) -> Path:
+    """
+    Low-res MP4 preview for mobile streaming.
+    """
+    video_in = Path(video_in)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = _lowres_preset(preset)
+    height = int(cfg.get("height") or 480)
+    crf = int(cfg.get("crf") or 28)
+    video_bitrate = str(cfg.get("video_bitrate") or "900k")
+    audio_bitrate = str(cfg.get("audio_bitrate") or "96k")
+    bufsize = _double_rate(video_bitrate)
+
+    cmd: list[str] = [str(get_settings().ffmpeg_bin), "-y", "-i", str(video_in)]
+    if audio_wav is not None:
+        cmd += ["-i", str(audio_wav)]
+        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+    else:
+        cmd += ["-map", "0:v:0", "-map", "0:a:0?"]
+
+    cmd += [
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "baseline",
+        "-level",
+        "3.0",
+        "-preset",
+        "veryfast",
+        "-crf",
+        str(crf),
+        "-maxrate",
+        video_bitrate,
+        "-bufsize",
+        bufsize,
+        "-pix_fmt",
+        "yuv420p",
+        "-vf",
+        f"scale=-2:{height}",
+        "-c:a",
+        "aac",
+        "-b:a",
+        audio_bitrate,
+        "-movflags",
+        "+faststart",
+        "-sn",
+        "-avoid_negative_ts",
+        "make_zero",
+        str(out_path),
+    ]
+    run_ffmpeg(cmd, timeout_s=1200, retries=0, capture=True)
+    logger.info("[dp] export lowres mp4 (%s) → %s", preset, out_path)
     return out_path
 
 

@@ -8,13 +8,11 @@ from fastapi import HTTPException, Request, WebSocket, status
 
 from dubbing_pipeline.utils.config import get_settings
 from dubbing_pipeline.utils.log import logger
+from dubbing_pipeline.utils.net import get_client_ip
 
 
 def _client_ip(request: Request) -> str:
-    # Keep it simple; avoid trusting X-Forwarded-For by default.
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+    return get_client_ip(request)
 
 
 def _get_token(request: Request) -> str | None:

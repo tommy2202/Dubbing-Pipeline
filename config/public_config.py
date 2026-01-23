@@ -131,6 +131,9 @@ class PublicConfig(BaseSettings):
     # Mobile playback artifacts (does not change master outputs)
     mobile_outputs: bool = Field(default=True, alias="MOBILE_OUTPUTS")
     mobile_hls: bool = Field(default=False, alias="MOBILE_HLS")
+    enable_audio_preview: bool = Field(default=False, alias="ENABLE_AUDIO_PREVIEW")
+    enable_lowres_preview: bool = Field(default=False, alias="ENABLE_LOWRES_PREVIEW")
+    lowres_preview_preset: str = Field(default="480p", alias="LOWRES_PREVIEW_PRESET")
 
     # Feature B: retention/cache policy (opt-in; default keep everything)
     cache_policy: str = Field(default="full", alias="CACHE_POLICY")  # full|balanced|minimal
@@ -161,7 +164,10 @@ class PublicConfig(BaseSettings):
     remote_access_mode: str = Field(default="off", alias="REMOTE_ACCESS_MODE")  # off|tailscale|cloudflare
     allowed_subnets: str = Field(default="", alias="ALLOWED_SUBNETS")  # comma/space separated CIDRs
     trust_proxy_headers: bool = Field(default=False, alias="TRUST_PROXY_HEADERS")
-    trusted_proxy_subnets: str = Field(default="", alias="TRUSTED_PROXY_SUBNETS")  # CIDRs
+    trusted_proxy_subnets: str = Field(
+        default="",
+        alias=AliasChoices("TRUSTED_PROXY_SUBNETS", "TRUSTED_PROXIES"),
+    )  # CIDRs or IPs
 
     # Optional Cloudflare Access verification (recommended when REMOTE_ACCESS_MODE=cloudflare)
     # These are not secrets (they identify the Access app), but verification may require fetching JWKS.
@@ -207,6 +213,8 @@ class PublicConfig(BaseSettings):
     ntfy_tls_insecure: bool = Field(default=False, alias="NTFY_TLS_INSECURE")
     ntfy_timeout_sec: float = Field(default=5.0, alias="NTFY_TIMEOUT_SEC")
     ntfy_retries: int = Field(default=3, alias="NTFY_RETRIES")
+    ntfy_notify_admin: bool = Field(default=False, alias="NTFY_NOTIFY_ADMIN")
+    ntfy_admin_topic: str = Field(default="", alias="NTFY_ADMIN_TOPIC")
 
     # Optional public base URL used to generate absolute links in notifications/QRs.
     # If unset, notifications will omit the click URL.
@@ -333,6 +341,7 @@ class PublicConfig(BaseSettings):
     )
     voice_auto_match: bool = Field(default=False, alias="VOICE_AUTO_MATCH")
     voice_match_threshold: float = Field(default=0.75, alias="VOICE_MATCH_THRESHOLD")
+    voice_drift_threshold: float = Field(default=0.75, alias="VOICE_DRIFT_THRESHOLD")
     voice_auto_enroll: bool = Field(default=True, alias="VOICE_AUTO_ENROLL")
     voice_character_map: Path | None = Field(default=None, alias="VOICE_CHARACTER_MAP")
 
@@ -362,6 +371,13 @@ class PublicConfig(BaseSettings):
     budget_tts_sec: int = Field(default=900, alias="BUDGET_TTS_SEC")
     budget_mux_sec: int = Field(default=120, alias="BUDGET_MUX_SEC")
 
+    retention_enabled: bool = Field(default=True, alias="RETENTION_ENABLED")
+    retention_upload_ttl_hours: int = Field(default=24, alias="RETENTION_UPLOAD_TTL_HOURS")
+    retention_job_artifact_days: int = Field(default=14, alias="RETENTION_JOB_ARTIFACT_DAYS")
+    retention_log_days: int = Field(default=14, alias="RETENTION_LOG_DAYS")
+    retention_interval_sec: int = Field(default=3600, alias="RETENTION_INTERVAL_SEC")
+
+    # Legacy retention knobs (kept for compatibility; prefer the RETENTION_* settings above).
     retention_days_input: int = Field(default=7, alias="RETENTION_DAYS_INPUT")
     retention_days_logs: int = Field(default=14, alias="RETENTION_DAYS_LOGS")
     char_store_key_file: Path = Field(
@@ -408,6 +424,8 @@ class PublicConfig(BaseSettings):
     # redis: require Redis (falls back only if unreachable at runtime)
     # fallback: force local queue
     queue_mode: str = Field(default="auto", alias="QUEUE_MODE")  # auto|redis|fallback
+    # Optional explicit backend selector (preferred for scale path config)
+    queue_backend: str = Field(default="", alias="QUEUE_BACKEND")  # local|redis
     # Redis key prefix for queue/locks/counters (no secrets)
     redis_queue_prefix: str = Field(default="dp", alias="REDIS_QUEUE_PREFIX")
     # Per-job lock lease (ms). Must be refreshed while a job runs.
@@ -421,6 +439,10 @@ class PublicConfig(BaseSettings):
     redis_cancel_ttl_ms: int = Field(default=24 * 3600_000, alias="REDIS_CANCEL_TTL_MS")
     # Active set TTL (ms): keep per-user active job sets bounded
     redis_active_set_ttl_ms: int = Field(default=6 * 3600_000, alias="REDIS_ACTIVE_SET_TTL_MS")
+
+    # --- store backend (optional scale path) ---
+    store_backend: str = Field(default="local", alias="STORE_BACKEND")  # local|postgres
+    postgres_dsn: str = Field(default="", alias="POSTGRES_DSN")
 
     # --- job limits/watchdogs ---
     max_video_min: int = Field(default=120, alias="MAX_VIDEO_MIN")

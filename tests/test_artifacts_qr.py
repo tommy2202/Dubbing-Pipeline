@@ -78,8 +78,11 @@ def test_job_files_and_qrcode(tmp_path: Path) -> None:
         data = r1.json()
         assert data["mp4"]["url"].startswith("/files/")
 
-        # file serving
-        r2 = c.get(data["mp4"]["url"], headers=headers)
+        # file serving (range)
+        r2 = c.get(
+            data["mp4"]["url"],
+            headers={**headers, "Range": "bytes=0-1"},
+        )
         assert r2.status_code == 206
 
         # QR code

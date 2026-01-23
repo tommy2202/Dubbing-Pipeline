@@ -20,6 +20,7 @@ from dubbing_pipeline.api.security import (
 )
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.utils.crypto import PasswordHasher
+from dubbing_pipeline.utils.net import get_client_ip
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -29,7 +30,7 @@ from dubbing_pipeline.api.deps import Identity, require_role  # noqa: E402
 
 
 def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    return get_client_ip(request)
 
 
 def _ua(request: Request) -> str:

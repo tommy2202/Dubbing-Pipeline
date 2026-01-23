@@ -18,6 +18,18 @@ Outputs are written under:
 - **Security & privacy**: cookie sessions + CSRF, strict CORS, rate limits, RBAC + scoped API keys, audit logging, optional encryption-at-rest, privacy mode + retention.
 - **Ops**: model cache status + optional prewarm, library management (tags/archive/delete), verification gates.
 
+Before inviting others, run:
+
+```bash
+python3 scripts/v0_gate.py
+```
+
+For P1 reliability checks:
+
+```bash
+python3 scripts/p1_gate.py
+```
+
 ### Documentation index (start here)
 - **Quickstart (Tailscale recommended)**: `docs/GOLDEN_PATH_TAILSCALE.md`
 - Clean setup guide (brand-new computer): `docs/CLEAN_SETUP_GUIDE.txt`
@@ -68,6 +80,19 @@ This starts the server in **Tailscale mode** (IP allowlist enforced) and prints 
 ```bash
 python3 -m pip install -e .
 ```
+
+---
+
+## Developer quickstart
+
+```bash
+python3 -m pip install -e ".[dev]"
+pytest -q
+python3 scripts/polish_gate.py  # v0 gate
+```
+
+Notes:
+- Some tests are skipped when optional dependencies (e.g., whisper) are missing.
 
 ### Runtime directories (important)
 

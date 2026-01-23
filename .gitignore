@@ -14,6 +14,13 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.nox/
+.tox/
+.venv/
+.coverage
+.coverage.*
+.cache/
+pip-wheel-metadata/
 
 # runtime artifacts
 logs/
@@ -39,6 +46,8 @@ docker/ntfy/server.yml
 build/
 dist/
 releases/
+*.zip
+*.tar.gz
 
 # local backups (never commit)
 backups/

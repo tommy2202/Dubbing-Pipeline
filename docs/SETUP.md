@@ -275,7 +275,7 @@ Important:
 
 ---
 
-## Retention (optional)
+## Retention (default on)
 
 Per-job retention controls (CLI and Web):
 - `--cache-policy full|balanced|minimal` (default `full`)
@@ -285,11 +285,20 @@ Per-job retention controls (CLI and Web):
 Report:
 - `Output/<stem>/analysis/retention_report.json`
 
-Global best-effort cleanup (old uploads/logs):
-- configured by `RETENTION_DAYS_INPUT` and `RETENTION_DAYS_LOGS`
-- run manually:
+Global best-effort cleanup (uploads/logs/job artifacts):
+- `RETENTION_ENABLED=1` (default on)
+- `RETENTION_UPLOAD_TTL_HOURS=24`
+- `RETENTION_JOB_ARTIFACT_DAYS=14`
+- `RETENTION_LOG_DAYS=14`
+- `RETENTION_INTERVAL_SEC=3600` (background sweep interval)
+
+Pinned jobs are skipped by the sweeper. Jobs are treated as pinned when:
+- `runtime.pinned=true` (job runtime metadata), or
+- the job is archived (`/api/jobs/{id}/archive`).
+
+Run manually:
 
 ```bash
-python3 -m dubbing_pipeline.ops.retention
+python3 scripts/run_retention_once.py
 ```
 

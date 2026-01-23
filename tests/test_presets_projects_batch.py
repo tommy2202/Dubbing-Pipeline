@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,6 +17,10 @@ def _runtime_video_path(tmp_path: Path) -> str:
     This test exercises submit paths that may call ffprobe, so we generate a real tiny MP4.
     """
     root = tmp_path.resolve()
+    if shutil.which("ffmpeg") is None:
+        import pytest
+
+        pytest.skip("ffmpeg not available")
     in_dir = root / "Input"
     out_dir = root / "Output"
     logs_dir = root / "logs"
@@ -114,7 +119,16 @@ def test_presets_projects_and_batch(tmp_path: Path) -> None:
             }
             for _ in range(3)
         ]
-        br = c.post("/api/jobs/batch", headers=headers, json={"items": items})
+        br = c.post(
+            "/api/jobs/batch",
+            headers=headers,
+            json={
+                "items": items,
+                "series_title": "Series A",
+                "season_number": 1,
+                "episode_number": 1,
+            },
+        )
         assert br.status_code == 200
         ids = br.json()["ids"]
         assert len(ids) == 3

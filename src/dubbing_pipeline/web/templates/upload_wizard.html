@@ -39,6 +39,17 @@
     useIdem: false,
     idemKey: '',
     error: '',
+    uploading: false,
+    uploadStatus: '',
+    uploadError: '',
+    uploadBytes: 0,
+    uploadTotal: 0,
+    uploadPercent: 0,
+    uploadSpeedBps: 0,
+    uploadChunkIndex: 0,
+    uploadChunkTotal: 0,
+    uploadResumeMsg: '',
+    uploadRetryMsg: '',
     setFile(f) {
       this.file = f || null;
       this.fileName = f ? (f.name || '') : '';
@@ -59,6 +70,13 @@
         return (i===0 ? String(x) : x.toFixed(1)) + ' ' + u[i];
       } catch(e) { return String(n||0); }
     },
+    fmtSpeed(bps) {
+      try {
+        const v = Number(bps || 0);
+        if (!v || v <= 0) return '';
+        return this.fmtBytes(v) + '/s';
+      } catch(e) { return ''; }
+    },
     genIdem() {
       try {
         const a = new Uint8Array(16);
@@ -70,6 +88,38 @@
     }
   }"
   @job-submit-error.window="error = ($event.detail && $event.detail.message) ? $event.detail.message : 'Job submit failed'"
+  @upload-state.window="
+    const d = $event.detail || {};
+    if (d.reset) {
+      uploading = false;
+      uploadStatus = '';
+      uploadError = '';
+      uploadBytes = 0;
+      uploadTotal = 0;
+      uploadPercent = 0;
+      uploadSpeedBps = 0;
+      uploadChunkIndex = 0;
+      uploadChunkTotal = 0;
+      uploadResumeMsg = '';
+      uploadRetryMsg = '';
+    }
+    if (d.uploading !== undefined) uploading = !!d.uploading;
+    if (d.status !== undefined) uploadStatus = d.status || '';
+    if (d.bytes !== undefined) uploadBytes = Number(d.bytes || 0);
+    if (d.total !== undefined) uploadTotal = Number(d.total || 0);
+    if (d.percent !== undefined) uploadPercent = Number(d.percent || 0);
+    if (d.speed_bps !== undefined) uploadSpeedBps = Number(d.speed_bps || 0);
+    if (d.chunk_index !== undefined) uploadChunkIndex = Number(d.chunk_index || 0);
+    if (d.chunk_total !== undefined) uploadChunkTotal = Number(d.chunk_total || 0);
+    if (d.resume !== undefined) uploadResumeMsg = d.resume || '';
+    if (d.retry !== undefined) uploadRetryMsg = d.retry || '';
+  "
+  @upload-error.window="
+    const msg = ($event.detail && $event.detail.message) ? $event.detail.message : 'Upload failed';
+    uploadError = msg;
+    error = msg;
+    uploading = false;
+  "
 >
   <div class="mb-4 flex items-center gap-2 text-sm">
     <div class="flex items-center gap-2">
@@ -153,6 +203,43 @@
             </div>
           </div>
         </template>
+
+        <!-- Upload progress (mobile-first) -->
+        <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/30 p-4"
+             x-show="uploading || uploadStatus || uploadError || uploadRetryMsg || uploadResumeMsg"
+             x-cloak>
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="text-sm text-slate-300">Upload progress</div>
+              <div class="mt-1 text-xs text-slate-500" x-text="uploadStatus || 'Preparing…'"></div>
+            </div>
+            <div class="text-xs text-slate-400" x-text="uploadPercent ? (uploadPercent.toFixed(1) + '%') : ''"></div>
+          </div>
+          <div class="mt-3 h-2 w-full rounded bg-slate-800">
+            <div class="h-2 rounded bg-indigo-600 transition-all"
+                 :style="'width: ' + Math.min(100, Math.max(0, uploadPercent || 0)) + '%'"></div>
+          </div>
+          <div class="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2">
+            <div>
+              <span class="text-slate-500">Bytes:</span>
+              <span x-text="fmtBytes(uploadBytes) + ' / ' + fmtBytes(uploadTotal)"></span>
+            </div>
+            <div>
+              <span class="text-slate-500">Speed:</span>
+              <span x-text="fmtSpeed(uploadSpeedBps)"></span>
+            </div>
+            <div x-show="uploadChunkTotal">
+              <span class="text-slate-500">Chunk:</span>
+              <span x-text="uploadChunkIndex + '/' + uploadChunkTotal"></span>
+            </div>
+            <div x-show="uploadResumeMsg">
+              <span class="text-slate-500">Resume:</span>
+              <span x-text="uploadResumeMsg"></span>
+            </div>
+          </div>
+          <div class="mt-2 text-xs text-amber-200" x-show="uploadRetryMsg" x-cloak x-text="uploadRetryMsg"></div>
+          <div class="mt-2 text-xs text-red-200" x-show="uploadError" x-cloak x-text="uploadError"></div>
+        </div>
 
         <!-- Server file picker fallback (reliable, no upload) -->
         <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
@@ -447,6 +534,8 @@
           x-show="step===3"
           x-cloak
           class="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-5 py-3 text-sm font-semibold"
+          :disabled="uploading"
+          :class="uploading ? 'opacity-60 cursor-not-allowed' : ''"
           @click="
             error='';
             if(!String(series_title||'').trim()){ error='Series name is required.'; $event.preventDefault(); return; }
@@ -459,7 +548,8 @@
             }
           "
         >
-          Start Job
+          <span x-show="!uploading">Start Job</span>
+          <span x-show="uploading" x-cloak>Uploading…</span>
         </button>
       </div>
     </div>
@@ -472,6 +562,154 @@
     const form = document.getElementById("jobForm");
     if (!form) return;
 
+    let uploadInFlight = false;
+    const MAX_RETRIES = 4;
+    const BASE_DELAY_MS = 450;
+
+    function emitState(patch) {
+      try {
+        window.dispatchEvent(new CustomEvent("upload-state", { detail: patch || {} }));
+      } catch (e) {}
+    }
+
+    function emitError(msg) {
+      try {
+        window.dispatchEvent(new CustomEvent("upload-error", { detail: { message: String(msg || "Upload failed") } }));
+      } catch (e) {}
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function isTransientStatus(status) {
+      return [408, 425, 429, 500, 502, 503, 504].includes(Number(status || 0));
+    }
+
+    function friendlyStatus(status, detail) {
+      const st = Number(status || 0);
+      const raw = String(detail || "").replace(/[\r\n]+/g, " ").trim();
+      if (st === 413) return "Upload too large for server limits. Try a smaller file.";
+      if (st === 415) return "Unsupported file type. Please upload MP4 or MKV.";
+      if (st === 403) return "Not authorized to upload. Please log in again.";
+      if (st === 429) return "Too many requests. Please wait a moment and retry.";
+      if (st >= 500) return "Server error during upload. Please retry in a moment.";
+      if (raw && raw.length < 200 && !/[\\/]/.test(raw)) return raw;
+      return "Upload failed. Please retry.";
+    }
+
+    function fileKey(file) {
+      try {
+        return "dp_upload:" + [file.name || "", file.size || 0, file.lastModified || 0].join(":");
+      } catch (e) {
+        return "dp_upload:" + String(file && file.name ? file.name : "file");
+      }
+    }
+
+    function safeParseJson(text) {
+      try { return JSON.parse(text); } catch (e) { return null; }
+    }
+
+    function localGet(key) {
+      try { return localStorage.getItem(key); } catch (e) { return null; }
+    }
+
+    function localSet(key, value) {
+      try { localStorage.setItem(key, value); } catch (e) {}
+    }
+
+    function localRemove(key) {
+      try { localStorage.removeItem(key); } catch (e) {}
+    }
+
+    async function sha256Hex(ab) {
+      const digest = await crypto.subtle.digest("SHA-256", ab);
+      return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    async function postChunkWithRetry({ uploadId, idx, offset, ab, csrf, totalChunks }) {
+      const hex = await sha256Hex(ab);
+      let attempt = 0;
+      while (true) {
+        try {
+          const res = await fetch(
+            `/api/uploads/${encodeURIComponent(uploadId)}/chunk?index=${idx}&offset=${offset}`,
+            {
+              method: "POST",
+              credentials: "include",
+              headers: {
+                "content-type": "application/octet-stream",
+                "X-Chunk-Sha256": hex,
+                "X-CSRF-Token": csrf,
+              },
+              body: ab,
+            }
+          );
+          if (res.ok) {
+            const data = await res.json().catch(() => ({}));
+            emitState({ retry: "" });
+            return { res, data };
+          }
+          const data = await res.json().catch(() => ({}));
+          if (isTransientStatus(res.status) && attempt < MAX_RETRIES) {
+            const delay = Math.min(6000, BASE_DELAY_MS * Math.pow(2, attempt)) + Math.random() * 150;
+            emitState({
+              retry: `Temporary issue uploading chunk ${idx + 1}/${totalChunks}. Retrying in ${(delay / 1000).toFixed(1)}s…`,
+            });
+            await sleep(delay);
+            attempt += 1;
+            continue;
+          }
+          throw new Error(friendlyStatus(res.status, data && (data.detail || data.error)));
+        } catch (err) {
+          if (attempt < MAX_RETRIES) {
+            const delay = Math.min(6000, BASE_DELAY_MS * Math.pow(2, attempt)) + Math.random() * 150;
+            emitState({
+              retry: `Network hiccup. Retrying chunk ${idx + 1}/${totalChunks} in ${(delay / 1000).toFixed(1)}s…`,
+            });
+            await sleep(delay);
+            attempt += 1;
+            continue;
+          }
+          throw err;
+        }
+      }
+    }
+
+    async function checkResume(file) {
+      const key = fileKey(file);
+      const raw = localGet(key);
+      if (!raw) return { mode: "new" };
+      const info = safeParseJson(raw);
+      const uploadId = info && info.upload_id ? String(info.upload_id) : "";
+      if (!uploadId) {
+        localRemove(key);
+        return { mode: "new" };
+      }
+      emitState({ resume: "Checking previous upload…" });
+      const res = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/status`, {
+        method: "GET",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        localRemove(key);
+        const reason = res.status === 404
+          ? "Resume unavailable (previous upload expired)."
+          : "Resume unavailable (access or server issue).";
+        return { mode: "new", reason };
+      }
+      const st = await res.json().catch(() => ({}));
+      const totalBytes = Number(st.total_bytes || 0);
+      if (totalBytes && totalBytes !== Number(file.size || 0)) {
+        localRemove(key);
+        return { mode: "new", reason: "Resume unavailable (file changed)."};
+      }
+      if (String(st.state || "") === "completed") {
+        return { mode: "completed", uploadId, status: st };
+      }
+      return { mode: "resume", uploadId, status: st };
+    }
+
     // Resumable chunked upload (single-file only). Falls back to HTMX multipart.
     form.addEventListener("submit", async function (evt) {
       try {
@@ -481,6 +719,12 @@
         const videoPath = (document.getElementById("videoPathHidden")?.value || "").trim();
         if (videoPath) return; // HTMX handles server file path
 
+        if (uploadInFlight) {
+          evt.preventDefault();
+          evt.stopPropagation();
+          return;
+        }
+
         const fileEl = document.getElementById("fileInputEl");
         const file = fileEl && fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
         if (!file) return; // allow existing validation to fire
@@ -488,6 +732,9 @@
         // Intercept HTMX submit
         evt.preventDefault();
         evt.stopPropagation();
+        uploadInFlight = true;
+
+        emitState({ reset: true, uploading: true, status: "Preparing upload…", bytes: 0, total: file.size });
 
         const csrf = document.getElementById("csrf")?.value || "";
         const fd = new FormData(form);
@@ -505,17 +752,19 @@
           qa: String(fd.get("qa") || "").trim() !== "",
         };
 
-        async function readSmallTextFile(inputId) {
+        async function readSmallTextFile(inputId, label) {
           const el = document.getElementById(inputId);
           if (!el || !el.files || !el.files.length) return "";
           const f = el.files[0];
-          if (f.size > (2 * 1024 * 1024)) throw new Error(inputId + " too large");
+          if (f.size > (2 * 1024 * 1024)) {
+            throw new Error((label || inputId) + " file too large (max 2MB)");
+          }
           return await f.text();
         }
         try {
-          const srcTxt = await readSmallTextFile("srcSrt");
-          const tgtTxt = await readSmallTextFile("tgtSrt");
-          const jsTxt = await readSmallTextFile("trJson");
+          const srcTxt = await readSmallTextFile("srcSrt", "Source SRT");
+          const tgtTxt = await readSmallTextFile("tgtSrt", "Target SRT");
+          const jsTxt = await readSmallTextFile("trJson", "Transcript JSON");
           if (srcTxt) cfg.src_srt_text = srcTxt;
           if (tgtTxt) cfg.tgt_srt_text = tgtTxt;
           if (jsTxt) cfg.transcript_json_text = jsTxt;
@@ -523,48 +772,136 @@
           throw e;
         }
 
-        // 1) init upload
-        const initR = await fetch("/api/uploads/init", {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
-          body: JSON.stringify({ filename: file.name, total_bytes: file.size, mime: file.type || "" }),
-        });
-        if (!initR.ok) throw new Error("upload init failed (" + initR.status + ")");
-        const init = await initR.json();
-        const uploadId = init.upload_id;
-        const chunkBytes = init.chunk_bytes || (5 * 1024 * 1024);
+        const key = fileKey(file);
+        let uploadId = "";
+        let chunkBytes = 0;
+        let startChunk = 0;
+        let totalBytes = Number(file.size || 0);
+        let totalChunks = 0;
+        let bytesReceived = 0;
+        let skipUpload = false;
 
-        // 2) upload chunks
-        let offset = 0;
-        let idx = 0;
-        while (offset < file.size) {
-          const end = Math.min(file.size, offset + chunkBytes);
-          const blob = file.slice(offset, end);
-          const ab = await blob.arrayBuffer();
-          const digest = await crypto.subtle.digest("SHA-256", ab);
-          const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
-          const chunkR = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/chunk?index=${idx}&offset=${offset}`, {
-            method: "POST",
-            credentials: "include",
-            headers: { "content-type": "application/octet-stream", "X-Chunk-Sha256": hex, "X-CSRF-Token": csrf },
-            body: ab,
+        const resume = await checkResume(file);
+        if (resume && resume.reason) emitState({ resume: resume.reason });
+
+        if (resume && resume.mode === "completed") {
+          uploadId = resume.uploadId;
+          skipUpload = true;
+          const st = resume.status || {};
+          totalBytes = Number(st.total_bytes || totalBytes);
+          chunkBytes = Number(st.chunk_bytes || chunkBytes);
+          totalChunks = Number(st.total_chunks || (chunkBytes ? Math.ceil(totalBytes / chunkBytes) : 0));
+          bytesReceived = Number(st.bytes_received || totalBytes);
+          emitState({
+            resume: "Upload already completed. Reusing existing upload.",
+            bytes: bytesReceived,
+            total: totalBytes,
+            percent: totalBytes ? (bytesReceived / totalBytes) * 100 : 0,
+            chunk_index: totalChunks || 0,
+            chunk_total: totalChunks || 0,
           });
-          if (!chunkR.ok) throw new Error("upload chunk failed (" + chunkR.status + ")");
-          offset = end;
-          idx += 1;
+        } else if (resume && resume.mode === "resume") {
+          uploadId = resume.uploadId;
+          const st = resume.status || {};
+          totalBytes = Number(st.total_bytes || totalBytes);
+          chunkBytes = Number(st.chunk_bytes || 0);
+          totalChunks = Number(st.total_chunks || (chunkBytes ? Math.ceil(totalBytes / chunkBytes) : 0));
+          startChunk = Number(st.next_expected_chunk || 0);
+          bytesReceived = Number(st.bytes_received || 0);
+          if (chunkBytes <= 0) {
+            emitState({ resume: "Resume info incomplete. Starting a new upload." });
+            uploadId = "";
+          } else {
+            emitState({
+              resume: "Resuming…",
+              bytes: bytesReceived,
+              total: totalBytes,
+              percent: totalBytes ? (bytesReceived / totalBytes) * 100 : 0,
+              chunk_index: Math.min(totalChunks || 0, startChunk + 1),
+              chunk_total: totalChunks || 0,
+            });
+          }
         }
 
-        // 3) complete
-        const doneR = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/complete`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
-          body: JSON.stringify({}),
-        });
-        if (!doneR.ok) throw new Error("upload complete failed (" + doneR.status + ")");
+        if (!uploadId) {
+          emitState({ status: "Initializing upload…" });
+          const initR = await fetch("/api/uploads/init", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ filename: file.name, total_bytes: file.size, mime: file.type || "" }),
+          });
+          if (!initR.ok) {
+            const d = await initR.json().catch(() => ({}));
+            throw new Error(friendlyStatus(initR.status, d && (d.detail || d.error)));
+          }
+          const init = await initR.json().catch(() => ({}));
+          uploadId = init.upload_id;
+          chunkBytes = Number(init.chunk_bytes || (5 * 1024 * 1024));
+          totalChunks = chunkBytes ? Math.ceil(totalBytes / chunkBytes) : 0;
+          startChunk = 0;
+          bytesReceived = 0;
+          localSet(key, JSON.stringify({ upload_id: uploadId, total_bytes: totalBytes, ts: Date.now() }));
+        } else {
+          localSet(key, JSON.stringify({ upload_id: uploadId, total_bytes: totalBytes, ts: Date.now() }));
+        }
 
-        // 4) create job referencing upload_id
+        if (!skipUpload) {
+          const startTs = performance.now();
+          const baseBytes = bytesReceived;
+          const updateProgress = (bytes, idx) => {
+            const now = performance.now();
+            const elapsed = Math.max(0.2, (now - startTs) / 1000.0);
+            const speed = Math.max(0, (bytes - baseBytes) / elapsed);
+            const percent = totalBytes ? (bytes / totalBytes) * 100 : 0;
+            emitState({
+              status: `Uploading chunk ${idx}/${totalChunks}`,
+              bytes,
+              total: totalBytes,
+              percent,
+              speed_bps: speed,
+              chunk_index: idx,
+              chunk_total: totalChunks,
+            });
+          };
+
+          let idx = Number(startChunk || 0);
+          let offset = idx * chunkBytes;
+          while (offset < totalBytes) {
+            const end = Math.min(totalBytes, offset + chunkBytes);
+            const blob = file.slice(offset, end);
+            const ab = await blob.arrayBuffer();
+            const uiChunk = idx + 1;
+            updateProgress(bytesReceived, uiChunk);
+            const resp = await postChunkWithRetry({
+              uploadId,
+              idx,
+              offset,
+              ab,
+              csrf,
+              totalChunks,
+            });
+            const nextBytes = Number(resp.data && resp.data.received_bytes ? resp.data.received_bytes : end);
+            bytesReceived = Math.max(bytesReceived, nextBytes);
+            updateProgress(bytesReceived, uiChunk);
+            idx += 1;
+            offset = idx * chunkBytes;
+          }
+
+          emitState({ status: "Finalizing upload…", chunk_index: totalChunks, chunk_total: totalChunks });
+          const doneR = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}/complete`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({}),
+          });
+          if (!doneR.ok) {
+            const d = await doneR.json().catch(() => ({}));
+            throw new Error(friendlyStatus(doneR.status, d && (d.detail || d.error)));
+          }
+        }
+
+        emitState({ status: "Creating job…" });
         const jobR = await fetch("/api/jobs", {
           method: "POST",
           credentials: "include",
@@ -573,14 +910,23 @@
         });
         const jobData = await jobR.json().catch(() => ({}));
         if (!jobR.ok) {
-          const msg = (jobData && (jobData.detail || jobData.error)) ? (jobData.detail || jobData.error) : ("Job submit failed (" + jobR.status + ")");
-          window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
+          const msg = (jobData && (jobData.detail || jobData.error))
+            ? (jobData.detail || jobData.error)
+            : ("Job submit failed (" + jobR.status + ")");
+          emitError(msg);
+          uploadInFlight = false;
+          emitState({ uploading: false, status: "Upload complete. Fix the error above and retry." });
           return;
         }
         const jobId = jobData.id || jobData.job_id || null;
-        if (jobId) window.location = "/ui/jobs/" + encodeURIComponent(jobId) + "?created=1";
+        if (jobId) {
+          localRemove(key);
+          window.location = "/ui/jobs/" + encodeURIComponent(jobId) + "?created=1";
+        }
       } catch (e) {
-        window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: String(e || "submit failed") } }));
+        emitError(String(e || "Upload failed"));
+        uploadInFlight = false;
+        emitState({ uploading: false });
       }
     }, true);
 

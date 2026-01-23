@@ -120,3 +120,15 @@ jobs:
           python scripts/e2e_job_recovery.py
           python scripts/collect_diagnostics.py
 
+      - name: P1 gate (non-blocking)
+        continue-on-error: true
+        env:
+          LOG_LEVEL: INFO
+          OFFLINE_MODE: "1"
+          ALLOW_EGRESS: "0"
+          ALLOW_HF_EGRESS: "0"
+          SIMULATE_NETWORK_LOSS: "1"
+          SKIP_GPU_TESTS: "1"
+        run: |
+          python scripts/p1_gate.py
+

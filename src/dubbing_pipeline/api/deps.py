@@ -8,6 +8,7 @@ from dubbing_pipeline.api.models import AuthStore, Role, User
 from dubbing_pipeline.api.security import decode_token, extract_api_key, extract_bearer, verify_csrf
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.utils.crypto import verify_secret
+from dubbing_pipeline.utils.net import get_client_ip
 from dubbing_pipeline.utils.log import set_user_id
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 
@@ -21,7 +22,7 @@ class Identity:
 
 
 def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    return get_client_ip(request)
 
 
 def get_store(request: Request) -> AuthStore:
@@ -69,7 +70,7 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
             try:
                 import ipaddress
 
-                peer = request.client.host if request.client else ""
+                peer = get_client_ip(request)
                 ip = ipaddress.ip_address(peer) if peer else None
                 is_private = bool(ip and (ip.is_private or ip.is_loopback))
             except Exception:

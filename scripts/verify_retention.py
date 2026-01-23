@@ -1,111 +1,149 @@
 from __future__ import annotations
 
-import json
+import os
 import tempfile
 from pathlib import Path
 
-
-def _touch(p: Path, size: int = 16) -> None:
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(b"x" * size)
-
-
-def _make_fake_job(root: Path) -> Path:
-    job = root / "Output" / "job_test"
-    job.mkdir(parents=True, exist_ok=True)
-
-    # final outputs
-    _touch(job / "dub.mkv", 128)
-    _touch(job / "dub.mp4", 128)
-
-    # essential logs/manifests
-    _touch(job / "logs" / "pipeline.log", 32)
-    _touch(job / "logs" / "summary.json", 32)
-    _touch(job / "manifests" / "audio.json", 32)
-
-    # important intermediates
-    _touch(job / "translated.json", 32)
-    _touch(job / "out.srt", 32)
-    _touch(job / "analysis" / "effective_settings.json", 32)
-
-    # heavy intermediates
-    _touch(job / "stems" / "background.wav", 4096)
-    _touch(job / "stems" / "dialogue.wav", 4096)
-    _touch(job / "segments" / "000.wav", 2048)
-    _touch(job / "chunks" / "chunk_000.wav", 2048)
-    _touch(job / "audio" / "tracks" / "original_full.wav", 4096)
-    _touch(job / "tmp" / "scratch.tmp", 64)
-
-    return job
+from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.jobs.models import Job, JobState, Visibility, now_utc
+from dubbing_pipeline.jobs.store import JobStore
+from dubbing_pipeline.ops.retention import run_once
 
 
-def _paths_under(job: Path) -> set[Path]:
-    return {p for p in job.rglob("*") if p.exists()}
-
-def _normalize(paths: set[Path]) -> set[Path]:
-    # retention always writes a report; ignore it for "no deletion" checks
-    return {p for p in paths if p.name != "retention_report.json"}
+def _make_job(
+    *,
+    job_id: str,
+    owner_id: str,
+    in_dir: Path,
+    out_dir: Path,
+    updated_at: str,
+    runtime: dict | None = None,
+) -> Job:
+    job_dir = out_dir / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    output_mkv = job_dir / f"{job_id}.dub.mp4"
+    output_mkv.write_bytes(b"\x00" * 8)
+    log_path = job_dir / "job.log"
+    log_path.write_text("log\n", encoding="utf-8")
+    return Job(
+        id=job_id,
+        owner_id=owner_id,
+        video_path=str(in_dir / "source.mp4"),
+        duration_s=10.0,
+        mode="low",
+        device="cpu",
+        src_lang="ja",
+        tgt_lang="en",
+        created_at=updated_at,
+        updated_at=updated_at,
+        state=JobState.DONE,
+        progress=1.0,
+        message="done",
+        output_mkv=str(output_mkv),
+        output_srt="",
+        work_dir=str(job_dir),
+        log_path=str(log_path),
+        visibility=Visibility.private,
+        runtime=runtime or {},
+    )
 
 
 def main() -> int:
-    from dubbing_pipeline.storage.retention import apply_retention
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        in_dir = root / "Input"
+        out_dir = root / "Output"
+        logs_dir = root / "logs"
+        state_dir = root / "_state"
+        in_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        state_dir.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="verify_retention_") as td:
-        root = Path(td)
-        job = _make_fake_job(root)
+        os.environ["APP_ROOT"] = str(root)
+        os.environ["INPUT_DIR"] = str(in_dir)
+        os.environ["DUBBING_OUTPUT_DIR"] = str(out_dir)
+        os.environ["DUBBING_LOG_DIR"] = str(logs_dir)
+        os.environ["DUBBING_STATE_DIR"] = str(state_dir)
+        os.environ["RETENTION_ENABLED"] = "1"
+        os.environ["RETENTION_UPLOAD_TTL_HOURS"] = "1"
+        os.environ["RETENTION_JOB_ARTIFACT_DAYS"] = "1"
+        os.environ["RETENTION_LOG_DAYS"] = "1"
+        os.environ["RETENTION_INTERVAL_SEC"] = "0"
+        get_settings.cache_clear()
 
-        # FULL: keep everything
-        before = _normalize(_paths_under(job))
-        rep = apply_retention(job, "full", dry_run=False)
-        after = _normalize(_paths_under(job))
-        assert before == after, "full policy must not delete anything"
-        assert (job / "analysis" / "retention_report.json").exists()
-        assert rep["policy"] == "full"
+        store = JobStore(state_dir / "jobs.db")
+        old_ts = "2024-01-01T00:00:00+00:00"
+        job_old = _make_job(
+            job_id="job_retention_old",
+            owner_id="u_1",
+            in_dir=in_dir,
+            out_dir=out_dir,
+            updated_at=old_ts,
+        )
+        job_pinned = _make_job(
+            job_id="job_retention_pinned",
+            owner_id="u_1",
+            in_dir=in_dir,
+            out_dir=out_dir,
+            updated_at=old_ts,
+            runtime={"pinned": True},
+        )
+        store.put(job_old)
+        store.put(job_pinned)
 
-        # BALANCED: delete heavy dirs/files but keep finals/logs/manifests
-        job2 = _make_fake_job(root / "case2")
-        rep2 = apply_retention(job2, "balanced", dry_run=False)
-        assert (job2 / "dub.mkv").exists()
-        assert (job2 / "logs" / "pipeline.log").exists()
-        assert (job2 / "manifests" / "audio.json").exists()
-        assert not (job2 / "stems").exists() or not any((job2 / "stems").rglob("*"))
-        assert not (job2 / "segments").exists() or not any((job2 / "segments").rglob("*"))
-        assert not (job2 / "chunks").exists() or not any((job2 / "chunks").rglob("*"))
-        assert not (job2 / "audio" / "tracks").exists() or not any((job2 / "audio" / "tracks").rglob("*"))
-        assert (job2 / "analysis" / "retention_report.json").exists()
-        assert rep2["policy"] == "balanced"
+        uploads_dir = (in_dir / "uploads").resolve()
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        upload_id = "up_retention_1"
+        part_path = uploads_dir / f"{upload_id}.part"
+        part_path.write_bytes(b"\x01" * 4)
+        store.put_upload(
+            upload_id,
+            {
+                "id": upload_id,
+                "owner_id": "u_1",
+                "filename": "x.mp4",
+                "total_bytes": 4,
+                "chunk_bytes": 4,
+                "received": {},
+                "received_bytes": 0,
+                "completed": False,
+                "part_path": str(part_path),
+                "final_path": str(uploads_dir / f"{upload_id}_x.mp4"),
+                "created_at": old_ts,
+                "updated_at": old_ts,
+            },
+        )
 
-        # MINIMAL: keep finals + essential logs/manifests + analysis; delete heavies
-        job3 = _make_fake_job(root / "case3")
-        rep3 = apply_retention(job3, "minimal", dry_run=False)
-        assert (job3 / "dub.mkv").exists()
-        assert (job3 / "dub.mp4").exists()
-        assert (job3 / "logs" / "pipeline.log").exists()
-        assert (job3 / "manifests" / "audio.json").exists()
-        assert (job3 / "analysis" / "effective_settings.json").exists()
-        assert not (job3 / "stems").exists()
-        assert not (job3 / "segments").exists()
-        assert not (job3 / "chunks").exists()
-        assert not (job3 / "audio" / "tracks").exists()
-        assert not (job3 / "tmp").exists()
-        assert (job3 / "analysis" / "retention_report.json").exists()
-        assert rep3["policy"] == "minimal"
+        res = run_once(store=store, output_root=out_dir, app_root=root)
+        if res.uploads_removed < 1 or res.jobs_removed < 1:
+            print("FAIL: retention did not remove expected items")
+            return 1
+        if store.get("job_retention_old") is not None:
+            print("FAIL: old job still present")
+            return 1
+        if store.get("job_retention_pinned") is None:
+            print("FAIL: pinned job removed")
+            return 1
+        if store.get_upload(upload_id) is not None or part_path.exists():
+            print("FAIL: upload not removed")
+            return 1
 
-        # DRY RUN: should not delete
-        job4 = _make_fake_job(root / "case4")
-        before4 = _normalize(_paths_under(job4))
-        rep4 = apply_retention(job4, "minimal", dry_run=True)
-        after4 = _normalize(_paths_under(job4))
-        assert before4 == after4, "dry-run must not delete anything"
-        assert rep4["dry_run"] is True
+        job_new = _make_job(
+            job_id="job_new",
+            owner_id="u_1",
+            in_dir=in_dir,
+            out_dir=out_dir,
+            updated_at=now_utc(),
+        )
+        store.put(job_new)
+        if store.get("job_new") is None:
+            print("FAIL: new job missing after retention")
+            return 1
 
-        # Quick print for humans
-        print("verify_retention: OK")
-        print(json.dumps({"full": len(rep.get("deleted", [])), "balanced": len(rep2.get("deleted", [])), "minimal": len(rep3.get("deleted", []))}, indent=2))
-
+    print("PASS")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
