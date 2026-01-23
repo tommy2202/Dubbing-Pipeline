@@ -203,9 +203,19 @@ def main() -> int:
             ok = asyncio.run(qb.before_job_run(job_id=queued.id, user_id=str(user.id)))
             assert ok is False
 
+            storage_user = User(
+                id=random_id("u_", 16),
+                username="quota_storage",
+                password_hash=PasswordHasher().hash("pass2"),
+                role=Role.operator,
+                totp_secret=None,
+                totp_enabled=False,
+                created_at=now_ts(),
+            )
+            auth.upsert_user(storage_user)
             job = Job(
                 id="job_storage",
-                owner_id=user.id,
+                owner_id=storage_user.id,
                 video_path="",
                 duration_s=1.0,
                 mode="low",
@@ -228,10 +238,10 @@ def main() -> int:
                 episode_number=1,
             )
             store.put(job)
-            store.set_job_storage_bytes(job.id, user_id=user.id, bytes_count=1234)
-            assert store.get_user_storage_bytes(user.id) == 1234
+            store.set_job_storage_bytes(job.id, user_id=storage_user.id, bytes_count=1234)
+            assert store.get_user_storage_bytes(storage_user.id) == 1234
             store.delete_job(job.id)
-            assert store.get_user_storage_bytes(user.id) == 0
+            assert store.get_user_storage_bytes(storage_user.id) == 0
 
         print("verify_quotas: ok")
         return 0
