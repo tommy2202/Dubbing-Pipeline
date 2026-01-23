@@ -526,10 +526,11 @@ class JobStore:
         if not owner:
             return
 
-        vis = str(raw.get("visibility") or "private").strip().lower()
-        if vis.startswith("visibility."):
-            vis = vis.split(".", 1)[1]
-        if vis not in {"private", "public"}:
+        try:
+            from dubbing_pipeline.jobs.models import normalize_visibility
+
+            vis = normalize_visibility(str(raw.get("visibility") or "private")).value
+        except Exception:
             vis = "private"
 
         created_at = str(raw.get("created_at") or "").strip() or None

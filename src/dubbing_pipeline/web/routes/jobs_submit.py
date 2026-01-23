@@ -12,7 +12,7 @@ from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.limits import get_limits, used_minutes_today
-from dubbing_pipeline.jobs.models import Job, JobState, new_id, now_utc
+from dubbing_pipeline.jobs.models import Job, JobState, normalize_visibility, new_id, now_utc
 from dubbing_pipeline.jobs.policy import evaluate_submission
 from dubbing_pipeline.ops.metrics import jobs_queued, pipeline_job_total
 from dubbing_pipeline.ops.storage import ensure_free_space
@@ -179,6 +179,7 @@ async def create_job(
     series_slug = ""
     season_number = 0
     episode_number = 0
+    visibility = "private"
 
     upload_id = ""
     upload_stem = ""
@@ -194,6 +195,7 @@ async def create_job(
         series_title, series_slug, season_number, episode_number = _parse_library_metadata_or_422(
             body
         )
+        visibility = str(body.get("visibility") or visibility)
         mode = str(body.get("mode") or mode)
         device = str(body.get("device") or device)
         src_lang = str(body.get("src_lang") or src_lang)
@@ -248,6 +250,7 @@ async def create_job(
         series_title, series_slug, season_number, episode_number = _parse_library_metadata_or_422(
             dict(form)
         )
+        visibility = str(form.get("visibility") or visibility)
         mode = str(form.get("mode") or mode)
         device = str(form.get("device") or device)
         src_lang = str(form.get("src_lang") or src_lang)
@@ -450,6 +453,7 @@ async def create_job(
         series_slug=str(series_slug),
         season_number=int(season_number),
         episode_number=int(episode_number),
+        visibility=normalize_visibility(visibility),
     )
     # Per-job (session) flags; NOT persisted as global defaults.
     rt = dict(job.runtime or {})

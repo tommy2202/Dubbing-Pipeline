@@ -39,7 +39,12 @@ async def library_series(
         store=store, ident=ident, limit=limit, offset=offset, order=order, q=q, view=view
     )
     for it in items:
-        require_library_access(store=store, ident=ident, series_slug=str(it.get("series_slug") or ""))
+        require_library_access(
+            store=store,
+            ident=ident,
+            series_slug=str(it.get("series_slug") or ""),
+            allow_shared_read=True,
+        )
     logger.info(
         "library_series",
         user_id=str(ident.user.id),
@@ -75,6 +80,7 @@ async def library_search(
             series_slug=str(it.get("series_slug") or ""),
             season_number=int(it.get("season_number") or 0),
             episode_number=int(it.get("episode_number") or 0),
+            allow_shared_read=True,
         )
     logger.info(
         "library_search",
@@ -109,6 +115,7 @@ async def library_recent(
             series_slug=str(it.get("series_slug") or ""),
             season_number=int(it.get("season_number") or 0),
             episode_number=int(it.get("episode_number") or 0),
+            allow_shared_read=True,
         )
     logger.info(
         "library_recent",
@@ -138,6 +145,7 @@ async def library_continue(
             series_slug=str(it.get("series_slug") or ""),
             season_number=int(it.get("season_number") or 0),
             episode_number=int(it.get("episode_number") or 0),
+            allow_shared_read=True,
         )
     logger.info(
         "library_continue",
@@ -163,7 +171,9 @@ async def library_seasons(
     items, meta = queries.list_seasons(
         store=store, ident=ident, series_slug=series_slug, limit=limit, offset=offset, view=view
     )
-    require_library_access(store=store, ident=ident, series_slug=series_slug)
+    require_library_access(
+        store=store, ident=ident, series_slug=series_slug, allow_shared_read=True
+    )
     logger.info(
         "library_seasons",
         user_id=str(ident.user.id),
@@ -300,7 +310,11 @@ async def library_episodes(
         view=view,
     )
     require_library_access(
-        store=store, ident=ident, series_slug=series_slug, season_number=int(season_number)
+        store=store,
+        ident=ident,
+        series_slug=series_slug,
+        season_number=int(season_number),
+        allow_shared_read=True,
     )
     logger.info(
         "library_episodes",

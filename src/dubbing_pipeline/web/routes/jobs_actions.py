@@ -9,7 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from dubbing_pipeline.api.access import require_job_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
-from dubbing_pipeline.jobs.models import JobState
+from dubbing_pipeline.jobs.models import JobState, normalize_visibility
+from dubbing_pipeline.library.manifest import update_manifest_visibility
+from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
 from dubbing_pipeline.runtime.scheduler import JobRecord
 from dubbing_pipeline.web.routes.jobs_common import _get_queue, _get_scheduler, _get_store, _output_root
 
@@ -51,6 +53,38 @@ async def delete_job(
         meta={"job_id": id, "owner_id": str(getattr(job, "owner_id", "") or ""), "paths": paths},
     )
     return {"ok": True}
+
+
+@router.post("/api/jobs/{id}/visibility")
+async def set_job_visibility(
+    request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=id)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    vis_raw = str(body.get("visibility") or "").strip().lower()
+    if vis_raw == "public":
+        vis_raw = "shared"
+    vis = normalize_visibility(vis_raw).value
+    if vis not in {"private", "shared"}:
+        raise HTTPException(status_code=400, detail="visibility must be shared|private")
+    store.update(str(id), visibility=vis)
+    # Best-effort manifest updates (both library and job root).
+    with suppress(Exception):
+        lib_path = get_library_root_for_job(job) / "manifest.json"
+        update_manifest_visibility(lib_path, vis)
+    with suppress(Exception):
+        out_path = get_job_output_root(job) / "manifest.json"
+        update_manifest_visibility(out_path, vis)
+    audit_event(
+        "job.visibility",
+        request=request,
+        user_id=ident.user.id,
+        meta={"job_id": str(id), "visibility": vis},
+    )
+    return {"ok": True, "job_id": str(id), "visibility": vis}
 
 
 @router.post("/api/jobs/{id}/cancel")

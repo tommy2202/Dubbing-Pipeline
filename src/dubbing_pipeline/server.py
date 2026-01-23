@@ -500,7 +500,7 @@ async def video(request: Request, job: str, ident: Identity = Depends(require_sc
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         raise HTTPException(status_code=500, detail="Job store not initialized")
-    require_file_access(store=store, ident=ident, path=p)
+    require_file_access(store=store, ident=ident, path=p, allow_shared_read=True)
     ctype, _ = mimetypes.guess_type(str(p))
     ctype = ctype or ("video/mp4" if p.suffix.lower() == ".mp4" else "video/x-matroska")
 
@@ -524,7 +524,7 @@ async def files(request: Request, path: str, ident: Identity = Depends(require_s
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         raise HTTPException(status_code=500, detail="Job store not initialized")
-    require_file_access(store=store, ident=ident, path=p)
+    require_file_access(store=store, ident=ident, path=p, allow_shared_read=True)
     ctype, _ = mimetypes.guess_type(str(p))
     if not ctype:
         # HLS / TS

@@ -201,8 +201,10 @@ async def admin_job_visibility(
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON")
     vis = str(body.get("visibility") or "").strip().lower()
-    if vis not in {"public", "private"}:
-        raise HTTPException(status_code=400, detail="visibility must be public|private")
+    if vis == "public":
+        vis = "shared"
+    if vis not in {"shared", "private"}:
+        raise HTTPException(status_code=400, detail="visibility must be shared|private")
     store = _store(request)
     job = store.get(str(id))
     if job is None:

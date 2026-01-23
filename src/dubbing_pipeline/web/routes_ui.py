@@ -182,7 +182,9 @@ async def ui_library_seasons(request: Request, series_slug: str) -> HTMLResponse
         if store is None or auth_store is None:
             raise HTTPException(status_code=500, detail="Store not initialized")
         ident = current_identity(request, auth_store)
-        require_library_access(store=store, ident=ident, series_slug=series_slug)
+        require_library_access(
+            store=store, ident=ident, series_slug=series_slug, allow_shared_read=True
+        )
     except HTTPException:
         raise
     except Exception:
@@ -206,7 +208,11 @@ async def ui_library_episodes(request: Request, series_slug: str, season_number:
             raise HTTPException(status_code=500, detail="Store not initialized")
         ident = current_identity(request, auth_store)
         require_library_access(
-            store=store, ident=ident, series_slug=series_slug, season_number=int(season_number)
+            store=store,
+            ident=ident,
+            series_slug=series_slug,
+            season_number=int(season_number),
+            allow_shared_read=True,
         )
     except HTTPException:
         raise
@@ -245,6 +251,7 @@ async def ui_library_episode_detail(
             series_slug=series_slug,
             season_number=int(season_number),
             episode_number=int(episode_number),
+            allow_shared_read=True,
         )
         with suppress(Exception):
             job_id = queries.latest_episode_job_id(

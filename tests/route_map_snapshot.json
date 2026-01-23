@@ -351,6 +351,11 @@
   },
   {
     "method": "POST",
+    "name": "set_job_visibility",
+    "path": "/api/jobs/{id}/visibility"
+  },
+  {
+    "method": "POST",
     "name": "post_job_voice_mapping",
     "path": "/api/jobs/{id}/voice-mapping"
   },

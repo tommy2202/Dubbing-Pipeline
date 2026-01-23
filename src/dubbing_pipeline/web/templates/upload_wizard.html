@@ -30,6 +30,7 @@
     src_lang: '{{ (user_defaults.src_lang if user_defaults and user_defaults.src_lang else "ja") | e }}',
     tgt_lang: '{{ (user_defaults.tgt_lang if user_defaults and user_defaults.tgt_lang else "en") | e }}',
     cache_policy: 'full', // full|balanced|minimal (default full => keep everything)
+    share: false,
     pg_enabled: false,
     pg: 'off', // off|pg13|pg (session-only; default OFF on each app start)
     tts_lang: '{{ (user_defaults.tts_lang if user_defaults and user_defaults.tts_lang else "en") | e }}',
@@ -292,6 +293,15 @@
                    required />
           </div>
         </div>
+      </div>
+      <div class="mt-3 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+        <div class="text-sm text-slate-300">Visibility</div>
+        <div class="mt-2 text-xs text-slate-500">Shared jobs are visible to other users.</div>
+        <input type="hidden" name="visibility" :value="share ? 'shared' : 'private'" />
+        <label class="mt-3 inline-flex items-center gap-2 text-sm">
+          <input type="checkbox" class="rounded border-slate-700 bg-slate-950" x-model="share" />
+          <span>Share to library</span>
+        </label>
       </div>
       <div class="mt-3 grid gap-4 sm:grid-cols-2">
         <div>
@@ -742,6 +752,7 @@
           series_title: String(fd.get("series_title") || ""),
           season_text: String(fd.get("season_text") || ""),
           episode_text: String(fd.get("episode_text") || ""),
+          visibility: String(fd.get("visibility") || "private"),
           mode: String(fd.get("mode") || "medium"),
           device: String(fd.get("device") || "auto"),
           src_lang: String(fd.get("src_lang") || "auto"),
