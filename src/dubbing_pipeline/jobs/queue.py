@@ -296,6 +296,21 @@ class JobQueue:
         limits = get_limits()
         sched = Scheduler.instance_optional()
 
+        def _update_storage_accounting() -> None:
+            try:
+                cur = self.store.get(job_id)
+                if cur is None:
+                    return
+                uid = str(cur.owner_id or "")
+                if not uid:
+                    return
+                from dubbing_pipeline.ops.storage import job_storage_bytes
+
+                size = job_storage_bytes(job=cur)
+                self.store.set_job_storage_bytes(cur.id, user_id=uid, bytes_count=size)
+            except Exception:
+                return
+
         if await self._is_canceled(job_id):
             self.store.update(
                 job_id, state=JobState.CANCELED, progress=0.0, message="Canceled before start"
@@ -3710,6 +3725,8 @@ class JobQueue:
             # Best-effort library mirror + manifest (must never affect job success).
             with suppress(Exception):
                 self._write_library_artifacts_best_effort(job_id=job_id, base_dir=base_dir)
+            with suppress(Exception):
+                _update_storage_accounting()
             # Optional: job-finish notification (best-effort, no impact on pipeline success).
             with suppress(Exception):
                 await self._notify_job_finished(job_id, state="DONE")
@@ -3745,6 +3762,8 @@ class JobQueue:
         except JobCanceled:
             self.store.append_log(job_id, f"[{now_utc()}] canceled")
             self.store.update(job_id, state=JobState.CANCELED, message="Canceled", error=None)
+            with suppress(Exception):
+                _update_storage_accounting()
             jobs_finished.labels(state="CANCELED").inc()
             with suppress(Exception):
                 audit.emit(
@@ -3760,6 +3779,8 @@ class JobQueue:
             # Best-effort library mirror + manifest on failure as well.
             with suppress(Exception):
                 self._write_library_artifacts_best_effort(job_id=job_id, base_dir=base_dir)
+            with suppress(Exception):
+                _update_storage_accounting()
             # Optional: job-finish notification (best-effort).
             with suppress(Exception):
                 await self._notify_job_finished(job_id, state="FAILED")

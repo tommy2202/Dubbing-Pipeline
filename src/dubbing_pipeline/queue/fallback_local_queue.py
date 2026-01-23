@@ -6,6 +6,8 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from dubbing_pipeline.jobs.limits import resolve_user_quotas
+from dubbing_pipeline.jobs.models import JobState
 from dubbing_pipeline.ops import audit
 from dubbing_pipeline.runtime.scheduler import JobRecord, Scheduler
 from dubbing_pipeline.utils.log import logger
@@ -168,7 +170,33 @@ class FallbackLocalQueue(QueueBackend):
         return {}
 
     async def before_job_run(self, *, job_id: str, user_id: str | None) -> bool:
-        # No distributed lock in fallback mode.
+        # No distributed lock in fallback mode, but enforce per-user concurrency caps.
+        uid = str(user_id or "").strip()
+        if not uid:
+            return True
+        store = self._get_store()
+        if store is None:
+            return True
+        try:
+            quota = store.get_user_quota(uid) if hasattr(store, "get_user_quota") else {}
+            quotas = resolve_user_quotas(overrides=quota)
+            max_concurrent = int(quotas.max_concurrent_jobs_per_user or 0)
+            if max_concurrent <= 0:
+                return True
+            jobs = store.list(limit=2000)
+            running = 0
+            for j in jobs:
+                if str(getattr(j, "owner_id", "") or "") != uid:
+                    continue
+                if getattr(j, "state", None) == JobState.RUNNING:
+                    running += 1
+            if running >= max_concurrent:
+                with suppress(Exception):
+                    store.update(job_id, state=JobState.QUEUED, message="Waiting for quota")
+                self._seen.discard(str(job_id))
+                return False
+        except Exception:
+            return True
         return True
 
     async def after_job_run(

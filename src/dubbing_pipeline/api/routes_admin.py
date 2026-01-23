@@ -191,6 +191,77 @@ async def admin_user_quotas(
     return {"ok": True, "user_id": str(id), "quotas": out}
 
 
+@router.get("/quotas/{user_id}")
+async def admin_get_user_quota(
+    request: Request,
+    user_id: str,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    store = _store(request)
+    quotas = store.get_user_quota(str(user_id))
+    used = int(store.get_user_storage_bytes(str(user_id)) or 0)
+    return {"ok": True, "user_id": str(user_id), "quotas": quotas, "storage_bytes": used}
+
+
+@router.post("/quotas/{user_id}")
+async def admin_set_user_quota(
+    request: Request,
+    user_id: str,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    clear = bool(body.get("clear") or False)
+    store = _store(request)
+    existing = store.get_user_quota(str(user_id))
+    missing = object()
+
+    def _parse_int(val: object, *, field: str) -> int | None:
+        if val is missing:
+            return existing.get(field) if not clear else None
+        if val is None:
+            return None
+        try:
+            return max(0, int(val))  # type: ignore[arg-type]
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"{field} must be int") from None
+
+    max_upload_bytes = _parse_int(body.get("max_upload_bytes", missing), field="max_upload_bytes")
+    jobs_per_day = _parse_int(body.get("jobs_per_day", missing), field="jobs_per_day")
+    max_concurrent_jobs = _parse_int(
+        body.get("max_concurrent_jobs", missing), field="max_concurrent_jobs"
+    )
+    max_storage_bytes = _parse_int(
+        body.get("max_storage_bytes", missing), field="max_storage_bytes"
+    )
+
+    quotas = store.upsert_user_quota(
+        str(user_id),
+        max_upload_bytes=max_upload_bytes,
+        jobs_per_day=jobs_per_day,
+        max_concurrent_jobs=max_concurrent_jobs,
+        max_storage_bytes=max_storage_bytes,
+        updated_by=str(ident.user.id),
+    )
+    # Optional: also sync max_concurrent into queue backend (max_running).
+    qb = _queue_backend(request)
+    if qb is not None and max_concurrent_jobs is not None:
+        with __import__("contextlib").suppress(Exception):
+            await qb.admin_set_user_quotas(
+                user_id=str(user_id),
+                max_running=int(max_concurrent_jobs),
+                max_queued=None,
+            )
+    audit.emit(
+        "admin.user_quota_overrides",
+        user_id=str(ident.user.id),
+        meta={"target_user_id": str(user_id), **{k: v for k, v in quotas.items() if v is not None}},
+    )
+    used = int(store.get_user_storage_bytes(str(user_id)) or 0)
+    return {"ok": True, "user_id": str(user_id), "quotas": quotas, "storage_bytes": used}
+
+
 @router.post("/jobs/{id}/visibility")
 async def admin_job_visibility(
     request: Request,

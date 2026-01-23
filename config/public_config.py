@@ -450,12 +450,19 @@ class PublicConfig(BaseSettings):
     max_video_width: int = Field(default=0, alias="MAX_VIDEO_WIDTH")
     max_video_height: int = Field(default=0, alias="MAX_VIDEO_HEIGHT")
     max_video_pixels: int = Field(default=0, alias="MAX_VIDEO_PIXELS")
+    # Hard cap for uploads (bytes). Defaults conservative; can be overridden per user.
+    max_upload_bytes: int = Field(default=1024 * 1024 * 1024, alias="MAX_UPLOAD_BYTES")
     max_upload_mb: int = Field(default=2048, alias="MAX_UPLOAD_MB")
     max_concurrent_per_user: int = Field(default=1, alias="MAX_CONCURRENT")
     daily_processing_minutes: int = Field(default=240, alias="DAILY_PROCESSING_MINUTES")
 
     # --- submission policy ---
     # Safe defaults: allow 1 running job per user, small queue, and restrict high mode.
+    jobs_per_day_per_user: int = Field(default=5, alias="JOBS_PER_DAY_PER_USER")
+    max_concurrent_jobs_per_user: int = Field(default=1, alias="MAX_CONCURRENT_JOBS_PER_USER")
+    max_storage_bytes_per_user: int = Field(
+        default=10 * 1024 * 1024 * 1024, alias="MAX_STORAGE_BYTES_PER_USER"
+    )
     max_active_jobs_per_user: int = Field(default=1, alias="DUBBING_MAX_ACTIVE_JOBS_PER_USER")
     max_queued_jobs_per_user: int = Field(default=5, alias="DUBBING_MAX_QUEUED_JOBS_PER_USER")
     daily_job_cap: int = Field(default=0, alias="DUBBING_DAILY_JOB_CAP")  # 0 disables

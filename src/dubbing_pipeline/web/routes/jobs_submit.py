@@ -11,7 +11,7 @@ from dubbing_pipeline.api.access import require_job_access, require_upload_acces
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
-from dubbing_pipeline.jobs.limits import get_limits, used_minutes_today
+from dubbing_pipeline.jobs.limits import get_limits, resolve_user_quotas, used_minutes_today
 from dubbing_pipeline.jobs.models import Job, JobState, normalize_visibility, new_id, now_utc
 from dubbing_pipeline.jobs.policy import evaluate_submission
 from dubbing_pipeline.ops.metrics import jobs_queued, pipeline_job_total
@@ -112,6 +112,8 @@ async def create_job(
         except Exception:
             parsed_form = None
     store = _get_store(request)
+    user_quota = store.get_user_quota(str(ident.user.id)) if store is not None else {}
+    quotas = resolve_user_quotas(overrides=user_quota)
     if idem_key:
         # basic bounds to avoid abuse
         if len(idem_key) > 200:
@@ -356,7 +358,7 @@ async def create_job(
             if ext not in _ALLOWED_UPLOAD_EXTS:
                 raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
             dest = up_dir / f"{jid}{ext}"
-            max_bytes = int(limits.max_upload_mb) * 1024 * 1024
+            max_bytes = int(quotas.max_upload_bytes or 0)
             written = 0
             try:
                 with dest.open("wb") as f:
@@ -365,10 +367,10 @@ async def create_job(
                         if not chunk:
                             break
                         written += len(chunk)
-                        if written > max_bytes:
+                        if max_bytes > 0 and written > max_bytes:
                             raise HTTPException(
                                 status_code=400,
-                                detail=f"Upload too large (>{limits.max_upload_mb}MB)",
+                                detail=f"Upload too large (limit={max_bytes} bytes)",
                             )
                         f.write(chunk)
             except HTTPException:
@@ -378,9 +380,61 @@ async def create_job(
             video_path = dest
 
     assert video_path is not None
+    jid = new_id()
+    max_upload_bytes = int(quotas.max_upload_bytes or 0)
+    max_storage = int(quotas.max_storage_bytes_per_user or 0)
+    if store is not None:
+        try:
+            file_size = int(video_path.stat().st_size)
+        except Exception:
+            file_size = 0
+        if max_upload_bytes > 0 and file_size > max_upload_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Upload too large (limit={max_upload_bytes} bytes)",
+            )
+        if max_storage > 0:
+            used = int(store.get_user_storage_bytes(str(ident.user.id)) or 0)
+            if (used + file_size) > max_storage:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Storage quota exceeded "
+                        f"(limit={max_storage} bytes, used={used} bytes, requested={file_size} bytes)"
+                    ),
+                )
     # Extension allowlist (defense-in-depth). Encrypted-at-rest inputs are allowed (validated via ffprobe after decrypt).
     if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
         raise HTTPException(status_code=400, detail="Unsupported file type")
+
+    # Per-user quotas/policy (authoritative, server-side) before heavy validation.
+    all_jobs = store.list(limit=1000)
+    # Policy check (canonical module). Prefer Redis counters/quotas when queue backend is active.
+    qb = getattr(request.app.state, "queue_backend", None)
+    counts_override = None
+    merged_quota = dict(user_quota or {})
+    if qb is not None:
+        with suppress(Exception):
+            counts_override = await qb.user_counts(user_id=str(ident.user.id))
+        with suppress(Exception):
+            qb_quota = await qb.user_quota(user_id=str(ident.user.id))
+            if isinstance(qb_quota, dict):
+                merged_quota.update(qb_quota)
+    pol = evaluate_submission(
+        jobs=all_jobs,
+        user_id=str(ident.user.id),
+        user_role=ident.user.role,
+        requested_mode=mode,
+        requested_device=device,
+        job_id=jid,
+        counts_override=counts_override,
+        user_quota=merged_quota,
+    )
+    if not pol.ok:
+        raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
+    # Apply policy adjustments (GPU downgrade / mode downgrade).
+    mode = str(pol.effective_mode or mode)
+    device = str(pol.effective_device or device)
     # Validate using ffprobe (no user-controlled args).
     try:
         with materialize_decrypted(video_path, kind="uploads", job_id=None, suffix=".input") as mat:
@@ -392,35 +446,7 @@ async def create_job(
             status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
         ) from ex
 
-    jid = new_id()
     created = now_utc()
-
-    # Per-user quotas/policy (authoritative, server-side).
-    all_jobs = store.list(limit=1000)
-    # Policy check (canonical module). Prefer Redis counters/quotas when queue backend is active.
-    qb = getattr(request.app.state, "queue_backend", None)
-    counts_override = None
-    user_quota = None
-    if qb is not None:
-        with suppress(Exception):
-            counts_override = await qb.user_counts(user_id=str(ident.user.id))
-        with suppress(Exception):
-            user_quota = await qb.user_quota(user_id=str(ident.user.id))
-    pol = evaluate_submission(
-        jobs=all_jobs,
-        user_id=str(ident.user.id),
-        user_role=ident.user.role,
-        requested_mode=mode,
-        requested_device=device,
-        job_id=jid,
-        counts_override=counts_override,
-        user_quota=user_quota,
-    )
-    if not pol.ok:
-        raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
-    # Apply policy adjustments (GPU downgrade / mode downgrade).
-    mode = str(pol.effective_mode or mode)
-    device = str(pol.effective_device or device)
     used_min = used_minutes_today(all_jobs, user_id=ident.user.id, now_iso=created)
     req_min = duration_s / 60.0
     if (used_min + req_min) > float(limits.daily_processing_minutes):
@@ -598,6 +624,10 @@ async def create_jobs_batch(
     store = _get_store(request)
     scheduler = _get_scheduler(request)
     limits = get_limits()
+    user_quota = store.get_user_quota(str(ident.user.id)) if store is not None else {}
+    quotas = resolve_user_quotas(overrides=user_quota)
+    used_storage = int(store.get_user_storage_bytes(str(ident.user.id)) or 0) if store else 0
+    pending_storage = 0
     # Batch submit is expensive; keep it tighter.
     _enforce_rate_limit(
         request,
@@ -640,6 +670,27 @@ async def create_jobs_batch(
         project_name: str = "",
         style_guide_path: str = "",
     ) -> str:
+        nonlocal pending_storage
+        max_upload_bytes = int(quotas.max_upload_bytes or 0)
+        max_storage = int(quotas.max_storage_bytes_per_user or 0)
+        try:
+            file_size = int(video_path.stat().st_size)
+        except Exception:
+            file_size = 0
+        if max_upload_bytes > 0 and file_size > max_upload_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Upload too large (limit={max_upload_bytes} bytes)",
+            )
+        if max_storage > 0 and (used_storage + pending_storage + file_size) > max_storage:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Storage quota exceeded "
+                    f"(limit={max_storage} bytes, used={used_storage} bytes, requested={file_size} bytes)"
+                ),
+            )
+        pending_storage += file_size
         # ffprobe validation
         try:
             duration_s = float(_validate_media_or_400(video_path, limits=limits))
@@ -753,12 +804,14 @@ async def create_jobs_batch(
         all_jobs = store.list(limit=1000)
         qb = getattr(request.app.state, "queue_backend", None)
         counts_override = None
-        user_quota = None
+        merged_quota = dict(user_quota or {})
         if qb is not None:
             with suppress(Exception):
                 counts_override = await qb.user_counts(user_id=str(ident.user.id))
             with suppress(Exception):
-                user_quota = await qb.user_quota(user_id=str(ident.user.id))
+                qb_quota = await qb.user_quota(user_id=str(ident.user.id))
+                if isinstance(qb_quota, dict):
+                    merged_quota.update(qb_quota)
         pol = evaluate_submission(
             jobs=all_jobs,
             user_id=str(ident.user.id),
@@ -767,7 +820,7 @@ async def create_jobs_batch(
             requested_device=str(body.get("device") or "auto"),
             job_id=None,
             counts_override=counts_override,
-            user_quota=user_quota,
+            user_quota=merged_quota,
         )
         if not pol.ok:
             raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
@@ -805,7 +858,7 @@ async def create_jobs_batch(
                 requested_device=device,
                 job_id=None,
                 counts_override=counts_override,
-                user_quota=user_quota,
+                user_quota=merged_quota,
             )
             if not pol2.ok:
                 raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
@@ -875,12 +928,14 @@ async def create_jobs_batch(
         all_jobs = store.list(limit=1000)
         qb = getattr(request.app.state, "queue_backend", None)
         counts_override = None
-        user_quota = None
+        merged_quota = dict(user_quota or {})
         if qb is not None:
             with suppress(Exception):
                 counts_override = await qb.user_counts(user_id=str(ident.user.id))
             with suppress(Exception):
-                user_quota = await qb.user_quota(user_id=str(ident.user.id))
+                qb_quota = await qb.user_quota(user_id=str(ident.user.id))
+                if isinstance(qb_quota, dict):
+                    merged_quota.update(qb_quota)
         pol = evaluate_submission(
             jobs=all_jobs,
             user_id=str(ident.user.id),
@@ -889,7 +944,7 @@ async def create_jobs_batch(
             requested_device=str(form.get("device") or "auto"),
             job_id=None,
             counts_override=counts_override,
-            user_quota=user_quota,
+            user_quota=merged_quota,
         )
         if not pol.ok:
             raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
@@ -911,7 +966,7 @@ async def create_jobs_batch(
             requested_device=device,
             job_id=None,
             counts_override=counts_override,
-            user_quota=user_quota,
+            user_quota=merged_quota,
         )
         if not pol2.ok:
             raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
@@ -930,6 +985,8 @@ async def create_jobs_batch(
 
         up_dir = _input_uploads_dir()
         up_dir.mkdir(parents=True, exist_ok=True)
+        max_upload_bytes = int(quotas.max_upload_bytes or 0)
+        max_storage = int(quotas.max_storage_bytes_per_user or 0)
         for upload in files:
             ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()
             if ctype_u and ctype_u not in _ALLOWED_UPLOAD_MIME:
@@ -942,7 +999,6 @@ async def create_jobs_batch(
                 raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
             tmp_id = new_id()
             dest = up_dir / f"{tmp_id}{ext}"
-            max_bytes = int(limits.max_upload_mb) * 1024 * 1024
             written = 0
             with dest.open("wb") as f:
                 while True:
@@ -950,11 +1006,21 @@ async def create_jobs_batch(
                     if not chunk:
                         break
                     written += len(chunk)
-                    if written > max_bytes:
+                    if max_upload_bytes > 0 and written > max_upload_bytes:
                         with suppress(Exception):
                             dest.unlink(missing_ok=True)
                         raise HTTPException(
-                            status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)"
+                            status_code=400, detail=f"Upload too large (limit={max_upload_bytes} bytes)"
+                        )
+                    if max_storage > 0 and (used_storage + pending_storage + written) > max_storage:
+                        with suppress(Exception):
+                            dest.unlink(missing_ok=True)
+                        raise HTTPException(
+                            status_code=429,
+                            detail=(
+                                "Storage quota exceeded "
+                                f"(limit={max_storage} bytes, used={used_storage} bytes, requested={written} bytes)"
+                            ),
                         )
                     f.write(chunk)
             idx = int(len(created_ids))

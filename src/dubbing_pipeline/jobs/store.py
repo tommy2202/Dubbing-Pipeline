@@ -32,6 +32,12 @@ class JobStore:
         # Schema for user view history (library continue panel).
         with suppress(Exception):
             self._init_view_history_schema()
+        # Schema for per-user storage accounting.
+        with suppress(Exception):
+            self._init_storage_schema()
+        # Schema for per-user quota overrides (admin).
+        with suppress(Exception):
+            self._init_quota_schema()
 
     def _jobs(self) -> SqliteDict:
         # Open/close per operation (safe + avoids cross-thread SQLite handle issues)
@@ -216,6 +222,67 @@ class JobStore:
             finally:
                 con.close()
 
+    def _init_storage_schema(self) -> None:
+        """
+        Create/migrate tables for per-user storage accounting.
+
+        Tables:
+        - user_storage: user_id, bytes, updated_at
+        - job_storage: job_id, user_id, bytes, updated_at
+        """
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS user_storage (
+                      user_id TEXT PRIMARY KEY,
+                      bytes INTEGER NOT NULL DEFAULT 0,
+                      updated_at REAL
+                    );
+                    """
+                )
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS job_storage (
+                      job_id TEXT PRIMARY KEY,
+                      user_id TEXT NOT NULL,
+                      bytes INTEGER NOT NULL DEFAULT 0,
+                      updated_at REAL
+                    );
+                    """
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_job_storage_user_id ON job_storage(user_id);"
+                )
+                con.commit()
+            finally:
+                con.close()
+
+    def _init_quota_schema(self) -> None:
+        """
+        Create/migrate table for per-user quota overrides.
+        """
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS user_quotas (
+                      user_id TEXT PRIMARY KEY,
+                      max_upload_bytes INTEGER,
+                      jobs_per_day INTEGER,
+                      max_concurrent_jobs INTEGER,
+                      max_storage_bytes INTEGER,
+                      updated_at REAL,
+                      updated_by TEXT
+                    );
+                    """
+                )
+                con.commit()
+            finally:
+                con.close()
+
     def record_view(
         self,
         *,
@@ -292,6 +359,199 @@ class JobStore:
             ]
         finally:
             con.close()
+
+    # --- per-user storage accounting ---
+    def get_user_storage_bytes(self, user_id: str) -> int:
+        uid = str(user_id or "").strip()
+        if not uid:
+            return 0
+        con = self._conn()
+        try:
+            row = con.execute("SELECT bytes FROM user_storage WHERE user_id = ?;", (uid,)).fetchone()
+            if row is None:
+                return 0
+            return max(0, int(row["bytes"] or 0))
+        finally:
+            con.close()
+
+    def set_job_storage_bytes(self, job_id: str, *, user_id: str, bytes_count: int) -> int:
+        job_id = str(job_id or "").strip()
+        uid = str(user_id or "").strip()
+        if not job_id or not uid:
+            return 0
+        new_bytes = max(0, int(bytes_count))
+        now = float(time.time())
+        with self._write_lock():
+            con = self._conn()
+            try:
+                row = con.execute(
+                    "SELECT user_id, bytes FROM job_storage WHERE job_id = ?;",
+                    (job_id,),
+                ).fetchone()
+                prev_bytes = 0
+                prev_user = uid
+                if row is not None:
+                    prev_user = str(row["user_id"] or "")
+                    prev_bytes = max(0, int(row["bytes"] or 0))
+
+                # If ownership changed (unexpected), subtract from prior user.
+                if prev_user and prev_user != uid:
+                    prow = con.execute(
+                        "SELECT bytes FROM user_storage WHERE user_id = ?;",
+                        (prev_user,),
+                    ).fetchone()
+                    pbytes = max(0, int(prow["bytes"] or 0)) if prow is not None else 0
+                    con.execute(
+                        "INSERT INTO user_storage (user_id, bytes, updated_at) VALUES (?, ?, ?) "
+                        "ON CONFLICT(user_id) DO UPDATE SET bytes=excluded.bytes, updated_at=excluded.updated_at;",
+                        (prev_user, max(0, pbytes - prev_bytes), now),
+                    )
+                    prev_bytes = 0
+
+                delta = new_bytes - prev_bytes
+                urow = con.execute(
+                    "SELECT bytes FROM user_storage WHERE user_id = ?;",
+                    (uid,),
+                ).fetchone()
+                ubytes = max(0, int(urow["bytes"] or 0)) if urow is not None else 0
+                con.execute(
+                    "INSERT INTO user_storage (user_id, bytes, updated_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET bytes=excluded.bytes, updated_at=excluded.updated_at;",
+                    (uid, max(0, ubytes + delta), now),
+                )
+                con.execute(
+                    """
+                    INSERT INTO job_storage (job_id, user_id, bytes, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(job_id) DO UPDATE SET
+                      user_id=excluded.user_id,
+                      bytes=excluded.bytes,
+                      updated_at=excluded.updated_at;
+                    """,
+                    (job_id, uid, new_bytes, now),
+                )
+                con.commit()
+            finally:
+                con.close()
+        return new_bytes
+
+    def delete_job_storage(self, job_id: str) -> int:
+        job_id = str(job_id or "").strip()
+        if not job_id:
+            return 0
+        removed = 0
+        with self._write_lock():
+            con = self._conn()
+            try:
+                row = con.execute(
+                    "SELECT user_id, bytes FROM job_storage WHERE job_id = ?;",
+                    (job_id,),
+                ).fetchone()
+                if row is None:
+                    return 0
+                uid = str(row["user_id"] or "")
+                removed = max(0, int(row["bytes"] or 0))
+                con.execute("DELETE FROM job_storage WHERE job_id = ?;", (job_id,))
+                if uid:
+                    urow = con.execute(
+                        "SELECT bytes FROM user_storage WHERE user_id = ?;",
+                        (uid,),
+                    ).fetchone()
+                    ubytes = max(0, int(urow["bytes"] or 0)) if urow is not None else 0
+                    con.execute(
+                        "INSERT INTO user_storage (user_id, bytes, updated_at) VALUES (?, ?, ?) "
+                        "ON CONFLICT(user_id) DO UPDATE SET bytes=excluded.bytes, updated_at=excluded.updated_at;",
+                        (uid, max(0, ubytes - removed), float(time.time())),
+                    )
+                con.commit()
+            finally:
+                con.close()
+        return removed
+
+    # --- per-user quota overrides ---
+    def get_user_quota(self, user_id: str) -> dict[str, int | None]:
+        uid = str(user_id or "").strip()
+        if not uid:
+            return {}
+        con = self._conn()
+        try:
+            row = con.execute(
+                """
+                SELECT max_upload_bytes, jobs_per_day, max_concurrent_jobs, max_storage_bytes
+                FROM user_quotas
+                WHERE user_id = ?;
+                """,
+                (uid,),
+            ).fetchone()
+            if row is None:
+                return {}
+            return {
+                "max_upload_bytes": (int(row["max_upload_bytes"]) if row["max_upload_bytes"] is not None else None),
+                "jobs_per_day": (int(row["jobs_per_day"]) if row["jobs_per_day"] is not None else None),
+                "max_concurrent_jobs": (
+                    int(row["max_concurrent_jobs"]) if row["max_concurrent_jobs"] is not None else None
+                ),
+                "max_storage_bytes": (
+                    int(row["max_storage_bytes"]) if row["max_storage_bytes"] is not None else None
+                ),
+            }
+        finally:
+            con.close()
+
+    def upsert_user_quota(
+        self,
+        user_id: str,
+        *,
+        max_upload_bytes: int | None,
+        jobs_per_day: int | None,
+        max_concurrent_jobs: int | None,
+        max_storage_bytes: int | None,
+        updated_by: str = "",
+    ) -> dict[str, int | None]:
+        uid = str(user_id or "").strip()
+        if not uid:
+            return {}
+        if all(v is None for v in (max_upload_bytes, jobs_per_day, max_concurrent_jobs, max_storage_bytes)):
+            with self._write_lock():
+                con = self._conn()
+                try:
+                    con.execute("DELETE FROM user_quotas WHERE user_id = ?;", (uid,))
+                    con.commit()
+                finally:
+                    con.close()
+            return {}
+        now = float(time.time())
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO user_quotas (
+                      user_id, max_upload_bytes, jobs_per_day, max_concurrent_jobs, max_storage_bytes,
+                      updated_at, updated_by
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                      max_upload_bytes=excluded.max_upload_bytes,
+                      jobs_per_day=excluded.jobs_per_day,
+                      max_concurrent_jobs=excluded.max_concurrent_jobs,
+                      max_storage_bytes=excluded.max_storage_bytes,
+                      updated_at=excluded.updated_at,
+                      updated_by=excluded.updated_by;
+                    """,
+                    (
+                        uid,
+                        (int(max_upload_bytes) if max_upload_bytes is not None else None),
+                        (int(jobs_per_day) if jobs_per_day is not None else None),
+                        (int(max_concurrent_jobs) if max_concurrent_jobs is not None else None),
+                        (int(max_storage_bytes) if max_storage_bytes is not None else None),
+                        now,
+                        str(updated_by or ""),
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
+        return self.get_user_quota(uid)
 
     # --- persistent character voices ---
     def upsert_character(
@@ -625,6 +885,8 @@ class JobStore:
                         con.commit()
                     finally:
                         con.close()
+        with suppress(Exception):
+            self.delete_job_storage(str(id))
 
     def append_log(self, id: str, text: str) -> None:
         job = self.get(id)

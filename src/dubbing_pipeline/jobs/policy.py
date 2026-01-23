@@ -5,6 +5,7 @@ from typing import Any
 
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.jobs.limits import resolve_user_quotas
 from dubbing_pipeline.jobs.models import Job, JobState
 from dubbing_pipeline.ops import audit
 from dubbing_pipeline.utils.log import logger
@@ -89,12 +90,17 @@ def _resolve_limits_for_user(*, user_role: Role, user_quota: dict[str, int] | No
     - Admins can still be constrained by quotas if explicitly set, but by default bypass caps.
     """
     s = get_settings()
-    max_active = max(0, int(getattr(s, "max_active_jobs_per_user", 1)))
+    max_active = max(0, int(getattr(s, "max_concurrent_jobs_per_user", 0) or 0))
+    if max_active <= 0:
+        max_active = max(0, int(getattr(s, "max_active_jobs_per_user", 1)))
     max_queued = max(0, int(getattr(s, "max_queued_jobs_per_user", 5)))
     if user_role == Role.admin and not user_quota:
         # Admin default: allow (policy safety remains for high-mode admin-only and global caps).
         return max_active, max_queued
     if isinstance(user_quota, dict):
+        if "max_concurrent_jobs" in user_quota:
+            with __import__("contextlib").suppress(Exception):
+                max_active = max(0, int(user_quota["max_concurrent_jobs"]))
         if "max_running" in user_quota:
             with __import__("contextlib").suppress(Exception):
                 max_active = max(0, int(user_quota["max_running"]))
@@ -184,7 +190,8 @@ def evaluate_submission(
     inflight = running + queued
 
     max_active, max_queued = _resolve_limits_for_user(user_role=user_role, user_quota=user_quota)
-    daily_cap = max(0, int(getattr(s, "daily_job_cap", 0)))
+    quotas = resolve_user_quotas(overrides=user_quota)
+    daily_cap = max(0, int(quotas.jobs_per_day_per_user))
     high_admin_only = bool(getattr(s, "high_mode_admin_only", True))
 
     reasons: list[str] = []
