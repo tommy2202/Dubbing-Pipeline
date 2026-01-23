@@ -20,6 +20,7 @@ from dubbing_pipeline.utils.io import read_json
 from dubbing_pipeline.ops import audit
 
 router = APIRouter(prefix="/ui", tags=["ui"])
+public_router = APIRouter(tags=["ui"])
 
 
 def _get_templates(request: Request) -> Jinja2Templates:
@@ -567,7 +568,7 @@ async def ui_qr_redeem(request: Request, code: str = "") -> HTMLResponse:
     return _render(request, "qr_redeem.html", {"code": c})
 
 
-@router.get("/invite/{token}")
+@public_router.get("/invite/{token}")
 async def ui_invite_redeem(request: Request, token: str) -> HTMLResponse:
     # Invite redeem does not require prior auth; it will call /api/invites/redeem.
     tok = str(token or "").strip()

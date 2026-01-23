@@ -661,6 +661,11 @@
   },
   {
     "method": "GET",
+    "name": "ui_invite_redeem",
+    "path": "/invite/{token}"
+  },
+  {
+    "method": "GET",
     "name": "list_keys",
     "path": "/keys"
   },
@@ -738,11 +743,6 @@
     "method": "GET",
     "name": "ui_health",
     "path": "/ui/health"
-  },
-  {
-    "method": "GET",
-    "name": "ui_invite_redeem",
-    "path": "/ui/invite/{token}"
   },
   {
     "method": "GET",
