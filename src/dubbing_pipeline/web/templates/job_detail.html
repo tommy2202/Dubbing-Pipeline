@@ -542,6 +542,10 @@
                     <div class="mt-2 text-xs text-amber-200" x-show="isSuggestedMapping(sid)" x-text="suggestedLabel(sid)"></div>
                     <div class="mt-2 text-xs text-slate-500 break-all"
                          x-text="(voiceRefs.items[sid]||{}).character_ref_path ? ('character ref: ' + (voiceRefs.items[sid]||{}).character_ref_path) : ''"></div>
+                    <a class="mt-1 inline-block text-xs text-slate-300 underline"
+                       x-show="(voiceRefs.items[sid]||{}).character_slug && job && job.series_slug"
+                       :href="'/ui/voices/' + encodeURIComponent(job.series_slug) + '/' + encodeURIComponent((voiceRefs.items[sid]||{}).character_slug)"
+                       >View voice versions</a>
                   </div>
                   <div>
                     <div class="text-xs text-slate-500">Actions</div>

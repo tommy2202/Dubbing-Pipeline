@@ -341,6 +341,7 @@ class PublicConfig(BaseSettings):
     )
     voice_auto_match: bool = Field(default=False, alias="VOICE_AUTO_MATCH")
     voice_match_threshold: float = Field(default=0.75, alias="VOICE_MATCH_THRESHOLD")
+    voice_drift_threshold: float = Field(default=0.75, alias="VOICE_DRIFT_THRESHOLD")
     voice_auto_enroll: bool = Field(default=True, alias="VOICE_AUTO_ENROLL")
     voice_character_map: Path | None = Field(default=None, alias="VOICE_CHARACTER_MAP")
 

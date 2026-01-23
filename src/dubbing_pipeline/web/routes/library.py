@@ -378,3 +378,61 @@ async def delete_series_character(
         },
     )
     return {"ok": True, "deleted": bool(deleted_disk or deleted_db)}
+
+
+@router.get("/api/voices/{series_slug}/{voice_id}/versions")
+async def get_voice_versions(
+    request: Request,
+    series_slug: str,
+    voice_id: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    slug = str(series_slug or "").strip()
+    cslug = _slugify_character(voice_id)
+    if not slug or not cslug:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    require_library_access(store=store, ident=ident, series_slug=slug)
+    from dubbing_pipeline.voice_store.store import get_versions_state
+
+    data = get_versions_state(slug, cslug)
+    return {
+        "ok": True,
+        "series_slug": slug,
+        "voice_id": cslug,
+        "current_version": int(data.get("current_version") or 0),
+        "items": data.get("items") if isinstance(data.get("items"), list) else [],
+    }
+
+
+@router.post("/api/voices/{series_slug}/{voice_id}/rollback")
+async def rollback_voice_version(
+    request: Request,
+    series_slug: str,
+    voice_id: str,
+    version: int,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    slug = str(series_slug or "").strip()
+    cslug = _slugify_character(voice_id)
+    if not slug or not cslug:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if int(version) <= 0:
+        raise HTTPException(status_code=422, detail="version is required")
+    require_library_access(store=store, ident=ident, series_slug=slug)
+    from dubbing_pipeline.voice_store.store import rollback_character_ref
+
+    try:
+        outp = rollback_character_ref(
+            slug, cslug, version=int(version), created_by=str(ident.user.id)
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="version not found") from None
+    audit_event(
+        "voice.version.rollback",
+        request=request,
+        user_id=ident.user.id,
+        meta={"series_slug": slug, "voice_id": cslug, "version": int(version)},
+    )
+    return {"ok": True, "voice_id": cslug, "path": str(outp)}

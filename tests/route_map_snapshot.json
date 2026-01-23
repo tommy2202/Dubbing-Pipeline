@@ -506,6 +506,16 @@
   },
   {
     "method": "POST",
+    "name": "rollback_voice_version",
+    "path": "/api/voices/{series_slug}/{voice_id}/rollback"
+  },
+  {
+    "method": "GET",
+    "name": "get_voice_versions",
+    "path": "/api/voices/{series_slug}/{voice_id}/versions"
+  },
+  {
+    "method": "POST",
     "name": "login",
     "path": "/auth/login"
   },
@@ -738,6 +748,11 @@
     "method": "GET",
     "name": "ui_upload",
     "path": "/ui/upload"
+  },
+  {
+    "method": "GET",
+    "name": "ui_voice_detail",
+    "path": "/ui/voices/{series_slug}/{voice_id}"
   },
   {
     "method": "GET",

@@ -282,6 +282,36 @@ async def ui_library_episode_detail(
     )
 
 
+@router.get("/voices/{series_slug}/{voice_id}")
+async def ui_voice_detail(request: Request, series_slug: str, voice_id: str) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        store = getattr(request.app.state, "job_store", None)
+        auth_store = getattr(request.app.state, "auth_store", None)
+        if store is None or auth_store is None:
+            raise HTTPException(status_code=500, detail="Store not initialized")
+        ident = current_identity(request, auth_store)
+        require_library_access(store=store, ident=ident, series_slug=series_slug)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Forbidden") from None
+    with suppress(Exception):
+        _audit_ui_page_view(
+            request,
+            user_id=str(user.id),
+            page="voice_detail",
+            meta={"series_slug": series_slug, "voice_id": voice_id},
+        )
+    return _render(
+        request,
+        "voice_detail.html",
+        {"series_slug": series_slug, "voice_id": voice_id},
+    )
+
+
 @router.get("/partials/jobs_table")
 async def ui_jobs_table(
     request: Request,
