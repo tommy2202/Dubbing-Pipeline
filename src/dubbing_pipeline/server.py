@@ -32,7 +32,7 @@ from dubbing_pipeline.api.routes_settings import router as settings_router
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import Job
 from dubbing_pipeline.jobs.queue import JobQueue
-from dubbing_pipeline.jobs.store import JobStore
+from dubbing_pipeline.store_backend import build_store
 from dubbing_pipeline.ops import audit
 from dubbing_pipeline.ops.metrics import REGISTRY
 from dubbing_pipeline.runtime import lifecycle
@@ -42,7 +42,7 @@ from dubbing_pipeline.utils.crypto import PasswordHasher, random_id
 from dubbing_pipeline.utils.log import logger, safe_log
 from dubbing_pipeline.utils.net import get_client_ip, install_egress_policy, is_trusted_proxy
 from dubbing_pipeline.utils.ratelimit import RateLimiter
-from dubbing_pipeline.queue.manager import AutoQueueBackend
+from dubbing_pipeline.queue.queue_backend import build_queue_backend
 from dubbing_pipeline.web.routes_jobs import router as jobs_router
 from dubbing_pipeline.web.routes_ui import router as ui_router
 from dubbing_pipeline.web.routes_system import router as system_ui_router
@@ -109,7 +109,7 @@ async def lifespan(app: FastAPI):
     _maybe_migrate(out_root / "jobs.db", jobs_db)
     _maybe_migrate(out_root / "auth.db", auth_db)
 
-    store = JobStore(jobs_db)
+    store = build_store(jobs_db)
     q = JobQueue(store, concurrency=int(s.jobs_concurrency))
     app.state.job_store = store
     app.state.job_queue = q
@@ -137,7 +137,7 @@ async def lifespan(app: FastAPI):
 
     # Queue backend (Level 2 Redis with Level 1 fallback).
     # This extends the existing Scheduler/JobQueue flow without creating a parallel job system.
-    queue_backend = AutoQueueBackend(
+    queue_backend = build_queue_backend(
         scheduler=sched,
         get_store_cb=lambda: app.state.job_store,
         enqueue_job_id_cb=lambda job_id: q.enqueue_id(job_id),

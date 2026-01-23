@@ -424,6 +424,8 @@ class PublicConfig(BaseSettings):
     # redis: require Redis (falls back only if unreachable at runtime)
     # fallback: force local queue
     queue_mode: str = Field(default="auto", alias="QUEUE_MODE")  # auto|redis|fallback
+    # Optional explicit backend selector (preferred for scale path config)
+    queue_backend: str = Field(default="", alias="QUEUE_BACKEND")  # local|redis
     # Redis key prefix for queue/locks/counters (no secrets)
     redis_queue_prefix: str = Field(default="dp", alias="REDIS_QUEUE_PREFIX")
     # Per-job lock lease (ms). Must be refreshed while a job runs.
@@ -437,6 +439,10 @@ class PublicConfig(BaseSettings):
     redis_cancel_ttl_ms: int = Field(default=24 * 3600_000, alias="REDIS_CANCEL_TTL_MS")
     # Active set TTL (ms): keep per-user active job sets bounded
     redis_active_set_ttl_ms: int = Field(default=6 * 3600_000, alias="REDIS_ACTIVE_SET_TTL_MS")
+
+    # --- store backend (optional scale path) ---
+    store_backend: str = Field(default="local", alias="STORE_BACKEND")  # local|postgres
+    postgres_dsn: str = Field(default="", alias="POSTGRES_DSN")
 
     # --- job limits/watchdogs ---
     max_video_min: int = Field(default=120, alias="MAX_VIDEO_MIN")

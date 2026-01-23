@@ -30,9 +30,20 @@ class AutoQueueBackend(QueueBackend):
         scheduler: Scheduler,
         get_store_cb: Callable[[], Any],
         enqueue_job_id_cb: Callable[[str], "asyncio.Future[None] | asyncio.Task[None] | Any"],
+        mode_override: str | None = None,
     ) -> None:
         s = get_settings()
-        self._mode_cfg = str(getattr(s, "queue_mode", "auto") or "auto").strip().lower()
+        mode_cfg = str(mode_override or "").strip().lower()
+        if not mode_cfg:
+            # Optional explicit backend selector.
+            qb = str(getattr(s, "queue_backend", "") or "").strip().lower()
+            if qb in {"local", "fallback"}:
+                mode_cfg = "fallback"
+            elif qb == "redis":
+                mode_cfg = "redis"
+        if not mode_cfg:
+            mode_cfg = str(getattr(s, "queue_mode", "auto") or "auto").strip().lower()
+        self._mode_cfg = mode_cfg
         if self._mode_cfg not in {"auto", "redis", "fallback"}:
             self._mode_cfg = "auto"
 
