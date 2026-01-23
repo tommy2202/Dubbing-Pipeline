@@ -1,0 +1,111 @@
+{% extends "_base.html" %}
+
+{% block title %}Security Posture • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div x-data="securityPosturePage()" x-init="load()">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold">Security Posture</h1>
+      <p class="mt-1 text-sm text-slate-400">Admin-only summary of access mode and proxy trust (no secrets shown).</p>
+    </div>
+    <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" @click="load()">Refresh</button>
+  </div>
+
+  <div class="mt-4 text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
+  <div class="mt-4 text-sm text-slate-500" x-show="loading">Loading…</div>
+
+  <template x-if="warnings.length">
+    <div class="mt-4 rounded-xl border border-amber-800 bg-amber-900/20 p-4 text-sm text-amber-100">
+      <div class="font-semibold">Warnings</div>
+      <ul class="mt-2 list-disc pl-5 space-y-1">
+        <template x-for="w in warnings" :key="w">
+          <li x-text="w"></li>
+        </template>
+      </ul>
+    </div>
+  </template>
+
+  <div class="mt-6 grid gap-4 sm:grid-cols-2" x-show="!loading">
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-400">Access Mode</div>
+      <div class="mt-2 text-lg font-semibold text-slate-100" x-text="data.access_mode || 'off'"></div>
+      <div class="mt-2 text-xs text-slate-500" x-show="data.access_mode_raw">
+        Source: <span x-text="data.access_mode_raw"></span>
+      </div>
+      <div class="mt-2 text-xs text-slate-500" x-show="data.remote_access_mode_raw">
+        Legacy: <span x-text="data.remote_access_mode_raw"></span>
+      </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-400">Public Base URL</div>
+      <div class="mt-2 text-sm text-slate-100" x-text="data.public_base_url || 'Not set'"></div>
+      <div class="mt-2 text-xs text-slate-500">
+        Used for deep links in notifications and invites.
+      </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-400">Trusted Proxies</div>
+      <div class="mt-2 text-sm text-slate-100">
+        <span x-text="(data.trusted_proxy_subnets || []).length"></span> configured
+      </div>
+      <div class="mt-2 text-xs text-slate-500">
+        trust_proxy_headers: <span x-text="String(!!data.trust_proxy_headers)"></span>,
+        effective: <span x-text="String(!!data.effective_trust_proxy_headers)"></span>
+      </div>
+      <pre class="mt-2 text-xs text-slate-300 whitespace-pre-wrap" x-text="formatList(data.trusted_proxy_subnets)"></pre>
+    </div>
+
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-400">Allowed Subnets</div>
+      <pre class="mt-2 text-xs text-slate-300 whitespace-pre-wrap" x-text="formatList(data.allowed_subnets)"></pre>
+      <div class="mt-2 text-xs text-slate-500" x-show="data.cloudflare_access_configured">
+        Cloudflare Access validation configured.
+      </div>
+      <div class="mt-2 text-xs text-slate-500" x-show="!data.cloudflare_access_configured">
+        Cloudflare Access validation not configured.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function securityPosturePage() {
+    return {
+      data: {},
+      warnings: [],
+      loading: false,
+      error: "",
+      async load() {
+        this.loading = true;
+        this.error = "";
+        try {
+          const r = await fetch("/api/system/security-posture", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.error = d.detail || ("Failed to load (" + r.status + ")");
+            this.loading = false;
+            return;
+          }
+          this.data = d || {};
+          this.warnings = Array.isArray(d.warnings) ? d.warnings : [];
+        } catch (e) {
+          this.error = "Failed to load posture";
+        } finally {
+          this.loading = false;
+        }
+      },
+      formatList(items) {
+        try {
+          if (!Array.isArray(items) || items.length === 0) return "None";
+          return items.join("\n");
+        } catch (e) {
+          return "";
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

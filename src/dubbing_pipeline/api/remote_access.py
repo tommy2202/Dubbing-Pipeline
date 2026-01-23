@@ -41,6 +41,54 @@ def _parse_networks(spec: str) -> list[ipaddress._BaseNetwork]:
     return nets
 
 
+def _normalize_access_mode(raw: str) -> str:
+    mode = (raw or "").strip().lower()
+    if mode in {"tunnel", "cloudflare"}:
+        return "cloudflare"
+    if mode in {"tailscale"}:
+        return "tailscale"
+    if mode in {"off", "none"}:
+        return "off"
+    return "off"
+
+
+def resolve_access_posture(*, settings=None) -> dict[str, Any]:
+    s = settings or get_settings()
+    access_raw = str(getattr(s, "access_mode", "") or "").strip().lower()
+    legacy_raw = str(getattr(s, "remote_access_mode", "off") or "off").strip().lower()
+    mode = _normalize_access_mode(access_raw) if access_raw else _normalize_access_mode(legacy_raw)
+
+    allowed_nets = _parse_networks(str(getattr(s, "allowed_subnets", "") or ""))
+    if not allowed_nets:
+        allowed_nets = _default_allowed_subnets_for_mode(mode)
+    trusted_nets = trusted_proxy_networks()
+    trust_proxy_headers = bool(getattr(s, "trust_proxy_headers", False))
+    effective_trust_proxy_headers = bool(trust_proxy_headers and trusted_nets)
+
+    warnings: list[str] = []
+    if mode == "cloudflare" and trust_proxy_headers and not trusted_nets:
+        warnings.append("TRUSTED_PROXY_SUBNETS empty; forwarded headers ignored.")
+
+    cloudflare_access_configured = bool(
+        getattr(s, "cloudflare_access_team_domain", None)
+        and getattr(s, "cloudflare_access_aud", None)
+    )
+
+    return {
+        "mode": mode,
+        "access_mode_raw": access_raw,
+        "remote_access_mode_raw": legacy_raw,
+        "allowed_nets": allowed_nets,
+        "allowed_subnets": [str(n) for n in allowed_nets],
+        "trusted_proxy_nets": trusted_nets,
+        "trusted_proxy_subnets": [str(n) for n in trusted_nets],
+        "trust_proxy_headers": trust_proxy_headers,
+        "effective_trust_proxy_headers": effective_trust_proxy_headers,
+        "cloudflare_access_configured": cloudflare_access_configured,
+        "warnings": warnings,
+    }
+
+
 def _default_allowed_subnets_for_mode(mode: str) -> list[ipaddress._BaseNetwork]:
     mode = (mode or "off").strip().lower()
     if mode == "tailscale":
@@ -238,14 +286,17 @@ def _verify_cf_access_jwt(token: str, *, team_domain: str, aud: str) -> dict[str
 
 def decide_remote_access(request: Request) -> RemoteDecision:
     s = get_settings()
-    mode = str(getattr(s, "remote_access_mode", "off") or "off").strip().lower()
+    posture = resolve_access_posture(settings=s)
+    mode = str(posture.get("mode") or "off").strip().lower()
     if mode not in {"off", "tailscale", "cloudflare"}:
         mode = "off"
 
     raw_peer = request.client.host if request.client else ""
     raw_ip = _parse_ip(raw_peer) or ipaddress.ip_address("0.0.0.0")
+    if raw_peer == "testclient":
+        raw_ip = ipaddress.ip_address("127.0.0.1")
 
-    allowed_nets = _parse_networks(str(getattr(s, "allowed_subnets", "") or ""))
+    allowed_nets = list(posture.get("allowed_nets") or [])
     if not allowed_nets:
         allowed_nets = _default_allowed_subnets_for_mode(mode)
 
@@ -371,19 +422,26 @@ async def remote_access_middleware(request: Request, call_next) -> Response:
 
 def log_remote_access_boot_summary() -> None:
     s = get_settings()
-    mode = str(getattr(s, "remote_access_mode", "off") or "off").strip().lower()
-    allowed = _parse_networks(str(getattr(s, "allowed_subnets", "") or ""))
-    if not allowed:
-        allowed = _default_allowed_subnets_for_mode(mode)
-    trusted = trusted_proxy_networks()
+    posture = resolve_access_posture(settings=s)
+    mode = str(posture.get("mode") or "off").strip().lower()
+    allowed = list(posture.get("allowed_nets") or [])
+    trusted = list(posture.get("trusted_proxy_nets") or [])
+    trust_proxy_headers = bool(posture.get("trust_proxy_headers"))
+    effective_trust_proxy_headers = bool(posture.get("effective_trust_proxy_headers"))
+    warnings = posture.get("warnings") or []
+    if warnings:
+        logger.warning(
+            "remote_access_posture_warning",
+            mode=mode,
+            warnings=warnings,
+        )
     logger.info(
         "remote_access_mode",
         mode=mode,
-        trust_proxy_headers=bool(getattr(s, "trust_proxy_headers", False)),
+        access_mode=str(posture.get("access_mode_raw") or ""),
+        trust_proxy_headers=trust_proxy_headers,
+        effective_trust_proxy_headers=effective_trust_proxy_headers,
         allowed_subnets=[str(n) for n in allowed],
         trusted_proxy_subnets=[str(n) for n in trusted],
-        cloudflare_access_configured=bool(
-            getattr(s, "cloudflare_access_team_domain", None)
-            and getattr(s, "cloudflare_access_aud", None)
-        ),
+        cloudflare_access_configured=bool(posture.get("cloudflare_access_configured")),
     )

@@ -1,10 +1,10 @@
-## Remote access (mobile data) — Tailscale (default) and Cloudflare Tunnel (optional)
+## Remote access (mobile data) — Tailscale-first (default) and Cloudflare Tunnel (optional)
 
 This repo is **offline-first** and is designed to run safely without exposing your laptop publicly. The recommended way to use it from a phone on mobile data is **Tailscale** (private network). If you need a normal browser URL without installing Tailscale, use **Cloudflare Tunnel + Access**.
 
 ### Security model (recommended)
-- **Preferred**: `REMOTE_ACCESS_MODE=tailscale` (private-only; no public exposure)
-- **Optional**: `REMOTE_ACCESS_MODE=cloudflare` + **Cloudflare Access JWT validation** at the origin
+- **Preferred (default)**: `ACCESS_MODE=tailscale` (private-only; no public exposure)
+- **Optional**: `ACCESS_MODE=tunnel` + **Cloudflare Access allowlist (Policy A)** + optional Access JWT validation at the origin
 - **Avoid**: exposing `HOST=0.0.0.0` + port-forwarding without allowlists/auth
 
 ### Authentication (recommended)
@@ -29,11 +29,13 @@ This repo is **offline-first** and is designed to run safely without exposing yo
 - Log in both devices to the same tailnet.
 
 ### 2) Start the server
-Run the web server normally:
+Run the web server normally. The default bind is **127.0.0.1** for safety, so
+set `HOST` to either your **Tailscale IP** or `0.0.0.0` if you want your phone
+to connect directly over the tailnet.
 
 ```bash
-export REMOTE_ACCESS_MODE=tailscale
-export HOST=0.0.0.0
+export ACCESS_MODE=tailscale
+export HOST=100.x.y.z   # or 0.0.0.0
 export PORT=8000
 dubbing-web
 ```
@@ -69,19 +71,21 @@ export ALLOWED_SUBNETS="100.64.0.0/10,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,12
 
 Use this when you want a normal HTTPS URL without installing Tailscale on the phone.
 
-### 1) Start the app in Cloudflare mode
+### 1) Start the app in Tunnel mode
 
 ```bash
-export REMOTE_ACCESS_MODE=cloudflare
+export ACCESS_MODE=tunnel
 export HOST=0.0.0.0
 export PORT=8000
 export TRUST_PROXY_HEADERS=1
+export TRUSTED_PROXIES="127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 dubbing-web
 ```
 
-Cloudflare mode:
+Tunnel mode:
 - still enforces an IP allowlist (defaults to loopback + common container/private nets; **does not allow generic LAN by default**)
 - can optionally enforce **Cloudflare Access JWT** at the origin (recommended)
+- if `TRUSTED_PROXIES` is empty, the app **warns loudly** and ignores forwarded headers
 
 ### 2) Configure Cloudflare Tunnel
 This repo already includes a tunnel compose file:
@@ -100,8 +104,14 @@ Validate your local setup:
 python3 scripts/remote/cloudflared/cloudflared_check.py
 ```
 
-### 3) Protect with Cloudflare Access (recommended)
-Enable Access for the hostname (one-time PIN or OIDC).
+### 3) Protect with Cloudflare Access (Policy A)
+Enable Access for the hostname (one-time PIN or OIDC). Use a **deny-by-default**
+policy with an explicit allowlist.
+
+**Policy A (allowlist):**
+- **Include**: specific emails or an **Access Group** (preferred)
+- **Session duration**: keep short (e.g., 8–12 hours) and require re-auth
+- **Deny by default**: add a catch-all **Deny** policy below the allowlist
 
 To additionally validate Access at the origin, set:
 
@@ -112,6 +122,14 @@ export CLOUDFLARE_ACCESS_AUD="your-access-app-aud"
 
 The server will then require and verify the header:
 - `Cf-Access-Jwt-Assertion: <jwt>`
+
+### 4) Optional: PUBLIC_BASE_URL for deep links
+If you want invite links, ntfy links, or UI deep links to use your public
+hostname, set:
+
+```bash
+export PUBLIC_BASE_URL="https://your-app.example.com"
+```
 
 Notes:
 - JWKS fetch uses egress to `https://<team>.cloudflareaccess.com/...`.

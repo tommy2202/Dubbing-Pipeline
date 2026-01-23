@@ -154,13 +154,17 @@ class PublicConfig(BaseSettings):
     minimal_artifacts: bool = Field(default=False, alias="MINIMAL_ARTIFACTS")
 
     # --- web server ---
-    host: str = Field(default="0.0.0.0", alias="HOST")
+    # Default to localhost to avoid accidental public exposure.
+    host: str = Field(default="127.0.0.1", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
 
     # --- remote access hardening (mobile) ---
+    # Preferred selector (tailscale|tunnel). Defaults to tailscale-first posture.
+    access_mode: str = Field(default="tailscale", alias="ACCESS_MODE")
     # off: no IP allowlist enforcement (default for local dev)
     # tailscale: allow only LAN/private + Tailscale CGNAT ranges by default
     # cloudflare: expect a trusted proxy (cloudflared/caddy) and optionally enforce Cloudflare Access JWT
+    # NOTE: remote_access_mode is legacy; ACCESS_MODE takes precedence when set.
     remote_access_mode: str = Field(default="off", alias="REMOTE_ACCESS_MODE")  # off|tailscale|cloudflare
     allowed_subnets: str = Field(default="", alias="ALLOWED_SUBNETS")  # comma/space separated CIDRs
     trust_proxy_headers: bool = Field(default=False, alias="TRUST_PROXY_HEADERS")
