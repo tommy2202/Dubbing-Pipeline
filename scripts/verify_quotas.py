@@ -73,8 +73,8 @@ def main() -> int:
         os.environ["MIN_FREE_GB"] = "0"
         os.environ["DUBBING_SKIP_STARTUP_CHECK"] = "1"
         os.environ["COOKIE_SECURE"] = "0"
-        os.environ["MAX_UPLOAD_BYTES"] = "1024"
-        os.environ["MAX_STORAGE_BYTES_PER_USER"] = "2048"
+        os.environ["MAX_UPLOAD_BYTES"] = "10000000"
+        os.environ["MAX_STORAGE_BYTES_PER_USER"] = "100000000"
         os.environ["JOBS_PER_DAY_PER_USER"] = "1"
         os.environ["MAX_CONCURRENT_JOBS_PER_USER"] = "1"
 
@@ -101,6 +101,14 @@ def main() -> int:
             auth.upsert_user(user)
             headers = _login(c, username="quota_user", password="pass")
 
+            store.upsert_user_quota(
+                str(user.id),
+                max_upload_bytes=1024,
+                jobs_per_day=None,
+                max_concurrent_jobs=None,
+                max_storage_bytes=2048,
+                updated_by=str(user.id),
+            )
             store.set_job_storage_bytes("job_storage_1", user_id=user.id, bytes_count=1900)
             r = c.post(
                 "/api/uploads/init",
@@ -116,6 +124,14 @@ def main() -> int:
                 json={"filename": "clip.mp4", "total_bytes": 2048},
             )
             assert r2.status_code == 400, r2.text
+            store.upsert_user_quota(
+                str(user.id),
+                max_upload_bytes=None,
+                jobs_per_day=None,
+                max_concurrent_jobs=None,
+                max_storage_bytes=None,
+                updated_by=str(user.id),
+            )
 
             vp = _runtime_video_path(root)
             if vp is not None:
