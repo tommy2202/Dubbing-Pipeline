@@ -124,7 +124,17 @@ class FallbackLocalQueue(QueueBackend):
             jobs = store.list(limit=2000)
             running = 0
             queued = 0
+            today = 0
             uid = str(user_id or "")
+            try:
+                from dubbing_pipeline.jobs.limits import _same_utc_day  # type: ignore
+                from dubbing_pipeline.jobs.models import now_utc
+
+                same_day = _same_utc_day
+                now_iso = now_utc()
+            except Exception:
+                same_day = None
+                now_iso = ""
             for j in jobs:
                 if str(getattr(j, "owner_id", "") or "") != uid:
                     continue
@@ -134,7 +144,13 @@ class FallbackLocalQueue(QueueBackend):
                     running += 1
                 if v == "QUEUED":
                     queued += 1
-            return {"running": int(running), "queued": int(queued), "today": 0}
+                if same_day and now_iso:
+                    try:
+                        if same_day(str(getattr(j, "created_at", "") or ""), now_iso):
+                            today += 1
+                    except Exception:
+                        pass
+            return {"running": int(running), "queued": int(queued), "today": int(today)}
         except Exception:
             return {"running": 0, "queued": 0, "today": 0}
 
