@@ -38,6 +38,9 @@ class JobStore:
         # Schema for per-user quota overrides (admin).
         with suppress(Exception):
             self._init_quota_schema()
+        # Schema for library reports (moderation).
+        with suppress(Exception):
+            self._init_reports_schema()
 
     def _jobs(self) -> SqliteDict:
         # Open/close per operation (safe + avoids cross-thread SQLite handle issues)
@@ -278,6 +281,44 @@ class JobStore:
                       updated_by TEXT
                     );
                     """
+                )
+                con.commit()
+            finally:
+                con.close()
+
+    def _init_reports_schema(self) -> None:
+        """
+        Create/migrate table for library moderation reports.
+        """
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS library_reports (
+                      id TEXT PRIMARY KEY,
+                      job_id TEXT,
+                      series_slug TEXT,
+                      season_number INTEGER,
+                      episode_number INTEGER,
+                      reporter_id TEXT NOT NULL,
+                      owner_id TEXT,
+                      reason TEXT,
+                      created_at REAL NOT NULL,
+                      status TEXT NOT NULL DEFAULT 'open',
+                      notified INTEGER NOT NULL DEFAULT 0,
+                      notify_error TEXT
+                    );
+                    """
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_library_reports_status_created ON library_reports(status, created_at DESC);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_library_reports_job_id ON library_reports(job_id);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_library_reports_reporter_id ON library_reports(reporter_id);"
                 )
                 con.commit()
             finally:
@@ -552,6 +593,183 @@ class JobStore:
             finally:
                 con.close()
         return self.get_user_quota(uid)
+
+    # --- library moderation reports ---
+    def create_library_report(
+        self,
+        *,
+        report_id: str,
+        reporter_id: str,
+        job_id: str,
+        series_slug: str,
+        season_number: int,
+        episode_number: int,
+        reason: str,
+        owner_id: str = "",
+        notified: bool = False,
+        notify_error: str | None = None,
+    ) -> dict[str, Any]:
+        rid = str(report_id or "").strip()
+        reporter = str(reporter_id or "").strip()
+        job_id = str(job_id or "").strip()
+        slug = str(series_slug or "").strip()
+        if not rid or not reporter or not job_id or not slug:
+            raise ValueError("report_id, reporter_id, job_id, series_slug required")
+        now = float(time.time())
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO library_reports (
+                      id, job_id, series_slug, season_number, episode_number,
+                      reporter_id, owner_id, reason, created_at, status, notified, notify_error
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        rid,
+                        job_id,
+                        slug,
+                        int(season_number),
+                        int(episode_number),
+                        reporter,
+                        str(owner_id or ""),
+                        str(reason or ""),
+                        now,
+                        "open",
+                        1 if notified else 0,
+                        str(notify_error or ""),
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
+        return {
+            "id": rid,
+            "job_id": job_id,
+            "series_slug": slug,
+            "season_number": int(season_number),
+            "episode_number": int(episode_number),
+            "reporter_id": reporter,
+            "owner_id": str(owner_id or ""),
+            "reason": str(reason or ""),
+            "created_at": float(now),
+            "status": "open",
+            "notified": bool(notified),
+            "notify_error": str(notify_error or ""),
+        }
+
+    def update_report_notification(
+        self,
+        report_id: str,
+        *,
+        notified: bool,
+        notify_error: str | None = None,
+    ) -> None:
+        rid = str(report_id or "").strip()
+        if not rid:
+            return
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    UPDATE library_reports
+                    SET notified = ?, notify_error = ?
+                    WHERE id = ?;
+                    """,
+                    (1 if notified else 0, str(notify_error or ""), rid),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+    def list_library_reports(
+        self,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        lim = max(1, min(500, int(limit)))
+        off = max(0, int(offset))
+        where = ""
+        params: list[Any] = []
+        if status:
+            where = "WHERE status = ?"
+            params.append(str(status))
+        con = self._conn()
+        try:
+            rows = con.execute(
+                f"""
+                SELECT id, job_id, series_slug, season_number, episode_number,
+                       reporter_id, owner_id, reason, created_at, status, notified, notify_error
+                FROM library_reports
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?;
+                """,
+                [*params, lim, off],
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                out.append(
+                    {
+                        "id": str(r["id"]),
+                        "job_id": str(r["job_id"] or ""),
+                        "series_slug": str(r["series_slug"] or ""),
+                        "season_number": int(r["season_number"] or 0),
+                        "episode_number": int(r["episode_number"] or 0),
+                        "reporter_id": str(r["reporter_id"] or ""),
+                        "owner_id": str(r["owner_id"] or ""),
+                        "reason": str(r["reason"] or ""),
+                        "created_at": float(r["created_at"] or 0.0),
+                        "status": str(r["status"] or "open"),
+                        "notified": bool(int(r["notified"] or 0)),
+                        "notify_error": str(r["notify_error"] or ""),
+                    }
+                )
+            return out
+        finally:
+            con.close()
+
+    def count_library_reports(self, *, status: str | None = None) -> int:
+        where = ""
+        params: list[Any] = []
+        if status:
+            where = "WHERE status = ?"
+            params.append(str(status))
+        con = self._conn()
+        try:
+            row = con.execute(
+                f"SELECT COUNT(*) AS cnt FROM library_reports {where};",
+                params,
+            ).fetchone()
+            if row is None:
+                return 0
+            return int(row["cnt"] or 0)
+        finally:
+            con.close()
+
+    def update_report_status(self, report_id: str, *, status: str, handled_by: str = "") -> None:
+        rid = str(report_id or "").strip()
+        if not rid:
+            return
+        st = str(status or "").strip().lower() or "open"
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    UPDATE library_reports
+                    SET status = ?, notify_error = notify_error
+                    WHERE id = ?;
+                    """,
+                    (st, rid),
+                )
+                con.commit()
+            finally:
+                con.close()
 
     # --- persistent character voices ---
     def upsert_character(

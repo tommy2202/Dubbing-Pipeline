@@ -40,62 +40,58 @@ def _job_audit_path(job_id: str) -> Path | None:
 
 
 _AUDIT_TEXT_KEYS = {"text", "subtitle", "subtitles", "transcript", "content", "prompt"}
+_AUDIT_PATH_KEYS = {
+    "path",
+    "paths",
+    "file",
+    "files",
+    "filename",
+    "video_path",
+    "output_path",
+    "log_path",
+    "work_dir",
+}
+_AUDIT_LIST_KEYS = {"segments", "lines", "items", "updates"}
 
 
-def emit(
-    event: str,
-    *,
-    request_id: str | None = None,
-    user_id: str | None = None,
-    meta: dict[str, Any] | None = None,
-    job_id: str | None = None,
-) -> None:
-    """
-    Append-only audit log (newline-delimited JSON), daily rotated by date.
-    """
+def _scrub_meta_safe(meta: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for kk, vv in meta.items():
+        kks = str(kk)
+        kl = kks.strip().lower()
+        if kl in _AUDIT_TEXT_KEYS:
+            if isinstance(vv, str):
+                out[kks] = {"redacted": True, "len": len(vv)}
+            else:
+                out[kks] = {"redacted": True}
+            continue
+        if kl in _AUDIT_PATH_KEYS or "path" in kl or "file" in kl:
+            if isinstance(vv, list):
+                out[kks] = {"count": len(vv)}
+            else:
+                out[kks] = {"redacted": True}
+            continue
+        if kl in _AUDIT_LIST_KEYS and isinstance(vv, list):
+            out[kks] = {"count": len(vv)}
+            continue
+        if isinstance(vv, str):
+            if len(vv) > 200:
+                out[kks] = {"redacted": True, "len": len(vv)}
+            else:
+                out[kks] = _redact_str(vv)
+            continue
+        if isinstance(vv, dict):
+            out[kks] = {"keys": len(vv)}
+            continue
+        if isinstance(vv, list):
+            out[kks] = {"count": len(vv)}
+            continue
+        out[kks] = vv
+    return out
+
+
+def _write_record(rec: dict[str, Any], *, job_id: str | None = None) -> None:
     ts = datetime.now(tz=timezone.utc)
-    rec: dict[str, Any] = {"ts": ts.isoformat(), "event": event}
-    if request_id:
-        rec["request_id"] = request_id
-    if user_id:
-        rec["user_id"] = user_id
-    if meta:
-        rec["meta"] = meta
-
-    # Determine per-job audit routing (prefer explicit job_id, else meta.job_id)
-    if not job_id:
-        try:
-            if isinstance(meta, dict) and meta.get("job_id"):
-                job_id = str(meta.get("job_id"))
-        except Exception:
-            job_id = None
-
-    # Redact string fields defensively
-    def _scrub(v: Any) -> Any:
-        if isinstance(v, str):
-            return _redact_str(v)
-        if isinstance(v, dict):
-            out: dict[str, Any] = {}
-            for kk, vv in v.items():
-                kks = str(kk)
-                # Never store raw subtitle/transcript-like text in audit logs.
-                if kks.lower() in _AUDIT_TEXT_KEYS and isinstance(vv, str):
-                    out[kks] = {"redacted": True, "len": len(vv)}
-                    continue
-                # If a list/dict is suspiciously large, keep only a count.
-                if kks.lower() in {"segments", "lines", "items", "updates"} and isinstance(
-                    vv, list
-                ):
-                    out[kks] = {"count": len(vv)}
-                    continue
-                out[kks] = _scrub(vv)
-            return out
-        if isinstance(v, list):
-            return [_scrub(x) for x in v]
-        return v
-
-    rec = _scrub(rec)
-
     daily = _audit_path(ts)
     latest = _audit_path_latest()
     daily.parent.mkdir(parents=True, exist_ok=True)
@@ -111,3 +107,66 @@ def emit(
         if job_path is not None:
             with job_path.open("a", encoding="utf-8") as f:
                 f.write(line + "\n")
+
+
+def event(
+    event_type: str,
+    *,
+    actor_id: str | None = None,
+    resource_id: str | None = None,
+    request_id: str | None = None,
+    outcome: str | None = None,
+    meta_safe: dict[str, Any] | None = None,
+    job_id: str | None = None,
+) -> None:
+    """
+    Coarse audit event: no content payloads or full filenames.
+    """
+    ts = datetime.now(tz=timezone.utc)
+    rec: dict[str, Any] = {
+        "ts": ts.isoformat(),
+        "event": str(event_type),
+        "event_type": str(event_type),
+        "outcome": str(outcome or "unknown"),
+    }
+    if request_id:
+        rec["request_id"] = request_id
+    if actor_id:
+        rec["actor_id"] = actor_id
+        rec["user_id"] = actor_id  # backwards-compatible field
+    if resource_id:
+        rec["resource_id"] = resource_id
+    if meta_safe:
+        rec["meta"] = _scrub_meta_safe(meta_safe)
+    _write_record(rec, job_id=job_id or resource_id)
+
+
+def emit(
+    event: str,
+    *,
+    request_id: str | None = None,
+    user_id: str | None = None,
+    meta: dict[str, Any] | None = None,
+    job_id: str | None = None,
+    outcome: str | None = None,
+) -> None:
+    """
+    Append-only audit log (newline-delimited JSON), daily rotated by date.
+    """
+    resource_id = None
+    if job_id:
+        resource_id = str(job_id)
+    if not resource_id and isinstance(meta, dict):
+        for cand in ("resource_id", "job_id"):
+            if meta.get(cand):
+                resource_id = str(meta.get(cand))
+                break
+    event(
+        event,
+        actor_id=user_id,
+        resource_id=resource_id,
+        request_id=request_id,
+        outcome=outcome,
+        meta_safe=meta or None,
+        job_id=job_id,
+    )

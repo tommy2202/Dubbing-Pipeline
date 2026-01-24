@@ -47,4 +47,16 @@ def audit_event(
         or request.headers.get("x-request-id")
         or None
     )
-    audit.emit(event, request_id=rid, user_id=user_id, meta=meta or None)
+    resource_id = None
+    if isinstance(meta, dict):
+        for cand in ("resource_id", "job_id"):
+            if meta.get(cand):
+                resource_id = str(meta.get(cand))
+                break
+    audit.event(
+        event,
+        request_id=rid,
+        actor_id=user_id,
+        resource_id=resource_id,
+        meta_safe=meta or None,
+    )

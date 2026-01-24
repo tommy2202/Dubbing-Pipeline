@@ -551,6 +551,21 @@ async def ui_admin_queue(request: Request) -> HTMLResponse:
     return _render(request, "admin_queue.html", {})
 
 
+@router.get("/admin/reports")
+async def ui_admin_reports(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        if not (user.role and user.role.value == "admin"):
+            return RedirectResponse(url="/ui/dashboard", status_code=302)
+    except Exception:
+        return RedirectResponse(url="/ui/dashboard", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="admin_reports")
+    return _render(request, "admin_reports.html", {})
+
+
 @router.get("/admin/invites")
 async def ui_admin_invites(request: Request) -> HTMLResponse:
     user = _current_user_optional(request)

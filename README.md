@@ -18,6 +18,10 @@ Outputs are written under:
 - **Security & privacy**: cookie sessions + CSRF, strict CORS, rate limits, RBAC + scoped API keys, audit logging, optional encryption-at-rest, privacy mode + retention.
 - **Ops**: model cache status + optional prewarm, library management (tags/archive/delete), verification gates.
 
+Privacy note:
+- Logs are **redacted by default** (tokens/cookies/JWTs) and **do not log transcript text**.
+- To enable transcript logging for debugging, set `LOG_TRANSCRIPTS=1` (not recommended for shared systems).
+
 Before inviting others, run:
 
 ```bash

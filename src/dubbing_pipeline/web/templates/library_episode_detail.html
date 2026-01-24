@@ -17,7 +17,7 @@
 </div>
 
 <div class="mt-6 grid gap-4 lg:grid-cols-3"
-     x-data="libraryEpisodeDetail('{{ series_slug }}', {{ season_number }}, {{ episode_number }})"
+     x-data="libraryEpisodeDetail('{{ series_slug }}', {{ season_number }}, {{ episode_number }}, '{{ user.id if user else '' }}', '{{ user.role.value if user and user.role else '' }}')"
      x-init="init()">
 
   <!-- Playback -->
@@ -69,6 +69,21 @@
         <div class="mt-2 text-sm text-slate-200" x-text="selectedVisibility || ''"></div>
       </div>
     </div>
+
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+              @click="unshareSelected()"
+              x-show="canUnshare"
+              x-cloak>Remove from shared</button>
+      <button class="rounded bg-amber-800/60 hover:bg-amber-800 px-3 py-2 text-sm text-amber-100"
+              @click="reportSelected()"
+              x-show="canReport"
+              x-cloak>Report</button>
+      <button class="rounded bg-red-900/50 hover:bg-red-900 px-3 py-2 text-sm text-red-100"
+              @click="adminRemoveSelected()"
+              x-show="isAdmin"
+              x-cloak>Admin remove</button>
+    </div>
   </div>
 
   <!-- Versions -->
@@ -103,19 +118,31 @@
 </div>
 
 <script>
-  function libraryEpisodeDetail(seriesSlug, seasonNumber, episodeNumber) {
+  function libraryEpisodeDetail(seriesSlug, seasonNumber, episodeNumber, currentUserId, currentUserRole) {
     return {
       seriesSlug,
       seasonNumber,
       episodeNumber,
+      currentUserId: currentUserId || "",
+      currentUserRole: currentUserRole || "",
       view: "all",
       loading: true,
       busy: false,
       versions: [],
       selectedJobId: "",
       selectedVisibility: "",
+      selectedOwnerId: "",
       playback: { master: null, mobile: null, hls: null },
       qaUrl: "",
+      get isAdmin() {
+        return String(this.currentUserRole || "").toLowerCase() === "admin";
+      },
+      get canUnshare() {
+        return this.isAdmin || (!!this.selectedOwnerId && this.selectedOwnerId === this.currentUserId);
+      },
+      get canReport() {
+        return !!this.selectedOwnerId && this.selectedOwnerId !== this.currentUserId;
+      },
       async init() {
         try {
           const url = new URL(window.location.href);
@@ -148,14 +175,25 @@
       async select(v) {
         this.selectedJobId = v.job_id || "";
         this.selectedVisibility = v.visibility || "";
+        this.selectedOwnerId = "";
         // Prefer playback_urls if provided.
         const pu = v.playback_urls || {};
         this.playback.master = pu.master || null;
         this.playback.mobile = pu.mobile || null;
         this.playback.hls = pu.hls_index || null;
         this.qaUrl = "";
+        await this.loadJobMeta();
         // Fill in missing URLs by querying job files (best-effort).
         await this.loadFiles();
+      },
+      async loadJobMeta() {
+        if (!this.selectedJobId) return;
+        try {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.selectedJobId), { credentials: "include" });
+          if (!r.ok) return;
+          const d = await r.json().catch(() => ({}));
+          this.selectedOwnerId = d && d.owner_id ? String(d.owner_id) : "";
+        } catch (e) {}
       },
       async loadFiles() {
         if (!this.selectedJobId) return;
@@ -180,6 +218,63 @@
           // Silent-ish: keep whatever we have from library endpoint.
         } finally {
           this.busy = false;
+        }
+      }
+      ,
+      libraryKey() {
+        return this.seriesSlug + ":" + this.seasonNumber + ":" + this.episodeNumber;
+      },
+      async unshareSelected() {
+        if (!this.selectedJobId) return;
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/library/" + encodeURIComponent(this.libraryKey()) + "/unshare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+          credentials: "include",
+          body: JSON.stringify({}),
+        });
+        if (r.ok) {
+          window.showToast("Removed from shared library", "success");
+          await this.loadVersions();
+        } else {
+          const d = await r.json().catch(() => ({}));
+          window.showToast(d.detail || "Failed to unshare", "error");
+        }
+      },
+      async reportSelected() {
+        if (!this.selectedJobId) return;
+        const reason = prompt("Report reason (short):", "");
+        if (!reason) return;
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/library/" + encodeURIComponent(this.libraryKey()) + "/report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+          credentials: "include",
+          body: JSON.stringify({ reason: reason.trim() }),
+        });
+        if (r.ok) {
+          window.showToast("Report submitted", "success");
+        } else {
+          const d = await r.json().catch(() => ({}));
+          window.showToast(d.detail || "Failed to report", "error");
+        }
+      },
+      async adminRemoveSelected() {
+        if (!this.selectedJobId) return;
+        if (!confirm("Remove this item from the shared library?")) return;
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/library/" + encodeURIComponent(this.libraryKey()) + "/admin_remove", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+          credentials: "include",
+          body: JSON.stringify({}),
+        });
+        if (r.ok) {
+          window.showToast("Removed from shared library", "success");
+          await this.loadVersions();
+        } else {
+          const d = await r.json().catch(() => ({}));
+          window.showToast(d.detail || "Failed to remove", "error");
         }
       }
     };

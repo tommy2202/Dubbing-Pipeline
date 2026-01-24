@@ -1,0 +1,155 @@
+{% extends "_base.html" %}
+
+{% block title %}Admin Reports • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div x-data="adminReportsPage()" x-init="load()">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold">Reports</h1>
+      <p class="mt-1 text-sm text-slate-400">User reports for shared library items.</p>
+    </div>
+    <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" @click="load()">Refresh</button>
+  </div>
+
+  <div class="mt-4 text-sm text-red-200" x-show="error" x-cloak x-text="error"></div>
+  <div class="mt-4 text-sm text-slate-500" x-show="loading">Loading…</div>
+
+  <template x-if="items.length === 0 && !loading">
+    <div class="mt-4 text-sm text-slate-500">No reports.</div>
+  </template>
+
+  <div class="mt-6 space-y-3" x-show="!loading">
+    <template x-for="it in items" :key="it.id">
+      <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="text-sm text-slate-200">
+            <span class="text-slate-500">Report:</span>
+            <span x-text="it.id"></span>
+          </div>
+          <span class="rounded border px-2 py-0.5 text-xs"
+                :class="badgeClass(it.status)"
+                x-text="it.status || 'open'"></span>
+        </div>
+        <div class="mt-2 text-xs text-slate-400">
+          Reporter: <span x-text="it.reporter_id"></span>
+          <span class="mx-1">•</span>
+          Owner: <span x-text="it.owner_id || 'unknown'"></span>
+        </div>
+        <div class="mt-2 text-xs text-slate-400">
+          Job: <span class="break-all" x-text="it.job_id"></span>
+        </div>
+        <div class="mt-2 text-xs text-slate-400">
+          Key: <span x-text="libraryKey(it)"></span>
+        </div>
+        <div class="mt-2 text-sm text-slate-200" x-text="it.reason || ''"></div>
+        <div class="mt-2 text-xs text-slate-500">
+          Created: <span x-text="formatTs(it.created_at)"></span>
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs"
+                  @click="resolve(it)" :disabled="it.status === 'resolved'">Resolve</button>
+          <a class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs"
+             :href="episodeUrl(it)" target="_blank" rel="noreferrer">Open episode</a>
+          <a class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-xs text-red-100"
+             :href="adminRemoveUrl(it)" @click.prevent="adminRemove(it)">Admin remove</a>
+        </div>
+        <div class="mt-2 text-xs text-slate-500" x-show="it.notified">
+          Notified via ntfy.
+        </div>
+        <div class="mt-2 text-xs text-amber-200" x-show="!it.notified && it.notify_error">
+          Notify failed: <span x-text="it.notify_error"></span>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+  function adminReportsPage() {
+    return {
+      items: [],
+      loading: false,
+      error: "",
+      async load() {
+        this.loading = true;
+        this.error = "";
+        try {
+          const r = await fetch("/api/admin/reports?status=open", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.error = d.detail || ("Failed to load (" + r.status + ")");
+            this.loading = false;
+            return;
+          }
+          this.items = Array.isArray(d.items) ? d.items : [];
+        } catch (e) {
+          this.error = "Failed to load reports";
+        } finally {
+          this.loading = false;
+        }
+      },
+      badgeClass(status) {
+        const s = String(status || "").toLowerCase();
+        if (s === "resolved") return "bg-emerald-900/30 border-emerald-800 text-emerald-200";
+        return "bg-amber-900/30 border-amber-800 text-amber-200";
+      },
+      libraryKey(it) {
+        try { return (it.series_slug || "") + ":" + (it.season_number || "") + ":" + (it.episode_number || ""); } catch (e) { return ""; }
+      },
+      episodeUrl(it) {
+        if (!it.series_slug) return "#";
+        return "/ui/library/" + encodeURIComponent(it.series_slug)
+          + "/season/" + encodeURIComponent(it.season_number)
+          + "/episode/" + encodeURIComponent(it.episode_number);
+      },
+      adminRemoveUrl(it) {
+        return "/api/library/" + encodeURIComponent(this.libraryKey(it)) + "/admin_remove";
+      },
+      formatTs(ts) {
+        try {
+          const v = Number(ts || 0);
+          if (!v) return "";
+          return new Date(v * 1000).toISOString();
+        } catch (e) { return ""; }
+      },
+      async resolve(it) {
+        const id = it && it.id ? String(it.id) : "";
+        if (!id) return;
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/admin/reports/" + encodeURIComponent(id) + "/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+          credentials: "include",
+          body: JSON.stringify({}),
+        });
+        if (r.ok) {
+          it.status = "resolved";
+          window.showToast("Report resolved", "success");
+        } else {
+          const d = await r.json().catch(() => ({}));
+          window.showToast(d.detail || "Failed to resolve report", "error");
+        }
+      },
+      async adminRemove(it) {
+        if (!confirm("Remove this library item from shared view?")) return;
+        const key = this.libraryKey(it);
+        if (!key) return;
+        const csrf = document.getElementById("csrf")?.value || "";
+        const r = await fetch("/api/library/" + encodeURIComponent(key) + "/admin_remove", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+          credentials: "include",
+          body: JSON.stringify({}),
+        });
+        if (r.ok) {
+          window.showToast("Removed from shared library", "success");
+        } else {
+          const d = await r.json().catch(() => ({}));
+          window.showToast(d.detail || "Failed to remove", "error");
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

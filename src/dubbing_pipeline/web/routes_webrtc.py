@@ -119,7 +119,7 @@ async def _close_peer(token: str, reason: str) -> None:
             peer.player.stop()
     except Exception:
         pass
-    logger.info("webrtc peer closed token=%s reason=%s ip=%s", token, reason, peer.ip)
+    logger.info("webrtc peer closed", reason=str(reason), ip=str(peer.ip))
 
 
 async def _idle_watch(token: str) -> None:
@@ -135,7 +135,7 @@ async def _idle_watch(token: str) -> None:
                 await _close_peer(token, "idle_timeout")
                 return
     except asyncio.CancelledError:
-        logger.info("task stopped", task="webrtc.idle_watch", token=str(token))
+        logger.info("task stopped", task="webrtc.idle_watch")
         return
     finally:
         async with _peers_lock:
@@ -229,14 +229,14 @@ async def webrtc_offer(
         @pc.on("iceconnectionstatechange")
         async def on_ice_state_change():
             touch()
-            logger.info("webrtc ice_state token=%s state=%s", peer_token, pc.iceConnectionState)
+            logger.info("webrtc ice_state", state=str(pc.iceConnectionState))
             if pc.iceConnectionState in ("failed", "closed"):
                 await _close_peer(peer_token, f"ice_{pc.iceConnectionState}")
 
         @pc.on("connectionstatechange")
         async def on_conn_state_change():
             touch()
-            logger.info("webrtc conn_state token=%s state=%s", peer_token, pc.connectionState)
+            logger.info("webrtc conn_state", state=str(pc.connectionState))
             if pc.connectionState in ("failed", "closed", "disconnected"):
                 await _close_peer(peer_token, f"conn_{pc.connectionState}")
 
@@ -247,13 +247,7 @@ async def webrtc_offer(
         idle_task = asyncio.create_task(_idle_watch(peer_token))
         async with _peers_lock:
             _idle_watch_tasks[peer_token] = idle_task
-        logger.info(
-            "webrtc peer created token=%s job_id=%s ip=%s file=%s",
-            peer_token,
-            job_id,
-            ip,
-            media_path.name,
-        )
+        logger.info("webrtc peer created", job_id=str(job_id), ip=str(ip))
 
         return {
             "sdp": pc.localDescription.sdp,

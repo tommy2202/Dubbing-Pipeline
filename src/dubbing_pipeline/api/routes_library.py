@@ -12,9 +12,16 @@ from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState
 from dubbing_pipeline.library import queries
+from dubbing_pipeline.library.manifest import update_manifest_visibility
+from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
+from dubbing_pipeline.notify import ntfy
+from dubbing_pipeline.utils.crypto import random_id
 from dubbing_pipeline.utils.log import logger
+from dubbing_pipeline.utils.ratelimit import RateLimiter
 
 router = APIRouter(prefix="/api/library", tags=["library"])
+
+_REPORT_REASON_MAX = 200
 
 
 def _store(request: Request):
@@ -22,6 +29,58 @@ def _store(request: Request):
     if store is None:
         raise RuntimeError("Job store not initialized")
     return store
+
+
+def _parse_library_key(key: str) -> tuple[str, int, int]:
+    raw = str(key or "").strip()
+    parts = raw.split(":")
+    if len(parts) != 3:
+        raise HTTPException(
+            status_code=400, detail="Invalid library key (expected series_slug:season:episode)"
+        )
+    slug = str(parts[0] or "").strip()
+    try:
+        season = int(parts[1])
+        episode = int(parts[2])
+    except Exception:
+        raise HTTPException(
+            status_code=400, detail="Invalid library key (season/episode must be int)"
+        ) from None
+    if not slug or season < 1 or episode < 1:
+        raise HTTPException(status_code=400, detail="Invalid library key (empty or out of range)")
+    return slug, season, episode
+
+
+def _library_key(series_slug: str, season_number: int, episode_number: int) -> str:
+    return f"{series_slug}:{int(season_number)}:{int(episode_number)}"
+
+
+def _jobs_for_key(store, *, series_slug: str, season_number: int, episode_number: int) -> list[dict[str, str]]:
+    slug = str(series_slug or "").strip()
+    season = int(season_number)
+    episode = int(episode_number)
+    con = store._conn()
+    try:
+        rows = con.execute(
+            """
+            SELECT job_id, owner_user_id, visibility
+            FROM job_library
+            WHERE series_slug = ?
+              AND season_number = ?
+              AND episode_number = ?;
+            """,
+            (slug, int(season), int(episode)),
+        ).fetchall()
+        return [
+            {
+                "job_id": str(r["job_id"] or ""),
+                "owner_id": str(r["owner_user_id"] or ""),
+                "visibility": str(r["visibility"] or "private"),
+            }
+            for r in rows
+        ]
+    finally:
+        con.close()
 
 
 @router.get("/series")
@@ -283,6 +342,237 @@ async def delete_library_episode(
             },
         )
     return {"ok": True, "deleted_job_ids": deleted}
+
+
+@router.post("/{key}/admin_remove")
+async def library_admin_remove(
+    request: Request,
+    key: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    if ident.user.role != Role.admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    store = _store(request)
+    series_slug, season_number, episode_number = _parse_library_key(key)
+    rows = _jobs_for_key(
+        store, series_slug=series_slug, season_number=season_number, episode_number=episode_number
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Library item not found")
+    removed_ids: list[str] = []
+    for row in rows:
+        job_id = str(row.get("job_id") or "")
+        if not job_id:
+            continue
+        job = store.get(job_id)
+        if job is not None:
+            store.update(job_id, visibility="private")
+            with suppress(Exception):
+                update_manifest_visibility(get_library_root_for_job(job) / "manifest.json", "private")
+            with suppress(Exception):
+                update_manifest_visibility(get_job_output_root(job) / "manifest.json", "private")
+        with suppress(Exception):
+            con = store._conn()
+            try:
+                con.execute("DELETE FROM job_library WHERE job_id = ?;", (str(job_id),))
+                con.commit()
+            finally:
+                con.close()
+        removed_ids.append(job_id)
+    audit_event(
+        "library.admin_remove",
+        request=request,
+        user_id=ident.user.id,
+        meta={
+            "series_slug": series_slug,
+            "season_number": int(season_number),
+            "episode_number": int(episode_number),
+            "job_ids": removed_ids,
+        },
+    )
+    return {"ok": True, "job_ids": removed_ids, "library_key": _library_key(series_slug, season_number, episode_number)}
+
+
+@router.post("/{key}/unshare")
+async def library_unshare(
+    request: Request,
+    key: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _store(request)
+    series_slug, season_number, episode_number = _parse_library_key(key)
+    require_library_access(
+        store=store,
+        ident=ident,
+        series_slug=series_slug,
+        season_number=int(season_number),
+        episode_number=int(episode_number),
+        allow_shared_read=True,
+    )
+    rows = _jobs_for_key(
+        store, series_slug=series_slug, season_number=season_number, episode_number=episode_number
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Library item not found")
+    updated: list[str] = []
+    for row in rows:
+        job_id = str(row.get("job_id") or "")
+        owner_id = str(row.get("owner_id") or "")
+        if not job_id:
+            continue
+        if ident.user.role != Role.admin and owner_id != str(ident.user.id):
+            continue
+        job = store.get(job_id)
+        if job is None:
+            continue
+        store.update(job_id, visibility="private")
+        with suppress(Exception):
+            update_manifest_visibility(get_library_root_for_job(job) / "manifest.json", "private")
+        with suppress(Exception):
+            update_manifest_visibility(get_job_output_root(job) / "manifest.json", "private")
+        updated.append(job_id)
+    if not updated:
+        raise HTTPException(status_code=403, detail="Not permitted to unshare this item")
+    audit_event(
+        "library.unshare",
+        request=request,
+        user_id=ident.user.id,
+        meta={
+            "series_slug": series_slug,
+            "season_number": int(season_number),
+            "episode_number": int(episode_number),
+            "job_ids": updated,
+        },
+    )
+    return {"ok": True, "job_ids": updated, "library_key": _library_key(series_slug, season_number, episode_number)}
+
+
+@router.post("/{key}/report")
+async def library_report(
+    request: Request,
+    key: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _store(request)
+    series_slug, season_number, episode_number = _parse_library_key(key)
+    require_library_access(
+        store=store,
+        ident=ident,
+        series_slug=series_slug,
+        season_number=int(season_number),
+        episode_number=int(episode_number),
+        allow_shared_read=True,
+    )
+    rl: RateLimiter | None = getattr(request.app.state, "rate_limiter", None)
+    if rl is None:
+        rl = RateLimiter()
+        request.app.state.rate_limiter = rl
+    if not rl.allow(f"reports:user:{ident.user.id}", limit=5, per_seconds=3600):
+        raise HTTPException(status_code=429, detail="Report rate limit exceeded")
+    ip = str(getattr(request.client, "host", "") or "unknown")
+    if not rl.allow(f"reports:ip:{ip}", limit=20, per_seconds=3600):
+        raise HTTPException(status_code=429, detail="Report rate limit exceeded")
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    reason = str(body.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="reason is required")
+    if len(reason) > _REPORT_REASON_MAX:
+        raise HTTPException(status_code=400, detail="reason too long")
+
+    job_id = queries.latest_episode_job_id(
+        store=store,
+        ident=ident,
+        series_slug=series_slug,
+        season_number=int(season_number),
+        episode_number=int(episode_number),
+    )
+    if not job_id:
+        raise HTTPException(status_code=404, detail="Library item not found")
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    owner_id = str(getattr(job, "owner_id", "") or "")
+    if owner_id == str(ident.user.id):
+        raise HTTPException(status_code=400, detail="Use unshare for your own item")
+    if str(getattr(job, "visibility", "") or "").strip().lower() not in {"shared", "public"}:
+        raise HTTPException(status_code=403, detail="Item is not shared")
+
+    report_id = random_id("rpt_", 12)
+    notified = False
+    notify_error = ""
+    s = get_settings()
+    admin_topic = str(getattr(s, "ntfy_admin_topic", "") or "").strip()
+    if bool(getattr(s, "ntfy_enabled", False)) and admin_topic:
+        key_s = _library_key(series_slug, season_number, episode_number)
+        msg = (
+            f"reporter_id={ident.user.id}\n"
+            f"job_id={job_id}\n"
+            f"library_key={key_s}\n"
+            f"reason={reason}"
+        )
+        if bool(getattr(s, "report_include_filenames", False)) and str(getattr(job, "video_path", "") or ""):
+            with suppress(Exception):
+                from pathlib import Path as _Path
+
+                msg += f"\nfile={_Path(str(job.video_path)).name}"
+        url = None
+        base = str(getattr(s, "public_base_url", "") or "").strip().rstrip("/")
+        if base:
+            url = (
+                f"{base}/ui/library/{series_slug}/season/{int(season_number)}/episode/{int(episode_number)}"
+            )
+        try:
+            notified = bool(
+                ntfy.notify(
+                    event="library.report",
+                    title="Library report",
+                    message=msg,
+                    url=url,
+                    tags=["report"],
+                    priority=3,
+                    user_id=str(ident.user.id),
+                    job_id=str(job_id),
+                    topic=admin_topic,
+                )
+            )
+            if not notified:
+                notify_error = "ntfy_delivery_failed"
+        except Exception as ex:
+            notified = False
+            notify_error = str(ex)[:120]
+
+    store.create_library_report(
+        report_id=report_id,
+        reporter_id=str(ident.user.id),
+        job_id=str(job_id),
+        series_slug=series_slug,
+        season_number=int(season_number),
+        episode_number=int(episode_number),
+        reason=reason,
+        owner_id=owner_id,
+        notified=bool(notified),
+        notify_error=notify_error,
+    )
+    audit_event(
+        "library.report",
+        request=request,
+        user_id=ident.user.id,
+        meta={
+            "series_slug": series_slug,
+            "season_number": int(season_number),
+            "episode_number": int(episode_number),
+            "job_id": job_id,
+        },
+    )
+    return {
+        "ok": True,
+        "report_id": report_id,
+        "notified": bool(notified),
+        "library_key": _library_key(series_slug, season_number, episode_number),
+    }
 
 
 @router.get("/{series_slug}/{season_number}/episodes")

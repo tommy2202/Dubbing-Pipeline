@@ -184,6 +184,7 @@ class PublicConfig(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_max_bytes: int = Field(default=5 * 1024 * 1024, alias="LOG_MAX_BYTES")
     log_backup_count: int = Field(default=3, alias="LOG_BACKUP_COUNT")
+    log_transcripts: bool = Field(default=False, alias="LOG_TRANSCRIPTS")
 
     # --- auth/session behavior (non-secret toggles) ---
     jwt_alg: str = Field(default="HS256", alias="JWT_ALG")
@@ -219,6 +220,8 @@ class PublicConfig(BaseSettings):
     ntfy_retries: int = Field(default=3, alias="NTFY_RETRIES")
     ntfy_notify_admin: bool = Field(default=False, alias="NTFY_NOTIFY_ADMIN")
     ntfy_admin_topic: str = Field(default="", alias="NTFY_ADMIN_TOPIC")
+    # Reporting (privacy)
+    report_include_filenames: bool = Field(default=False, alias="REPORT_INCLUDE_FILENAMES")
 
     # Optional public base URL used to generate absolute links in notifications/QRs.
     # If unset, notifications will omit the click URL.
