@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import argparse
 import struct
+import sys
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from dubbing_pipeline.config import get_settings
-from dubbing_pipeline.security.crypto import MAGIC_NEW, MAGIC_OLD, FORMAT_VERSION_CHUNKED
+from dubbing_pipeline.security.crypto import FORMAT_VERSION_CHUNKED, MAGIC_NEW, MAGIC_OLD
 from dubbing_pipeline.stages.character_store import (
     CharacterStore,
     _MAGIC_NEW as CHAR_MAGIC_NEW,
