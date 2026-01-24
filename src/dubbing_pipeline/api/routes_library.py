@@ -10,7 +10,7 @@ from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
-from dubbing_pipeline.jobs.models import JobState
+from dubbing_pipeline.jobs.models import JobState, normalize_visibility
 from dubbing_pipeline.library import queries
 from dubbing_pipeline.library.manifest import update_manifest_visibility
 from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
@@ -497,7 +497,8 @@ async def library_report(
     owner_id = str(getattr(job, "owner_id", "") or "")
     if owner_id == str(ident.user.id):
         raise HTTPException(status_code=400, detail="Use unshare for your own item")
-    if str(getattr(job, "visibility", "") or "").strip().lower() not in {"shared", "public"}:
+    vis = normalize_visibility(str(getattr(job, "visibility", "") or None)).value
+    if vis not in {"shared", "public"}:
         raise HTTPException(status_code=403, detail="Item is not shared")
 
     report_id = random_id("rpt_", 12)
