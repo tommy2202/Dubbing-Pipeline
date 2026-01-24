@@ -37,8 +37,9 @@ def test_redact_tokens_and_headers() -> None:
         "eyJzdWIiOiIxMjM0NTYifQ.sig COOKIE=session=abc123 x-api-key=dp_abc_1234567890"
     )
     red = _redact_str(raw)
-    assert "Bearer ***REDACTED***" in red
-    assert "session=***REDACTED***" in red
+    assert "***REDACTED***" in red
+    assert "eyJ" not in red
+    assert "session=abc123" not in red
     assert "dp_" not in red
 
 

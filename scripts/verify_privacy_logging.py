@@ -27,8 +27,9 @@ def main() -> int:
 
         raw = "Authorization: Bearer eyJabc.def.ghi cookie=session=abc"
         red = _redact_str(raw)
-        assert "Bearer ***REDACTED***" in red
-        assert "session=***REDACTED***" in red
+        assert "***REDACTED***" in red
+        assert "eyJ" not in red
+        assert "session=abc" not in red
 
         audit.event(
             "privacy.verify",
