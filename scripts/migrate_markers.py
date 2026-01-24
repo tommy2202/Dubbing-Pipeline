@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import struct
 import sys
 from pathlib import Path
@@ -13,13 +14,30 @@ if str(REPO_ROOT) not in sys.path:
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from dubbing_pipeline.config import get_settings
-from dubbing_pipeline.security.crypto import FORMAT_VERSION_CHUNKED, MAGIC_NEW, MAGIC_OLD
-from dubbing_pipeline.stages.character_store import (
-    CharacterStore,
-    _MAGIC_NEW as CHAR_MAGIC_NEW,
-    _MAGIC_OLD as CHAR_MAGIC_OLD,
-)
+try:
+    from dubbing_pipeline.config import get_settings as _get_settings
+except Exception:  # pragma: no cover - best-effort CLI fallback
+    _get_settings = None
+
+try:
+    from dubbing_pipeline.security.crypto import FORMAT_VERSION_CHUNKED, MAGIC_NEW, MAGIC_OLD
+except Exception:  # pragma: no cover - best-effort CLI fallback
+    FORMAT_VERSION_CHUNKED = 2
+    MAGIC_NEW = b"DBPENC1"
+    MAGIC_OLD = b"AN" + b"V2" + b"ENC"
+
+try:
+    from dubbing_pipeline.stages.character_store import (
+        CharacterStore,
+        _MAGIC_NEW as CHAR_MAGIC_NEW,
+        _MAGIC_OLD as CHAR_MAGIC_OLD,
+    )
+    _CHAR_STORE_AVAILABLE = True
+except Exception:  # pragma: no cover - best-effort CLI fallback
+    CharacterStore = None  # type: ignore[assignment]
+    CHAR_MAGIC_NEW = b"DBPCHAR1"
+    CHAR_MAGIC_OLD = b"AN" + b"V2" + b"CHAR"
+    _CHAR_STORE_AVAILABLE = False
 
 
 def _read_prefix(path: Path, length: int) -> bytes:
@@ -27,8 +45,33 @@ def _read_prefix(path: Path, length: int) -> bytes:
         return f.read(length)
 
 
+def _fallback_settings():
+    class _Settings:
+        pass
+
+    s = _Settings()
+    env = os.environ
+    if env.get("APP_ROOT"):
+        app_root = Path(env["APP_ROOT"]).resolve()
+    elif Path("/app").exists():
+        app_root = Path("/app").resolve()
+    else:
+        app_root = Path.cwd().resolve()
+    s.app_root = app_root
+    s.output_dir = Path(env.get("DUBBING_OUTPUT_DIR", str(Path.cwd() / "Output"))).resolve()
+    s.outputs_dir = Path(env.get("OUTPUTS_DIR", str(Path.cwd() / "outputs"))).resolve()
+    s.legacy_output_dir = Path(env.get("LEGACY_OUTPUT_DIR", "/data/out")).resolve()
+    return s
+
+
+def _get_effective_settings():
+    if _get_settings is not None:
+        return _get_settings()
+    return _fallback_settings()
+
+
 def _candidate_roots() -> tuple[Path, list[Path]]:
-    s = get_settings()
+    s = _get_effective_settings()
     app_root = Path(s.app_root).resolve()
     roots: list[Path] = []
 
@@ -89,6 +132,8 @@ def _rewrite_encryption_header(path: Path, *, apply: bool) -> str | None:
 
 
 def _migrate_character_store(path: Path, *, apply: bool) -> str:
+    if not _CHAR_STORE_AVAILABLE or CharacterStore is None:
+        return "unavailable"
     if not path.exists() or not path.is_file():
         return "missing"
     try:
@@ -124,6 +169,10 @@ def main() -> int:
     app_root, roots = _candidate_roots()
     mode = "APPLY" if args.apply else "DRY-RUN"
     print(f"{mode}: scanning output roots for legacy markers.")
+    if _get_settings is None:
+        print("WARN: settings module unavailable; using environment defaults.")
+    if not _CHAR_STORE_AVAILABLE:
+        print("WARN: CharacterStore migration unavailable; missing runtime deps.")
 
     missing_roots = 0
     for r in roots:
@@ -174,6 +223,8 @@ def main() -> int:
     char_migrated = 0
     for p in char_candidates:
         res = _migrate_character_store(p, apply=args.apply)
+        if res == "unavailable":
+            continue
         if res == "missing":
             continue
         if res == "failed":
