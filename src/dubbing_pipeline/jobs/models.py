@@ -18,7 +18,18 @@ class JobState(str, Enum):
 
 class Visibility(str, Enum):
     private = "private"
-    public = "public"
+    shared = "shared"
+    # Legacy alias: treat "public" as shared.
+    public = "shared"
+
+
+def normalize_visibility(raw: str | None) -> Visibility:
+    v = str(raw or "").strip().lower()
+    if v.startswith("visibility."):
+        v = v.split(".", 1)[1]
+    if v in {"shared", "public"}:
+        return Visibility.shared
+    return Visibility.private
 
 
 def now_utc() -> str:
@@ -84,10 +95,5 @@ class Job:
             st = st.split(".", 1)[1]
         dd["state"] = JobState(st)
         vis = dd.get("visibility")
-        if isinstance(vis, str) and vis.startswith("Visibility."):
-            vis = vis.split(".", 1)[1]
-        try:
-            dd["visibility"] = Visibility(str(vis))
-        except Exception:
-            dd["visibility"] = Visibility.private
+        dd["visibility"] = normalize_visibility(str(vis) if vis is not None else None)
         return cls(**dd)

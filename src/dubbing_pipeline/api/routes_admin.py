@@ -1,20 +1,36 @@
 from __future__ import annotations
 
+import secrets
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from dubbing_pipeline.api.deps import Identity, require_role
+from dubbing_pipeline.api.deps import Identity, get_limiter, require_role
+from dubbing_pipeline.api.invites import invite_token_hash
 from dubbing_pipeline.api.models import Role
+from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.ops import audit
 from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.utils.log import logger
+from dubbing_pipeline.utils.net import get_client_ip
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+_INVITE_TTL_DEFAULT_HOURS = 24
+_INVITE_TTL_MAX_HOURS = 168
 
 
 def _store(request: Request):
     st = getattr(request.app.state, "job_store", None)
     if st is None:
         raise HTTPException(status_code=500, detail="Job store not initialized")
+    return st
+
+
+def _auth_store(request: Request):
+    st = getattr(request.app.state, "auth_store", None)
+    if st is None:
+        raise HTTPException(status_code=500, detail="Auth store not initialized")
     return st
 
 
@@ -175,6 +191,119 @@ async def admin_user_quotas(
     return {"ok": True, "user_id": str(id), "quotas": out}
 
 
+@router.get("/reports")
+async def admin_list_reports(
+    request: Request,
+    status: str | None = "open",
+    limit: int = 200,
+    offset: int = 0,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    store = _store(request)
+    items = store.list_library_reports(limit=int(limit), offset=int(offset), status=status)
+    return {"ok": True, "items": items}
+
+
+@router.get("/reports/summary")
+async def admin_reports_summary(
+    request: Request,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    store = _store(request)
+    s = get_settings()
+    count_open = store.count_library_reports(status="open")
+    admin_topic = str(getattr(s, "ntfy_admin_topic", "") or "").strip()
+    ntfy_configured = bool(getattr(s, "ntfy_enabled", False)) and bool(admin_topic)
+    return {"ok": True, "open_reports": int(count_open), "ntfy_admin_configured": ntfy_configured}
+
+
+@router.post("/reports/{id}/resolve")
+async def admin_resolve_report(
+    request: Request,
+    id: str,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    store = _store(request)
+    store.update_report_status(str(id), status="resolved")
+    audit.emit(
+        "admin.report_resolved",
+        user_id=str(ident.user.id),
+        meta={"report_id": str(id)},
+    )
+    return {"ok": True, "report_id": str(id)}
+
+
+@router.get("/quotas/{user_id}")
+async def admin_get_user_quota(
+    request: Request,
+    user_id: str,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    store = _store(request)
+    quotas = store.get_user_quota(str(user_id))
+    used = int(store.get_user_storage_bytes(str(user_id)) or 0)
+    return {"ok": True, "user_id": str(user_id), "quotas": quotas, "storage_bytes": used}
+
+
+@router.post("/quotas/{user_id}")
+async def admin_set_user_quota(
+    request: Request,
+    user_id: str,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    clear = bool(body.get("clear") or False)
+    store = _store(request)
+    existing = store.get_user_quota(str(user_id))
+    missing = object()
+
+    def _parse_int(val: object, *, field: str) -> int | None:
+        if val is missing:
+            return existing.get(field) if not clear else None
+        if val is None:
+            return None
+        try:
+            return max(0, int(val))  # type: ignore[arg-type]
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"{field} must be int") from None
+
+    max_upload_bytes = _parse_int(body.get("max_upload_bytes", missing), field="max_upload_bytes")
+    jobs_per_day = _parse_int(body.get("jobs_per_day", missing), field="jobs_per_day")
+    max_concurrent_jobs = _parse_int(
+        body.get("max_concurrent_jobs", missing), field="max_concurrent_jobs"
+    )
+    max_storage_bytes = _parse_int(
+        body.get("max_storage_bytes", missing), field="max_storage_bytes"
+    )
+
+    quotas = store.upsert_user_quota(
+        str(user_id),
+        max_upload_bytes=max_upload_bytes,
+        jobs_per_day=jobs_per_day,
+        max_concurrent_jobs=max_concurrent_jobs,
+        max_storage_bytes=max_storage_bytes,
+        updated_by=str(ident.user.id),
+    )
+    # Optional: also sync max_concurrent into queue backend (max_running).
+    qb = _queue_backend(request)
+    if qb is not None and max_concurrent_jobs is not None:
+        with __import__("contextlib").suppress(Exception):
+            await qb.admin_set_user_quotas(
+                user_id=str(user_id),
+                max_running=int(max_concurrent_jobs),
+                max_queued=None,
+            )
+    audit.emit(
+        "admin.user_quota_overrides",
+        user_id=str(ident.user.id),
+        meta={"target_user_id": str(user_id), **{k: v for k, v in quotas.items() if v is not None}},
+    )
+    used = int(store.get_user_storage_bytes(str(user_id)) or 0)
+    return {"ok": True, "user_id": str(user_id), "quotas": quotas, "storage_bytes": used}
+
+
 @router.post("/jobs/{id}/visibility")
 async def admin_job_visibility(
     request: Request,
@@ -185,8 +314,10 @@ async def admin_job_visibility(
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON")
     vis = str(body.get("visibility") or "").strip().lower()
-    if vis not in {"public", "private"}:
-        raise HTTPException(status_code=400, detail="visibility must be public|private")
+    if vis == "public":
+        vis = "shared"
+    if vis not in {"shared", "private"}:
+        raise HTTPException(status_code=400, detail="visibility must be shared|private")
     store = _store(request)
     job = store.get(str(id))
     if job is None:
@@ -200,4 +331,96 @@ async def admin_job_visibility(
     )
     logger.info("admin_job_visibility", user_id=str(ident.user.id), job_id=str(id), visibility=vis)
     return {"ok": True, "job_id": str(id), "visibility": vis}
+
+
+@router.get("/invites")
+async def admin_list_invites(
+    request: Request,
+    limit: int = 200,
+    offset: int = 0,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict[str, object]:
+    store = _auth_store(request)
+    items = store.list_invites(limit=int(limit), offset=int(offset))
+    now = int(time.time())
+    out: list[dict[str, object]] = []
+    for it in items:
+        token_hash = str(it.get("token_hash") or "")
+        created_at = int(it.get("created_at") or 0)
+        expires_at = int(it.get("expires_at") or 0)
+        used_at = int(it.get("used_at") or 0) if it.get("used_at") else None
+        status = "active"
+        if used_at:
+            status = "used"
+        elif expires_at and expires_at < now:
+            status = "expired"
+        out.append(
+            {
+                "token_hash_prefix": token_hash[:8] if token_hash else "",
+                "created_by": str(it.get("created_by") or ""),
+                "created_at": created_at,
+                "expires_at": expires_at,
+                "used_at": used_at,
+                "used_by": str(it.get("used_by") or ""),
+                "status": status,
+            }
+        )
+    return {"items": out, "limit": int(limit), "offset": int(offset)}
+
+
+@router.post("/invites")
+async def admin_create_invite(
+    request: Request, ident: Identity = Depends(require_role(Role.admin))
+) -> dict[str, object]:
+    body = await request.json()
+    if not isinstance(body, dict):
+        body = {}
+    ttl_in = body.get("expires_in_hours")
+    try:
+        ttl_hours = int(ttl_in) if ttl_in is not None else _INVITE_TTL_DEFAULT_HOURS
+    except Exception:
+        raise HTTPException(status_code=400, detail="expires_in_hours must be int") from None
+    ttl_hours = max(1, min(int(ttl_hours), int(_INVITE_TTL_MAX_HOURS)))
+
+    rl = get_limiter(request)
+    ip = get_client_ip(request)
+    if not rl.allow(f"invites:create:admin:{ident.user.id}", limit=20, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if not rl.allow(f"invites:create:ip:{ip}", limit=60, per_seconds=60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    token = secrets.token_urlsafe(32)
+    token_hash = invite_token_hash(token)
+    created_at = int(time.time())
+    expires_at = int(created_at + ttl_hours * 3600)
+    store = _auth_store(request)
+    store.create_invite(
+        token_hash=token_hash,
+        created_by=str(ident.user.id),
+        created_at=int(created_at),
+        expires_at=int(expires_at),
+    )
+
+    s = get_settings()
+    base = str(getattr(s, "public_base_url", "") or "").strip().rstrip("/")
+    if not base:
+        base = str(request.base_url).rstrip("/")
+    invite_url = f"{base}/invite/{token}"
+
+    audit.emit(
+        "invite.create",
+        user_id=str(ident.user.id),
+        meta={
+            "expires_at": int(expires_at),
+            "ttl_hours": int(ttl_hours),
+            "token_hash_prefix": token_hash[:8],
+        },
+    )
+    return {
+        "ok": True,
+        "invite_url": invite_url,
+        "created_at": int(created_at),
+        "expires_at": int(expires_at),
+        "token_hash_prefix": token_hash[:8],
+    }
 

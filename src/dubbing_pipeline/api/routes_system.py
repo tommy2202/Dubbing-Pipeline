@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 
 from dubbing_pipeline.api.deps import Identity, require_role
 from dubbing_pipeline.api.models import Role
+from dubbing_pipeline.api.remote_access import resolve_access_posture
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.modes import HardwareCaps, resolve_effective_settings
 from dubbing_pipeline.security.runtime_db import UnsafeRuntimeDbPath, assert_safe_runtime_db_path
@@ -516,3 +517,25 @@ async def system_readiness(_: Identity = Depends(require_role(Role.admin))) -> d
         )
 
     return {"ok": True, "items": items}
+
+
+@router.get("/security-posture")
+async def system_security_posture(_: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
+    s = get_settings()
+    posture = resolve_access_posture(settings=s)
+    base_url = str(getattr(s, "public_base_url", "") or "").strip().rstrip("/")
+    return {
+        "ok": True,
+        "access_mode": str(posture.get("mode") or "off"),
+        "access_mode_raw": str(posture.get("access_mode_raw") or ""),
+        "remote_access_mode_raw": str(posture.get("remote_access_mode_raw") or ""),
+        "host": str(getattr(s, "host", "") or ""),
+        "port": int(getattr(s, "port", 0) or 0),
+        "public_base_url": base_url,
+        "trust_proxy_headers": bool(posture.get("trust_proxy_headers")),
+        "effective_trust_proxy_headers": bool(posture.get("effective_trust_proxy_headers")),
+        "trusted_proxy_subnets": list(posture.get("trusted_proxy_subnets") or []),
+        "allowed_subnets": list(posture.get("allowed_subnets") or []),
+        "cloudflare_access_configured": bool(posture.get("cloudflare_access_configured")),
+        "warnings": list(posture.get("warnings") or []),
+    }

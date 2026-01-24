@@ -23,7 +23,7 @@ from dubbing_pipeline.utils.embeds import ecapa_embedding
 from dubbing_pipeline.utils.io import read_json
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.net import install_egress_policy
-from dubbing_pipeline.jobs.models import Job, JobState, Visibility, now_utc
+from dubbing_pipeline.jobs.models import Job, JobState, Visibility, normalize_visibility, now_utc
 from dubbing_pipeline.library.normalize import parse_int_strict, series_to_slug
 from dubbing_pipeline.library.paths import get_job_output_root, ensure_library_dir, mirror_outputs_best_effort
 from dubbing_pipeline.library.manifest import write_manifest
@@ -216,6 +216,12 @@ def _write_vtt_from_lines(lines: list[dict], vtt_path: Path) -> None:
 @click.option("--style", default=None, help="Style YAML path or directory")
 @click.option(
     "--project", "project_name", default=None, help="Project profile name under projects/<name>/"
+)
+@click.option(
+    "--share/--no-share",
+    default=False,
+    show_default=True,
+    help="Share job to library (visibility shared).",
 )
 @click.option(
     "--style-guide",
@@ -794,6 +800,7 @@ def run(
     glossary: str | None,
     style: str | None,
     project_name: str | None,
+    share: bool,
     style_guide_path: Path | None,
     aligner: str,
     align_mode: str,
@@ -1382,7 +1389,7 @@ def run(
     )
     owner_user_id = str(os.environ.get("DUBBING_OWNER_USER_ID") or "").strip()
     vis_s = str(os.environ.get("DUBBING_VISIBILITY") or "private").strip().lower()
-    vis = Visibility.public if vis_s == "public" else Visibility.private
+    vis = Visibility.shared if bool(share) else normalize_visibility(vis_s)
 
     cli_job = Job(
         id=str(video.stem),

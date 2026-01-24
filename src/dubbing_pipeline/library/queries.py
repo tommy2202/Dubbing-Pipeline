@@ -51,12 +51,12 @@ def _visibility_where_with_view(*, ident: Identity, view: str | None) -> tuple[s
     v = str(view or "all").strip().lower()
     if ident.user.role == Role.admin:
         return "1=1", [], "admin_all"
-    # Owner-only for non-admin regardless of view selector.
-    if v in {"pub", "public"}:
-        return "owner_user_id = ?", [str(ident.user.id)], "owner_only"
+    shared_clause = "visibility IN ('shared','public')"
+    if v in {"shared", "public", "pub"}:
+        return shared_clause, [], "shared_only"
     if v in {"my", "mine", "owner"}:
         return "owner_user_id = ?", [str(ident.user.id)], "owner_only"
-    return "owner_user_id = ?", [str(ident.user.id)], "owner_only"
+    return f"({shared_clause} OR owner_user_id = ?)", [str(ident.user.id)], "shared_or_owner"
 
 
 def list_series(
@@ -298,7 +298,9 @@ def list_episodes(
             if vis.lower().startswith("visibility."):
                 vis = vis.split(".", 1)[1]
             vis = vis.lower()
-            if vis not in {"private", "public"}:
+            if vis == "public":
+                vis = "shared"
+            if vis not in {"private", "shared"}:
                 vis = "private"
 
             # playback_urls: prefer manifest urls if present; otherwise provide the existing job files endpoint.
@@ -472,7 +474,11 @@ def search_library(
                 "season_number": int(r["season_number"] or 0),
                 "episode_number": int(r["episode_number"] or 0),
                 "job_id": str(r["job_id"] or ""),
-                "visibility": str(r["visibility"] or "private"),
+                "visibility": (
+                    "shared"
+                    if str(r["visibility"] or "").strip().lower() in {"shared", "public"}
+                    else "private"
+                ),
                 "created_at": str(r["created_at"] or ""),
                 "updated_at": str(r["updated_at"] or ""),
             }
@@ -546,7 +552,11 @@ def list_recent_episodes(
                 "season_number": int(r["season_number"] or 0),
                 "episode_number": int(r["episode_number"] or 0),
                 "job_id": str(r["job_id"] or ""),
-                "visibility": str(r["visibility"] or "private"),
+                "visibility": (
+                    "shared"
+                    if str(r["visibility"] or "").strip().lower() in {"shared", "public"}
+                    else "private"
+                ),
                 "created_at": str(r["created_at"] or ""),
                 "updated_at": str(r["updated_at"] or ""),
             }
@@ -630,7 +640,11 @@ def list_continue(
                 "job_id": str(r["job_id"] or ""),
                 "viewed_job_id": str(r["viewed_job_id"] or "") or None,
                 "last_opened_at": float(r["last_opened_at"] or 0.0),
-                "visibility": str(r["visibility"] or "private"),
+                "visibility": (
+                    "shared"
+                    if str(r["visibility"] or "").strip().lower() in {"shared", "public"}
+                    else "private"
+                ),
                 "created_at": str(r["created_at"] or ""),
                 "updated_at": str(r["updated_at"] or ""),
             }

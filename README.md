@@ -10,6 +10,53 @@ Outputs are written under:
 - `Output/<stem>/...` (canonical)
 - plus a stable per-job pointer for web jobs at `Output/jobs/<job_id>/target.txt`
 
+---
+
+## What this is
+This is a **private, offline-first dubbing pipeline** designed for local or tailnet use.
+It prioritizes **privacy-by-default** and lets you intentionally share outputs when needed.
+
+## Security & privacy posture (defaults)
+- **Invite-only access**: no public self-signups.
+- **Private-by-default**: jobs are private unless explicitly shared.
+- **Quotas enabled**: per-user limits on uploads, jobs/day, concurrent jobs, and storage.
+- **Tailscale-first remote access**: safe tailnet access is the default posture.
+- **Redacted logs**: tokens/cookies/JWTs are redacted; transcripts are **not logged** unless `LOG_TRANSCRIPTS=1`.
+
+## Fresh machine setup (concise)
+1) Follow the clean setup guide: `docs/CLEAN_SETUP_GUIDE.txt`
+2) Install dependencies and run:
+
+```bash
+python3 -m pip install -e .
+export ADMIN_USERNAME=admin
+export ADMIN_PASSWORD=change-me
+export ACCESS_MODE=tailscale
+export HOST=100.x.y.z   # your Tailscale IP (or 127.0.0.1 for local only)
+export PORT=8000
+dubbing-web
+```
+
+For the recommended Tailscale path, start at `docs/GOLDEN_PATH_TAILSCALE.md`.
+
+## Sharing model (Private vs Shared)
+- **Private**: only the owner (and admins) can access.
+- **Shared**: visible to other authenticated users in the library.
+- You can toggle visibility per job (UI or `/api/jobs/{id}/visibility`).
+
+## Moderation & reporting
+- **Owner unshare**: remove your own shared item (sets private).
+- **Admin remove**: immediately unshare and remove the item from the shared index.
+- **Report**: users can report shared items with a short reason.
+  - Alerts go to admin via ntfy if configured.
+  - If ntfy isn’t configured, reports queue for admin review in `/ui/admin/reports`.
+
+## Remote access
+- **Recommended**: Tailscale (`ACCESS_MODE=tailscale`)
+- **Tunnel mode**: requires Cloudflare Access allowlist (**Policy A**).
+  - Set `ACCESS_MODE=tunnel`, `TRUST_PROXY_HEADERS=1`, and `TRUSTED_PROXIES=...`.
+  - See: `docs/remote_access.md`
+
 ### What’s New (current feature-complete stack)
 - **Mobile/web job submission**: resumable chunked uploads + server-file picker fallback, queue/progress/cancel, job pages with tabs.
 - **Mobile playback**: auto-selected mobile-friendly MP4 + optional HLS + “Open in VLC” links.
@@ -17,6 +64,10 @@ Outputs are written under:
 - **Remote access (opt-in)**: Tailscale primary, Cloudflare Tunnel + Access optional, proxy-safe behavior.
 - **Security & privacy**: cookie sessions + CSRF, strict CORS, rate limits, RBAC + scoped API keys, audit logging, optional encryption-at-rest, privacy mode + retention.
 - **Ops**: model cache status + optional prewarm, library management (tags/archive/delete), verification gates.
+
+Privacy note:
+- Logs are **redacted by default** (tokens/cookies/JWTs) and **do not log transcript text**.
+- To enable transcript logging for debugging, set `LOG_TRANSCRIPTS=1` (not recommended for shared systems).
 
 Before inviting others, run:
 

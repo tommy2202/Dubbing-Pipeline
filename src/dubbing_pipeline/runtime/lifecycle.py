@@ -225,22 +225,32 @@ def _startup_self_check(app_state: Any) -> None:
         logger.info("startup_check_ok", check="disk_free", min_free_gb=0, note="check disabled")
 
     max_upload_mb = int(getattr(s, "max_upload_mb", 0) or 0)
+    max_upload_bytes = int(getattr(s, "max_upload_bytes", 0) or 0)
     upload_chunk_bytes = int(getattr(s, "upload_chunk_bytes", 0) or 0)
-    if max_upload_mb <= 0:
-        logger.warning("startup_self_check_warn", check="upload_caps", max_upload_mb=max_upload_mb)
+    if max_upload_mb <= 0 and max_upload_bytes <= 0:
+        logger.warning(
+            "startup_self_check_warn",
+            check="upload_caps",
+            max_upload_mb=max_upload_mb,
+            max_upload_bytes=max_upload_bytes,
+        )
     else:
         logger.info(
             "startup_check_ok",
             check="upload_caps",
             max_upload_mb=max_upload_mb,
+            max_upload_bytes=max_upload_bytes,
             upload_chunk_bytes=upload_chunk_bytes,
         )
 
     quotas = {
         "max_active_jobs_per_user": int(getattr(s, "max_active_jobs_per_user", 0) or 0),
+        "max_concurrent_jobs_per_user": int(getattr(s, "max_concurrent_jobs_per_user", 0) or 0),
         "max_queued_jobs_per_user": int(getattr(s, "max_queued_jobs_per_user", 0) or 0),
+        "jobs_per_day_per_user": int(getattr(s, "jobs_per_day_per_user", 0) or 0),
         "daily_job_cap": int(getattr(s, "daily_job_cap", 0) or 0),
         "max_concurrent_per_user": int(getattr(s, "max_concurrent_per_user", 0) or 0),
+        "max_storage_bytes_per_user": int(getattr(s, "max_storage_bytes_per_user", 0) or 0),
     }
     if any(v < 0 for v in quotas.values()):
         logger.warning("startup_self_check_warn", check="quotas", quotas=quotas)

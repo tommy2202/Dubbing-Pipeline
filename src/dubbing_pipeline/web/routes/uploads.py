@@ -12,7 +12,7 @@ from dubbing_pipeline.api.access import require_upload_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
-from dubbing_pipeline.jobs.limits import get_limits
+from dubbing_pipeline.jobs.limits import get_limits, resolve_user_quotas
 from dubbing_pipeline.security.crypto import CryptoConfigError, encrypt_file, encryption_enabled_for
 from dubbing_pipeline.web.routes.jobs_common import (
     _ALLOWED_UPLOAD_EXTS,
@@ -48,6 +48,8 @@ async def uploads_init(
     """
     store = _get_store(request)
     limits = get_limits()
+    user_quota = store.get_user_quota(str(ident.user.id)) if store is not None else {}
+    quotas = resolve_user_quotas(overrides=user_quota)
     # Moderate: init is lightweight but should not be spammed
     _enforce_rate_limit(
         request,
@@ -76,9 +78,23 @@ async def uploads_init(
         total = 0
     if total <= 0:
         raise HTTPException(status_code=400, detail="total_bytes required")
-    max_bytes = int(limits.max_upload_mb) * 1024 * 1024
-    if total > max_bytes:
-        raise HTTPException(status_code=400, detail=f"Upload too large (>{limits.max_upload_mb}MB)")
+    max_bytes = int(quotas.max_upload_bytes or 0)
+    if max_bytes > 0 and total > max_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Upload too large (limit={max_bytes} bytes)",
+        )
+    max_storage = int(quotas.max_storage_bytes_per_user or 0)
+    if max_storage > 0 and store is not None:
+        used = int(store.get_user_storage_bytes(str(ident.user.id)) or 0)
+        if (used + total) > max_storage:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Storage quota exceeded "
+                    f"(limit={max_storage} bytes, used={used} bytes, requested={total} bytes)"
+                ),
+            )
     mime = str(body.get("mime") or "").lower().strip()
     if mime and mime not in _ALLOWED_UPLOAD_MIME:
         raise HTTPException(status_code=400, detail=f"Unsupported upload content-type: {mime}")
@@ -125,6 +141,7 @@ async def uploads_init(
         "upload_id": upload_id,
         "chunk_bytes": int(chunk_bytes),
         "max_upload_mb": int(limits.max_upload_mb),
+        "max_upload_bytes": int(max_bytes or 0),
     }
 
 

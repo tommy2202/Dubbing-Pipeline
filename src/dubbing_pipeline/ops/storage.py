@@ -7,6 +7,9 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from dubbing_pipeline.library.paths import get_job_output_root
+from dubbing_pipeline.jobs.models import Job
+
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.utils.log import logger
 
@@ -61,3 +64,56 @@ def prune_stale_workdirs(*, output_root: Path, max_age_hours: int = 24) -> int:
 def periodic_prune_tick(*, output_root: Path) -> int:
     s = get_settings()
     return prune_stale_workdirs(output_root=output_root, max_age_hours=int(s.work_stale_max_hours))
+
+
+def _safe_under_root(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root)
+        return True
+    except Exception:
+        return False
+
+
+def _dir_size_bytes(path: Path, *, seen: set[tuple[int, int]] | None = None) -> int:
+    total = 0
+    seen = seen if seen is not None else set()
+    if path.is_file():
+        try:
+            st = path.stat()
+            key = (int(st.st_dev), int(st.st_ino))
+            if key in seen:
+                return 0
+            seen.add(key)
+            return max(0, int(st.st_size))
+        except Exception:
+            return 0
+    for root, _dirs, files in os.walk(str(path)):
+        for name in files:
+            p = Path(root) / name
+            if p.is_symlink():
+                continue
+            try:
+                st = p.stat()
+                key = (int(st.st_dev), int(st.st_ino))
+                if key in seen:
+                    continue
+                seen.add(key)
+                total += max(0, int(st.st_size))
+            except Exception:
+                continue
+    return total
+
+
+def job_storage_bytes(*, job: Job, output_root: Path | None = None) -> int:
+    out_root = Path(output_root or get_settings().output_dir).resolve()
+    base_dir = get_job_output_root(job).resolve()
+    jobs_ptr = (out_root / "jobs" / str(job.id)).resolve()
+    total = 0
+    seen: set[tuple[int, int]] = set()
+    for p in (base_dir, jobs_ptr):
+        if not p.exists():
+            continue
+        if not _safe_under_root(p, out_root):
+            continue
+        total += _dir_size_bytes(p, seen=seen)
+    return int(total)

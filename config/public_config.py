@@ -154,13 +154,17 @@ class PublicConfig(BaseSettings):
     minimal_artifacts: bool = Field(default=False, alias="MINIMAL_ARTIFACTS")
 
     # --- web server ---
-    host: str = Field(default="0.0.0.0", alias="HOST")
+    # Default to localhost to avoid accidental public exposure.
+    host: str = Field(default="127.0.0.1", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
 
     # --- remote access hardening (mobile) ---
+    # Preferred selector (tailscale|tunnel). Defaults to tailscale-first posture.
+    access_mode: str = Field(default="tailscale", alias="ACCESS_MODE")
     # off: no IP allowlist enforcement (default for local dev)
     # tailscale: allow only LAN/private + Tailscale CGNAT ranges by default
     # cloudflare: expect a trusted proxy (cloudflared/caddy) and optionally enforce Cloudflare Access JWT
+    # NOTE: remote_access_mode is legacy; ACCESS_MODE takes precedence when set.
     remote_access_mode: str = Field(default="off", alias="REMOTE_ACCESS_MODE")  # off|tailscale|cloudflare
     allowed_subnets: str = Field(default="", alias="ALLOWED_SUBNETS")  # comma/space separated CIDRs
     trust_proxy_headers: bool = Field(default=False, alias="TRUST_PROXY_HEADERS")
@@ -180,6 +184,7 @@ class PublicConfig(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_max_bytes: int = Field(default=5 * 1024 * 1024, alias="LOG_MAX_BYTES")
     log_backup_count: int = Field(default=3, alias="LOG_BACKUP_COUNT")
+    log_transcripts: bool = Field(default=False, alias="LOG_TRANSCRIPTS")
 
     # --- auth/session behavior (non-secret toggles) ---
     jwt_alg: str = Field(default="HS256", alias="JWT_ALG")
@@ -215,6 +220,8 @@ class PublicConfig(BaseSettings):
     ntfy_retries: int = Field(default=3, alias="NTFY_RETRIES")
     ntfy_notify_admin: bool = Field(default=False, alias="NTFY_NOTIFY_ADMIN")
     ntfy_admin_topic: str = Field(default="", alias="NTFY_ADMIN_TOPIC")
+    # Reporting (privacy)
+    report_include_filenames: bool = Field(default=False, alias="REPORT_INCLUDE_FILENAMES")
 
     # Optional public base URL used to generate absolute links in notifications/QRs.
     # If unset, notifications will omit the click URL.
@@ -450,12 +457,19 @@ class PublicConfig(BaseSettings):
     max_video_width: int = Field(default=0, alias="MAX_VIDEO_WIDTH")
     max_video_height: int = Field(default=0, alias="MAX_VIDEO_HEIGHT")
     max_video_pixels: int = Field(default=0, alias="MAX_VIDEO_PIXELS")
+    # Hard cap for uploads (bytes). Defaults conservative; can be overridden per user.
+    max_upload_bytes: int = Field(default=1024 * 1024 * 1024, alias="MAX_UPLOAD_BYTES")
     max_upload_mb: int = Field(default=2048, alias="MAX_UPLOAD_MB")
     max_concurrent_per_user: int = Field(default=1, alias="MAX_CONCURRENT")
     daily_processing_minutes: int = Field(default=240, alias="DAILY_PROCESSING_MINUTES")
 
     # --- submission policy ---
     # Safe defaults: allow 1 running job per user, small queue, and restrict high mode.
+    jobs_per_day_per_user: int = Field(default=5, alias="JOBS_PER_DAY_PER_USER")
+    max_concurrent_jobs_per_user: int = Field(default=1, alias="MAX_CONCURRENT_JOBS_PER_USER")
+    max_storage_bytes_per_user: int = Field(
+        default=10 * 1024 * 1024 * 1024, alias="MAX_STORAGE_BYTES_PER_USER"
+    )
     max_active_jobs_per_user: int = Field(default=1, alias="DUBBING_MAX_ACTIVE_JOBS_PER_USER")
     max_queued_jobs_per_user: int = Field(default=5, alias="DUBBING_MAX_QUEUED_JOBS_PER_USER")
     daily_job_cap: int = Field(default=0, alias="DUBBING_DAILY_JOB_CAP")  # 0 disables

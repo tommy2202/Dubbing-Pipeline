@@ -1,3 +1,69 @@
+# Privacy & Data Handling
+
+This document describes what the system stores by default, retention behavior, and how to remove data.
+Defaults are **privacy-first** and designed for private deployments.
+
+## Retention defaults
+Retention is enabled and runs periodically to remove old artifacts and logs:
+
+- `RETENTION_ENABLED=1`
+- `RETENTION_UPLOAD_TTL_HOURS=24`
+- `RETENTION_JOB_ARTIFACT_DAYS=14`
+- `RETENTION_LOG_DAYS=14`
+- `RETENTION_INTERVAL_SEC=3600`
+
+Legacy knobs (still supported):
+- `RETENTION_DAYS_INPUT` (default 7)
+- `RETENTION_DAYS_LOGS` (default 14)
+
+Cache policy defaults:
+- `CACHE_POLICY=full` (keep artifacts)
+- `RETENTION_DAYS=0` (time-based pruning disabled for cache policy)
+
+## What is stored
+By default the system stores:
+- **Job metadata** in `jobs.db` (owner, status, timestamps, runtime flags)
+- **Auth data** in `auth.db` (users, keys, refresh tokens)
+- **Outputs** under `Output/<stem>/...` and `Output/jobs/<job_id>/...`
+- **Library index** in the `job_library` table (series, season, episode, visibility)
+- **Logs** under `LOG_DIR` (default: `logs/`)
+- **Audit logs** in `LOG_DIR/audit-YYYYMMDD.log` and `LOG_DIR/audit.jsonl`
+- **Manifests** under `Output/.../manifest.json` for playback links and metadata
+
+Transcripts are stored as SRT/JSON outputs by default. You can disable transcript storage:
+- Per job: `no_store_transcript=true`
+- Global privacy mode: `PRIVACY_MODE=on`
+
+## Logging policy (default)
+- **No transcript text is logged** (`LOG_TRANSCRIPTS=0`)
+- Tokens/cookies/JWTs are **redacted** in logs
+- Audit logs are **coarse** (event type, actor, resource, timestamp, request id, outcome)
+
+To enable transcript logging for debugging (not recommended on shared systems):
+
+```bash
+export LOG_TRANSCRIPTS=1
+```
+
+## How to delete data
+1) **Delete a job** (removes artifacts + metadata):
+   - UI: open job → Delete (admin)
+   - API: `DELETE /api/jobs/{id}` (admin) or library delete for owners
+
+2) **Unshare** (makes private, keeps artifacts):
+   - UI: job visibility or library “Remove from shared”
+   - API: `POST /api/library/{series:season:episode}/unshare`
+
+3) **Retention cleanup**:
+   - Runs automatically based on retention config.
+   - You can reduce retention days or disable retention as needed.
+
+## Optional privacy features
+- **Encryption-at-rest**: `ENCRYPT_AT_REST=1` (for supported artifacts)
+- **Minimal artifacts**: `PRIVACY_MODE=on`, `MINIMAL_ARTIFACTS=1`
+- **No transcript storage**: `NO_STORE_TRANSCRIPT=1`
+
+These options reduce stored intermediates but may affect review workflows.
 ## Privacy + data lifecycle
 
 This doc summarizes what voice-related artifacts are stored and how to remove them.

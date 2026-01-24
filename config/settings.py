@@ -43,6 +43,34 @@ def _is_insecure_default(secret: SecretStr, marker: str) -> bool:
         return False
 
 
+def _resolve_access_mode(s: "Settings") -> str:
+    """
+    Resolve access mode from ACCESS_MODE (preferred) or REMOTE_ACCESS_MODE (legacy).
+    """
+    try:
+        access = str(getattr(s.public, "access_mode", "") or "").strip().lower()
+    except Exception:
+        access = ""
+    if access:
+        if access in {"tunnel", "cloudflare"}:
+            return "cloudflare"
+        if access in {"tailscale"}:
+            return "tailscale"
+        if access in {"off", "none"}:
+            return "off"
+    try:
+        legacy = str(getattr(s.public, "remote_access_mode", "off") or "off").strip().lower()
+    except Exception:
+        legacy = "off"
+    if legacy in {"tunnel", "cloudflare"}:
+        return "cloudflare"
+    if legacy in {"tailscale"}:
+        return "tailscale"
+    if legacy in {"off", "none"}:
+        return "off"
+    return "off"
+
+
 def _validate_secrets(s: Settings) -> None:
     """
     Hard-fail only when explicitly requested.
@@ -85,10 +113,7 @@ def _validate_secrets(s: Settings) -> None:
         )
 
     # Remote-mode hardening warnings (never fail boot automatically; fail is via STRICT_SECRETS).
-    try:
-        mode = str(getattr(s.public, "remote_access_mode", "off") or "off").strip().lower()
-    except Exception:
-        mode = "off"
+    mode = _resolve_access_mode(s)
     if mode != "off":
         warnings: list[str] = []
         if not bool(getattr(s.public, "cookie_secure", False)):
@@ -97,8 +122,12 @@ def _validate_secrets(s: Settings) -> None:
             warnings.append("CORS_ORIGINS empty (browser clients may be less constrained)")
         if bool(getattr(s.public, "allow_legacy_token_login", False)):
             warnings.append("ALLOW_LEGACY_TOKEN_LOGIN=1 (unsafe on public networks)")
-        if mode == "cloudflare" and not bool(getattr(s.public, "trust_proxy_headers", False)):
+        trust_proxy_headers = bool(getattr(s.public, "trust_proxy_headers", False))
+        trusted_subnets = str(getattr(s.public, "trusted_proxy_subnets", "") or "").strip()
+        if mode == "cloudflare" and not trust_proxy_headers:
             warnings.append("TRUST_PROXY_HEADERS=0 (may break HTTPS detection behind Cloudflare)")
+        if mode == "cloudflare" and trust_proxy_headers and not trusted_subnets:
+            warnings.append("TRUSTED_PROXY_SUBNETS empty (forwarded headers ignored)")
         if warnings:
             logging.getLogger("dubbing_pipeline").warning(
                 "remote_mode_hardening_warning",

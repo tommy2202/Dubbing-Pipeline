@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 
 from dubbing_pipeline.api.deps import Identity
 from dubbing_pipeline.api.models import Role
-from dubbing_pipeline.jobs.models import Job
+from dubbing_pipeline.jobs.models import Job, normalize_visibility
 from dubbing_pipeline.jobs.store import JobStore
 from dubbing_pipeline.library.paths import get_job_output_root
 
@@ -27,6 +27,7 @@ def require_job_access(
     ident: Identity,
     job_id: str | None = None,
     job: Job | None = None,
+    allow_shared_read: bool = False,
 ) -> Job:
     if job is None:
         if not job_id:
@@ -37,6 +38,13 @@ def require_job_access(
     owner_id = str(getattr(job, "owner_id", "") or "")
     if _is_admin(ident) or owner_id == str(ident.user.id):
         return job
+    if allow_shared_read:
+        try:
+            vis = normalize_visibility(str(getattr(job, "visibility", None))).value
+            if vis == "shared":
+                return job
+        except Exception:
+            pass
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
 
@@ -68,6 +76,7 @@ def require_library_access(
     episode_number: int | None = None,
     job_id: str | None = None,
     item: dict[str, Any] | None = None,
+    allow_shared_read: bool = False,
 ) -> dict[str, Any]:
     if item is None:
         con = store._conn()
@@ -113,6 +122,13 @@ def require_library_access(
     owner_id = str(item.get("owner_user_id") or "")
     if _is_admin(ident) or owner_id == str(ident.user.id):
         return dict(item)
+    if allow_shared_read:
+        try:
+            vis = normalize_visibility(str(item.get("visibility") or "")).value
+            if vis == "shared":
+                return dict(item)
+        except Exception:
+            pass
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
 
@@ -139,8 +155,9 @@ def require_file_access(
     store: JobStore,
     ident: Identity,
     path: Path,
+    allow_shared_read: bool = False,
 ) -> Job:
     job = _job_for_path(store=store, path=path)
     if job is None:
         raise HTTPException(status_code=404, detail="File not found")
-    return require_job_access(store=store, ident=ident, job=job)
+    return require_job_access(store=store, ident=ident, job=job, allow_shared_read=allow_shared_read)

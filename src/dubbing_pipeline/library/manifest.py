@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from dubbing_pipeline.config import get_settings
-from dubbing_pipeline.jobs.models import Job
+from dubbing_pipeline.jobs.models import Job, normalize_visibility
 from dubbing_pipeline.utils.io import atomic_write_text, read_json
 from dubbing_pipeline.utils.log import logger
 
@@ -74,6 +74,7 @@ def write_manifest(
         st = getattr(job, "state", None)
         status = st.value if hasattr(st, "value") else str(st or "")
 
+    vis = normalize_visibility(str(getattr(job, "visibility", "") or "private")).value
     payload: dict[str, Any] = {
         "version": 1,
         "job_id": str(job.id),
@@ -85,7 +86,7 @@ def write_manifest(
         "season_number": int(getattr(job, "season_number", 0) or 0),
         "episode_number": int(getattr(job, "episode_number", 0) or 0),
         "owner_user_id": owner_user_id,
-        "visibility": str(getattr(job, "visibility", "private") or "private").split(".", 1)[-1],
+        "visibility": vis,
         "paths": {
             "library_dir": _p(library_dir),
             "master": _p(master),
@@ -109,4 +110,21 @@ def write_manifest(
     atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     logger.info("library_manifest_written", job_id=str(job.id), path=str(path))
     return path
+
+
+def update_manifest_visibility(path: Path, visibility: str) -> bool:
+    """
+    Best-effort update of manifest.json visibility in place.
+    Returns True when updated.
+    """
+    data = read_manifest(Path(path))
+    if not isinstance(data, dict):
+        return False
+    vis = normalize_visibility(visibility).value
+    data["visibility"] = vis
+    atomic_write_text(
+        Path(path), json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    logger.info("library_manifest_visibility_updated", path=str(path), visibility=vis)
+    return True
 

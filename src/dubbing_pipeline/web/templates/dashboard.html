@@ -15,6 +15,13 @@
   {% endif %}
 </div>
 
+{% if user and user.role and user.role.value == "admin" %}
+<div id="reportBanner" class="hidden mt-4 rounded-lg border border-amber-800 bg-amber-900/20 px-4 py-3 text-sm text-amber-100">
+  <span id="reportBannerText"></span>
+  <a class="ml-2 underline" href="/ui/admin/reports">View reports</a>
+</div>
+{% endif %}
+
 <div class="mt-6 grid gap-4 lg:grid-cols-3">
   <div id="dashJobs" class="rounded-xl border border-slate-800 bg-slate-900/40 p-4 lg:col-span-2" x-data="{status:'', q:'', project:'', mode:'', tag:'', include_archived:false}">
     <div class="flex flex-wrap items-end justify-between gap-3">
@@ -100,6 +107,24 @@
 </div>
 
 <script>
+  async function loadReportBanner() {
+    try {
+      const r = await fetch("/api/admin/reports/summary", { credentials: "include" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return;
+      const count = Number(d.open_reports || 0);
+      const ntfyOk = !!d.ntfy_admin_configured;
+      if (count > 0 && !ntfyOk) {
+        const el = document.getElementById("reportBanner");
+        const tx = document.getElementById("reportBannerText");
+        if (el && tx) {
+          tx.textContent = "Reports pending (" + count + "). Admin ntfy alerts not configured.";
+          el.classList.remove("hidden");
+        }
+      }
+    } catch (e) {}
+  }
+  loadReportBanner();
   function selectedJobIds() {
     return Array.from(document.querySelectorAll("input[data-job-select]:checked")).map((cb) => cb.value);
   }

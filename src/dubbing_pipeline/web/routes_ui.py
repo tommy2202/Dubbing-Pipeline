@@ -20,6 +20,7 @@ from dubbing_pipeline.utils.io import read_json
 from dubbing_pipeline.ops import audit
 
 router = APIRouter(prefix="/ui", tags=["ui"])
+public_router = APIRouter(tags=["ui"])
 
 
 def _get_templates(request: Request) -> Jinja2Templates:
@@ -181,7 +182,9 @@ async def ui_library_seasons(request: Request, series_slug: str) -> HTMLResponse
         if store is None or auth_store is None:
             raise HTTPException(status_code=500, detail="Store not initialized")
         ident = current_identity(request, auth_store)
-        require_library_access(store=store, ident=ident, series_slug=series_slug)
+        require_library_access(
+            store=store, ident=ident, series_slug=series_slug, allow_shared_read=True
+        )
     except HTTPException:
         raise
     except Exception:
@@ -205,7 +208,11 @@ async def ui_library_episodes(request: Request, series_slug: str, season_number:
             raise HTTPException(status_code=500, detail="Store not initialized")
         ident = current_identity(request, auth_store)
         require_library_access(
-            store=store, ident=ident, series_slug=series_slug, season_number=int(season_number)
+            store=store,
+            ident=ident,
+            series_slug=series_slug,
+            season_number=int(season_number),
+            allow_shared_read=True,
         )
     except HTTPException:
         raise
@@ -244,6 +251,7 @@ async def ui_library_episode_detail(
             series_slug=series_slug,
             season_number=int(season_number),
             episode_number=int(episode_number),
+            allow_shared_read=True,
         )
         with suppress(Exception):
             job_id = queries.latest_episode_job_id(
@@ -543,6 +551,36 @@ async def ui_admin_queue(request: Request) -> HTMLResponse:
     return _render(request, "admin_queue.html", {})
 
 
+@router.get("/admin/reports")
+async def ui_admin_reports(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        if not (user.role and user.role.value == "admin"):
+            return RedirectResponse(url="/ui/dashboard", status_code=302)
+    except Exception:
+        return RedirectResponse(url="/ui/dashboard", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="admin_reports")
+    return _render(request, "admin_reports.html", {})
+
+
+@router.get("/admin/invites")
+async def ui_admin_invites(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        if not (user.role and user.role.value == "admin"):
+            return RedirectResponse(url="/ui/dashboard", status_code=302)
+    except Exception:
+        return RedirectResponse(url="/ui/dashboard", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="admin_invites")
+    return _render(request, "admin_invites.html", {})
+
+
 @router.get("/qr")
 async def ui_qr_redeem(request: Request, code: str = "") -> HTMLResponse:
     # QR redeem does not require prior auth; it will call /api/auth/qr/redeem.
@@ -550,3 +588,10 @@ async def ui_qr_redeem(request: Request, code: str = "") -> HTMLResponse:
     if not c:
         return _render(request, "qr_redeem.html", {"code": ""})
     return _render(request, "qr_redeem.html", {"code": c})
+
+
+@public_router.get("/invite/{token}")
+async def ui_invite_redeem(request: Request, token: str) -> HTMLResponse:
+    # Invite redeem does not require prior auth; it will call /api/invites/redeem.
+    tok = str(token or "").strip()
+    return _render(request, "invite_redeem.html", {"token": tok})

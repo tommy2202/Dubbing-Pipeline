@@ -1,0 +1,99 @@
+{% extends "_base.html" %}
+
+{% block title %}Accept invite • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-md">
+  <div class="rounded-xl border border-slate-800 bg-slate-900/50 p-6">
+    <h1 class="text-xl font-semibold">Accept invite</h1>
+    <p class="mt-1 text-sm text-slate-400">Create your account to sign in.</p>
+
+    <div id="inviteError" class="mt-4 rounded-lg bg-red-900/30 border border-red-900/50 p-3 text-sm text-red-200 hidden"
+         role="alert" aria-live="polite"></div>
+    <div id="inviteOk" class="mt-4 rounded-lg bg-emerald-900/30 border border-emerald-900/50 p-3 text-sm text-emerald-100 hidden">
+      Invite accepted. You can now <a class="underline" href="/ui/login">sign in</a>.
+    </div>
+
+    <input type="hidden" id="inviteToken" value="{{ token }}" />
+
+    <form class="mt-4 space-y-3" id="inviteForm">
+      <div>
+        <label class="block text-sm text-slate-300" for="inviteUsername">Username</label>
+        <input id="inviteUsername" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-slate-100"
+               name="username" autocomplete="username" required />
+        <p class="mt-1 text-xs text-slate-500">Letters, numbers, dot, underscore, dash.</p>
+      </div>
+
+      <div>
+        <label class="block text-sm text-slate-300" for="invitePassword">Password</label>
+        <input id="invitePassword" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-slate-100"
+               type="password" name="password" autocomplete="new-password" required />
+      </div>
+
+      <div>
+        <label class="block text-sm text-slate-300" for="invitePassword2">Confirm password</label>
+        <input id="invitePassword2" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-slate-100"
+               type="password" name="password2" autocomplete="new-password" required />
+      </div>
+
+      <button type="submit" class="w-full rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-3 font-medium">
+        Create account
+      </button>
+    </form>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const form = document.getElementById("inviteForm");
+    const errorEl = document.getElementById("inviteError");
+    const okEl = document.getElementById("inviteOk");
+    const token = document.getElementById("inviteToken")?.value || "";
+
+    function showError(msg) {
+      errorEl.textContent = msg || "Invite redemption failed";
+      errorEl.classList.remove("hidden");
+      okEl.classList.add("hidden");
+    }
+
+    function showOk() {
+      okEl.classList.remove("hidden");
+      errorEl.classList.add("hidden");
+    }
+
+    form?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const username = document.getElementById("inviteUsername")?.value || "";
+      const password = document.getElementById("invitePassword")?.value || "";
+      const password2 = document.getElementById("invitePassword2")?.value || "";
+      if (!token) {
+        showError("Missing invite token");
+        return;
+      }
+      if (!username || !password) {
+        showError("Username and password required");
+        return;
+      }
+      if (password !== password2) {
+        showError("Passwords do not match");
+        return;
+      }
+      try {
+        const r = await fetch("/api/invites/redeem", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token, username, password }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          showError(d.detail || "Invite redemption failed");
+          return;
+        }
+        showOk();
+      } catch (err) {
+        showError("Invite redemption failed");
+      }
+    });
+  })();
+</script>
+{% endblock %}

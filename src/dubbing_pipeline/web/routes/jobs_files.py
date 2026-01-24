@@ -42,7 +42,7 @@ async def job_files(
     request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = require_job_access(store=store, ident=ident, job_id=id)
+    job = require_job_access(store=store, ident=ident, job_id=id, allow_shared_read=True)
     base_dir = _job_base_dir(job)
     stem = Path(job.video_path).stem if job.video_path else base_dir.name
 
@@ -287,7 +287,7 @@ async def job_preview_audio(
     request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
 ) -> Response:
     store = _get_store(request)
-    job = require_job_access(store=store, ident=ident, job_id=id)
+    job = require_job_access(store=store, ident=ident, job_id=id, allow_shared_read=True)
     if not bool(getattr(get_settings(), "enable_audio_preview", False)):
         raise HTTPException(status_code=404, detail="preview disabled")
     base_dir = _job_base_dir(job)
@@ -303,7 +303,7 @@ async def job_preview_lowres(
     request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
 ) -> Response:
     store = _get_store(request)
-    job = require_job_access(store=store, ident=ident, job_id=id)
+    job = require_job_access(store=store, ident=ident, job_id=id, allow_shared_read=True)
     if not bool(getattr(get_settings(), "enable_lowres_preview", False)):
         raise HTTPException(status_code=404, detail="preview disabled")
     base_dir = _job_base_dir(job)
@@ -318,7 +318,7 @@ async def job_stream_manifest(
     request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    job = require_job_access(store=store, ident=ident, job_id=id)
+    job = require_job_access(store=store, ident=ident, job_id=id, allow_shared_read=True)
     base_dir = _job_base_dir(job)
     p = _stream_manifest_path(base_dir)
     if not p.exists():
@@ -339,7 +339,7 @@ async def job_stream_chunk(
     ident: Identity = Depends(require_scope("read:job")),
 ) -> Response:
     store = _get_store(request)
-    job = require_job_access(store=store, ident=ident, job_id=id)
+    job = require_job_access(store=store, ident=ident, job_id=id, allow_shared_read=True)
     base_dir = _job_base_dir(job)
     p = _stream_chunk_mp4_path(base_dir, int(chunk_idx))
     if p is None:
@@ -350,7 +350,7 @@ async def job_stream_chunk(
 @router.get("/api/jobs/{id}/qrcode")
 async def job_qrcode(request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))):
     store = _get_store(request)
-    _ = require_job_access(store=store, ident=ident, job_id=id)
+    _ = require_job_access(store=store, ident=ident, job_id=id, allow_shared_read=True)
     # Absolute URL to the UI job page.
     base = str(request.base_url).rstrip("/")
     url = f"{base}/ui/jobs/{id}"

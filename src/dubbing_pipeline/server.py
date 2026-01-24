@@ -25,6 +25,7 @@ from dubbing_pipeline.api.routes_auth import router as auth_router
 from dubbing_pipeline.api.routes_admin import router as admin_router
 from dubbing_pipeline.api.routes_keys import router as keys_router
 from dubbing_pipeline.api.routes_library import router as library_router
+from dubbing_pipeline.api.routes_invites import router as invites_router
 from dubbing_pipeline.api.routes_runtime import router as runtime_router
 from dubbing_pipeline.api.routes_system import router as system_router
 from dubbing_pipeline.api.routes_settings import UserSettingsStore
@@ -44,6 +45,7 @@ from dubbing_pipeline.utils.net import get_client_ip, install_egress_policy, is_
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 from dubbing_pipeline.queue.queue_backend import build_queue_backend
 from dubbing_pipeline.web.routes_jobs import router as jobs_router
+from dubbing_pipeline.web.routes_ui import public_router as public_ui_router
 from dubbing_pipeline.web.routes_ui import router as ui_router
 from dubbing_pipeline.web.routes_system import router as system_ui_router
 from dubbing_pipeline.web.routes_webrtc import router as webrtc_router
@@ -259,8 +261,10 @@ app.include_router(runtime_router)
 app.include_router(system_router)
 app.include_router(settings_router)
 app.include_router(library_router)
+app.include_router(invites_router)
 app.include_router(jobs_router)
 app.include_router(webrtc_router)
+app.include_router(public_ui_router)
 app.include_router(ui_router)
 app.include_router(system_ui_router)
 
@@ -496,7 +500,7 @@ async def video(request: Request, job: str, ident: Identity = Depends(require_sc
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         raise HTTPException(status_code=500, detail="Job store not initialized")
-    require_file_access(store=store, ident=ident, path=p)
+    require_file_access(store=store, ident=ident, path=p, allow_shared_read=True)
     ctype, _ = mimetypes.guess_type(str(p))
     ctype = ctype or ("video/mp4" if p.suffix.lower() == ".mp4" else "video/x-matroska")
 
@@ -520,7 +524,7 @@ async def files(request: Request, path: str, ident: Identity = Depends(require_s
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         raise HTTPException(status_code=500, detail="Job store not initialized")
-    require_file_access(store=store, ident=ident, path=p)
+    require_file_access(store=store, ident=ident, path=p, allow_shared_read=True)
     ctype, _ = mimetypes.guess_type(str(p))
     if not ctype:
         # HLS / TS

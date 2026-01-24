@@ -41,6 +41,7 @@ _COOKIE_RE = re.compile(
 _HEADER_RE = re.compile(
     r"(?i)\b(authorization|cookie|set-cookie|x-api-key|x-csrf-token)\b\s*[:=]\s*([^\n]+)"
 )
+_INVITE_PATH_RE = re.compile(r"(/invite/)([A-Za-z0-9_\-]{10,})")
 _TEXT_INLINE_RE = re.compile(
     r"(?i)\b(transcript|subtitle|subtitles|content|prompt)\b\s*[:=]\s*([^\n]{20,})"
 )
@@ -109,6 +110,14 @@ def _secret_literals() -> list[str]:
     return out
 
 
+def _allow_transcripts() -> bool:
+    try:
+        s = get_settings()
+        return bool(getattr(s, "log_transcripts", False))
+    except Exception:
+        return False
+
+
 def _redact_str(s: str) -> str:
     # Exact-value replacement first (covers non-token secrets like passwords)
     with suppress(Exception):
@@ -121,7 +130,9 @@ def _redact_str(s: str) -> str:
     s = _BASIC_RE.sub("Basic ***REDACTED***", s)
     s = _COOKIE_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
     s = _HEADER_RE.sub(lambda m: f"{m.group(1)}: ***REDACTED***", s)
-    s = _TEXT_INLINE_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
+    s = _INVITE_PATH_RE.sub(r"\1***REDACTED***", s)
+    if not _allow_transcripts():
+        s = _TEXT_INLINE_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
     s = _KV_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
     return s
 
@@ -140,6 +151,8 @@ def _scrub_obj(obj: Any, *, key: str | None = None) -> Any:
         return "***REDACTED***"
     if isinstance(obj, str):
         if key and str(key).strip().lower() in _TEXT_KEYS:
+            if _allow_transcripts():
+                return _redact_str(obj)
             return {"redacted": True, "len": len(obj)}
         return _redact_str(obj)
     if isinstance(obj, bytes):
