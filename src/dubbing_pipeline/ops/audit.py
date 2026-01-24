@@ -142,7 +142,7 @@ def event(
 
 
 def emit(
-    event: str,
+    event_type: str,
     *,
     request_id: str | None = None,
     user_id: str | None = None,
@@ -162,7 +162,7 @@ def emit(
                 resource_id = str(meta.get(cand))
                 break
     event(
-        event,
+        event_type,
         actor_id=user_id,
         resource_id=resource_id,
         request_id=request_id,
