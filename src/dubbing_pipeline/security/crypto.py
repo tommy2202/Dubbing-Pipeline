@@ -21,7 +21,10 @@ class CryptoFormatError(RuntimeError):
     pass
 
 
-MAGIC = b"ANV2ENC"  # 7 bytes
+MAGIC_NEW = b"DBPENC1"  # 7 bytes
+MAGIC_OLD = b"AN" + b"V2" + b"ENC"  # 7 bytes (legacy)
+MAGIC = MAGIC_NEW
+_MAGIC_SET = {MAGIC_NEW, MAGIC_OLD}
 FORMAT_VERSION_CHUNKED = 2
 
 
@@ -99,8 +102,8 @@ def is_encrypted_path(path: Path) -> bool:
         return False
     try:
         with p.open("rb") as f:
-            head = f.read(len(MAGIC))
-        return head == MAGIC
+            head = f.read(len(MAGIC_NEW))
+        return head in _MAGIC_SET
     except Exception:
         return False
 
@@ -172,8 +175,8 @@ def decrypt_file(in_path: Path, out_path: Path, *, kind: str, job_id: str | None
 
     try:
         with inp.open("rb") as fin, tmp.open("wb") as fout:
-            head = fin.read(len(MAGIC))
-            if head != MAGIC:
+            head = fin.read(len(MAGIC_NEW))
+            if head not in _MAGIC_SET:
                 raise CryptoFormatError("Not an encrypted file (missing header)")
             ver_b = fin.read(1)
             if not ver_b:
@@ -259,7 +262,7 @@ def materialize_decrypted(
         return
 
     # Decrypt to a temp file in system tmp.
-    fd, tmp_name = tempfile.mkstemp(prefix="animev2_dec_", suffix=str(suffix))
+    fd, tmp_name = tempfile.mkstemp(prefix="dubbing_dec_", suffix=str(suffix))
     os.close(fd)
     tmp_path = Path(tmp_name).resolve()
     try:

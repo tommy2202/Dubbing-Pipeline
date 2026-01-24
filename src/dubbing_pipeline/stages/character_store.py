@@ -10,10 +10,12 @@ from typing import Any
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.utils.log import logger
 
-_MAGIC = b"ANV2CHAR"
+_MAGIC_NEW = b"DBPCHAR1"
+_MAGIC_OLD = b"AN" + b"V2" + b"CHAR"
+_MAGIC = _MAGIC_NEW
 _FORMAT_VERSION = 1
-# AAD for encryption/tagging; constructed without a literal version token.
-_AAD = b"dubbing_pipeline_character_store:" + b"v" + b"1"
+_AAD_NEW = b"dubbing_pipeline_character_store"
+_AAD_LEGACY = b"dubbing_pipeline_character_store:" + b"v" + b"1"
 
 
 def _cosine(a, b) -> float:
@@ -82,34 +84,47 @@ class CharacterStore:
             raise RuntimeError("CHAR_STORE_KEY must decode to exactly 32 bytes")
         return key
 
-    def _encrypt(self, plaintext: bytes) -> bytes:
+    def _encrypt_with(self, plaintext: bytes, *, magic: bytes, aad: bytes) -> bytes:
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
         except Exception as ex:  # pragma: no cover
             raise RuntimeError("cryptography is required for CharacterStore encryption") from ex
         key = self._get_key()
         nonce = os.urandom(12)
-        ct = AESGCM(key).encrypt(nonce, plaintext, _AAD)
+        ct = AESGCM(key).encrypt(nonce, plaintext, aad)
         # file format:
         # [MAGIC (8)][ver (1)][nonce (12)][ciphertext+tag (N)]
-        return _MAGIC + bytes([_FORMAT_VERSION]) + nonce + ct
+        return magic + bytes([_FORMAT_VERSION]) + nonce + ct
+
+    def _encrypt(self, plaintext: bytes) -> bytes:
+        return self._encrypt_with(plaintext, magic=_MAGIC_NEW, aad=_AAD_NEW)
 
     def _decrypt(self, blob: bytes) -> bytes:
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
         except Exception as ex:  # pragma: no cover
             raise RuntimeError("cryptography is required for CharacterStore encryption") from ex
-        if not blob or len(blob) < (len(_MAGIC) + 1 + 12 + 16):
+        if not blob or len(blob) < (len(_MAGIC_NEW) + 1 + 12 + 16):
             raise RuntimeError("CharacterStore file is corrupted (too short)")
-        if not blob.startswith(_MAGIC):
+        if blob.startswith(_MAGIC_NEW):
+            magic_len = len(_MAGIC_NEW)
+        elif blob.startswith(_MAGIC_OLD):
+            magic_len = len(_MAGIC_OLD)
+        else:
             raise RuntimeError("CharacterStore file is not encrypted (missing header)")
-        ver = blob[len(_MAGIC)]
+        ver = blob[magic_len]
         if ver != _FORMAT_VERSION:
             raise RuntimeError(f"Unsupported CharacterStore format version: {ver}")
-        nonce = blob[len(_MAGIC) + 1 : len(_MAGIC) + 1 + 12]
-        ct = blob[len(_MAGIC) + 1 + 12 :]
+        nonce = blob[magic_len + 1 : magic_len + 1 + 12]
+        ct = blob[magic_len + 1 + 12 :]
         key = self._get_key()
-        return AESGCM(key).decrypt(nonce, ct, _AAD)
+        try:
+            return AESGCM(key).decrypt(nonce, ct, _AAD_NEW)
+        except Exception:
+            try:
+                return AESGCM(key).decrypt(nonce, ct, _AAD_LEGACY)
+            except Exception as ex2:
+                raise RuntimeError("CharacterStore file failed authentication") from ex2
 
     def _migrate(self, data: dict[str, Any]) -> dict[str, Any]:
         # JSON schema versioning inside plaintext payload.
