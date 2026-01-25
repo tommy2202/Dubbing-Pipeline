@@ -226,18 +226,43 @@
     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div class="text-sm text-slate-300">Review / Edit</div>
-          <div class="mt-1 text-xs text-slate-500">Tap “Fix” from QA to jump here.</div>
+          <div class="text-sm text-slate-300">Review QA workflow</div>
+          <div class="mt-1 text-xs text-slate-500">Edit, approve, and rerun selected segments.</div>
+          <div class="mt-1 text-xs text-slate-500" x-text="qaCountsLabel()"></div>
         </div>
-        <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
-                @click="loadReview()">Refresh</button>
+        <div class="flex flex-wrap items-center gap-2">
+          <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
+                  @click="loadReview()">Refresh</button>
+          <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                  @click="rerunChangedSegments()" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+            Rerun changed (<span x-text="changedSegments().length"></span>)
+          </button>
+        </div>
       </div>
 
       <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="reviewError" x-cloak x-text="reviewError"></div>
+      <template x-if="rerunWarning">
+        <div class="mt-3 text-xs text-amber-200 rounded border border-amber-900/60 bg-amber-900/20 p-2" x-text="rerunWarning"></div>
+      </template>
 
-      <template x-if="reviewState && Array.isArray(reviewState.segments) && reviewState.segments.length">
+      <template x-if="rerunActive()">
+        <div class="mt-3 rounded border border-slate-800 bg-slate-950/40 p-3 text-sm text-slate-200">
+          <div class="flex items-center justify-between gap-2">
+            <div>
+              <div class="text-xs text-slate-500">Rerun in progress</div>
+              <div class="text-sm" x-text="job ? (job.message || job.state) : 'Queued'"></div>
+            </div>
+            <div class="text-xs text-slate-400" x-text="job ? Math.round((job.progress || 0) * 100) + '%' : ''"></div>
+          </div>
+          <div class="mt-2 h-2 rounded bg-slate-900/60">
+            <div class="h-2 rounded bg-emerald-600/70" :style="`width: ${job ? Math.round((job.progress || 0) * 100) : 0}%`"></div>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="Array.isArray(qaSegments) && qaSegments.length">
         <div class="mt-4 space-y-3">
-          <template x-for="seg in reviewState.segments" :key="seg.segment_id">
+          <template x-for="seg in qaSegments" :key="seg.segment_id">
             <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3"
                  :id="'seg-' + String(seg.segment_id)"
                  :class="(focusSeg && Number(seg.segment_id)===Number(focusSeg)) ? 'ring-2 ring-emerald-600/70' : ''">
@@ -247,10 +272,11 @@
                   <span class="ml-2" x-text="Number(seg.start||0).toFixed(2)"></span> → <span x-text="Number(seg.end||0).toFixed(2)"></span>
                 </div>
                 <div class="flex flex-wrap items-center gap-2 text-xs">
+                  <span class="rounded border px-2 py-1"
+                        :class="qaStatusBadge(seg.qa_status)"
+                        x-text="String(seg.qa_status || 'pending')"></span>
                   <span class="rounded bg-slate-900/60 border border-slate-800 px-2 py-1 text-slate-200"
-                        x-text="seg.status || 'pending'"></span>
-                  <span class="rounded bg-slate-900/60 border border-slate-800 px-2 py-1 text-slate-200"
-                        x-text="seg.speaker || ''"></span>
+                        x-text="seg.speaker_id || ''"></span>
                 </div>
               </div>
 
@@ -259,13 +285,83 @@
                   <div class="text-xs text-slate-500">Source</div>
                   <div class="mt-1 whitespace-pre-wrap rounded bg-black/20 border border-slate-900 p-2 text-sm text-slate-300"
                        x-text="seg.source_text || ''"></div>
+                  <div class="mt-2 text-xs text-slate-500">Translated</div>
+                  <div class="mt-1 whitespace-pre-wrap rounded bg-black/20 border border-slate-900 p-2 text-sm text-slate-400"
+                       x-text="seg.translated_text || ''"></div>
                 </div>
                 <div>
-                  <div class="text-xs text-slate-500">Target (editable)</div>
-                  <textarea class="mt-1 w-full min-h-[96px] rounded bg-slate-950 border border-slate-800 p-3 text-sm text-slate-100 {% if user and user.role and user.role.value == 'viewer' %}opacity-80{% endif %}"
-                            x-model="seg.chosen_text"
+                  <div class="flex items-center justify-between">
+                    <div class="text-xs text-slate-500">Chosen (editable)</div>
+                    <div class="text-xs text-slate-500" x-show="seg._dirty">Unsaved</div>
+                  </div>
+                  <textarea class="mt-1 w-full min-h-[108px] rounded bg-slate-950 border border-slate-800 p-3 text-sm text-slate-100 {% if user and user.role and user.role.value == 'viewer' %}opacity-80{% endif %}"
+                            x-model="seg.editText"
+                            @input="markSegmentDirty(seg)"
                             :aria-label="`Review text for segment ${seg.segment_id}`"
                             {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}></textarea>
+                  <div class="mt-2 text-xs text-slate-500">Preview (audio)</div>
+                  <audio class="mt-2 w-full" controls preload="none"
+                         :src="('/api/jobs/' + encodeURIComponent(jobId) + '/review/segments/' + encodeURIComponent(seg.segment_id) + '/audio')"></audio>
+                </div>
+              </div>
+
+              <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                <div class="rounded border border-slate-800 bg-slate-950/30 p-3">
+                  <div class="text-xs text-slate-500">Pronunciation overrides</div>
+                  <div class="mt-2 space-y-2">
+                    <template x-for="(row, idx) in seg.pronEntries" :key="idx">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <input type="text" class="flex-1 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-sm text-slate-100"
+                               placeholder="Term" x-model="row.term" @input="markSegmentDirty(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %} />
+                        <input type="text" class="flex-1 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-sm text-slate-100"
+                               placeholder="IPA / phoneme (optional)" x-model="row.ipa" @input="markSegmentDirty(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %} />
+                        <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-2 py-1 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                                @click="removePronEntry(seg, idx)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>Remove</button>
+                      </div>
+                    </template>
+                  </div>
+                  <button type="button" class="mt-2 rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="addPronEntry(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    Add pronunciation
+                  </button>
+                </div>
+
+                <div class="rounded border border-slate-800 bg-slate-950/30 p-3">
+                  <div class="flex items-center justify-between">
+                    <div class="text-xs text-slate-500">Glossary rules</div>
+                    <label class="flex items-center gap-2 text-xs text-slate-300">
+                      <input type="checkbox" class="h-4 w-4" x-model="seg.glossaryEnabled" @change="toggleGlossary(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %} />
+                      Preview
+                    </label>
+                  </div>
+                  <div class="mt-2 space-y-2">
+                    <template x-for="(row, idx) in seg.glossaryEntries" :key="idx">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <input type="text" class="flex-1 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-sm text-slate-100"
+                               placeholder="From" x-model="row.from" @input="markSegmentDirty(seg); refreshGlossaryPreview(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %} />
+                        <input type="text" class="flex-1 rounded bg-slate-950 border border-slate-800 px-2 py-1 text-sm text-slate-100"
+                               placeholder="To" x-model="row.to" @input="markSegmentDirty(seg); refreshGlossaryPreview(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %} />
+                        <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-2 py-1 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                                @click="removeGlossaryEntry(seg, idx)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>Remove</button>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="mt-2 flex flex-wrap items-center gap-2">
+                    <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                            @click="addGlossaryEntry(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                      Add glossary rule
+                    </button>
+                    <button type="button" class="rounded bg-emerald-700/30 hover:bg-emerald-700/50 border border-emerald-700/60 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                            @click="applyGlossaryPreview(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                      Apply preview
+                    </button>
+                  </div>
+                  <template x-if="seg.glossaryEnabled && seg.glossaryDiffHtml">
+                    <div class="mt-3 rounded border border-slate-800 bg-slate-950/40 p-2 text-xs text-slate-200">
+                      <div class="text-slate-500">Glossary preview diff</div>
+                      <div class="mt-2 whitespace-pre-wrap" x-html="seg.glossaryDiffHtml"></div>
+                    </div>
+                  </template>
                 </div>
               </div>
 
@@ -282,53 +378,48 @@
                     </template>
                   </select>
                 </div>
-                <div>
-                  <div class="text-xs text-slate-500">Preview</div>
-                  <audio class="mt-2 w-full" controls preload="none"
-                         :src="('/api/jobs/' + encodeURIComponent(jobId) + '/review/segments/' + encodeURIComponent(seg.segment_id) + '/audio')"></audio>
+                <div class="flex flex-wrap items-center justify-end gap-2">
+                  <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="saveSegment(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    Save
+                  </button>
+                  <button type="button" class="rounded bg-emerald-700/30 hover:bg-emerald-700/50 border border-emerald-700/60 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="approveSegment(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    Approve
+                  </button>
+                  <button type="button" class="rounded bg-red-700/30 hover:bg-red-700/50 border border-red-700/60 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                          @click="rejectSegment(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                    Reject
+                  </button>
+                  <div class="text-xs text-slate-500" x-show="seg._needsRerun">Needs rerun</div>
                 </div>
               </div>
 
               <div class="mt-3 flex flex-wrap items-center gap-2">
-                <button type="button" class="rounded bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-sm font-medium {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
-                        @click="reviewSave(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
-                  Save text
+                <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                        @click="applyHelper(seg, 'shorten10')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                  Shorten 10%
                 </button>
-                <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
-                        @click="reviewRegen(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
-                  Regen
+                <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                        @click="applyHelper(seg, 'formal')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                  More formal
                 </button>
-                <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
-                        @click="reviewToggleLock(seg)" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
-                  <span x-text="String(seg.status||'')==='locked' ? 'Unlock' : 'Lock'"></span>
+                <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                        @click="applyHelper(seg, 'reduce_slang')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                  Reduce slang
                 </button>
-
-                <div class="ml-auto flex flex-wrap items-center gap-2">
-                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
-                          @click="applyHelper(seg, 'shorten10')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
-                    Shorten 10%
-                  </button>
-                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
-                          @click="applyHelper(seg, 'formal')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
-                    More formal
-                  </button>
-                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
-                          @click="applyHelper(seg, 'reduce_slang')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
-                    Reduce slang
-                  </button>
-                  <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
-                          @click="applyHelper(seg, 'apply_pg')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
-                    Apply PG
-                  </button>
-                </div>
+                <button type="button" class="rounded bg-slate-900/60 hover:bg-slate-900 border border-slate-800 px-3 py-2 text-xs {% if user and user.role and user.role.value == 'viewer' %}opacity-50 cursor-not-allowed{% endif %}"
+                        @click="applyHelper(seg, 'apply_pg')" {% if user and user.role and user.role.value == 'viewer' %}disabled{% endif %}>
+                  Apply PG
+                </button>
               </div>
             </div>
           </template>
         </div>
       </template>
 
-      <template x-if="reviewState && (!reviewState.segments || !reviewState.segments.length)">
-        <div class="mt-3 text-sm text-slate-500">No review segments yet (run the pipeline first).</div>
+      <template x-if="Array.isArray(qaSegments) && !qaSegments.length">
+        <div class="mt-3 text-sm text-slate-500">No segments available yet (run the pipeline first).</div>
       </template>
 
       <div class="mt-6">
@@ -537,6 +628,105 @@
                     <audio class="mt-2 w-full" controls preload="none"
                            :src="(voiceRefs.items[sid]||{}).audio_url"></audio>
                     <div class="mt-2 text-xs text-slate-500 break-all" x-text="(voiceRefs.items[sid]||{}).effective_ref_path || ''"></div>
+                  </div>
+                </template>
+
+                <template x-if="(voiceRefs.items[sid]||{}).voice_profile">
+                  <div class="mt-3 rounded border border-slate-800 bg-slate-950/30 p-3">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="text-xs text-slate-500">Voice profile consent</div>
+                      <div class="text-xs text-slate-400 font-mono" x-text="(voiceRefs.items[sid]||{}).voice_profile_id || ''"></div>
+                    </div>
+                    <div class="mt-2">
+                      <label class="block text-xs text-slate-500">Source</label>
+                      <select class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100"
+                              x-model="voiceProfileSource[sid]"
+                              :disabled="voiceProfileLocked(sid)">
+                        <option value="unknown">Unknown</option>
+                        <option value="user_upload">User upload</option>
+                        <option value="licensed_pack">Licensed pack</option>
+                        <option value="extracted_from_media">Extracted from media</option>
+                      </select>
+                      <div class="mt-1 text-xs text-slate-500"
+                           x-text="voiceProfileLocked(sid) ? 'Extracted media voices are private-only.' : 'Choose the source type to set reuse rights.'"></div>
+                    </div>
+
+                    <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <label class="block text-xs text-slate-500">Visibility</label>
+                        <select class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100"
+                                x-model="voiceProfileScope[sid]"
+                                :disabled="voiceProfileLocked(sid) || voiceProfileNeedsSource(sid)">
+                          <option value="private">Private</option>
+                          <option value="friends">Friends</option>
+                          <option value="global">Global</option>
+                        </select>
+                      </div>
+                      <div class="space-y-2">
+                        <label class="flex items-center gap-2 text-xs text-slate-300">
+                          <input type="checkbox" class="h-4 w-4" x-model="voiceProfileReuse[sid]"
+                                 :disabled="voiceProfileLocked(sid) || voiceProfileNeedsSource(sid)" />
+                          <span>Allow reuse</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-slate-300">
+                          <input type="checkbox" class="h-4 w-4" x-model="voiceProfileShare[sid]"
+                                 :disabled="voiceProfileLocked(sid) || voiceProfileNeedsSource(sid)" />
+                          <span>Allow sharing</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-slate-300">
+                          <input type="checkbox" class="h-4 w-4" x-model="voiceProfileExport[sid]"
+                                 :disabled="voiceProfileLocked(sid) || voiceProfileNeedsSource(sid)" />
+                          <span>Allow export</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div class="mt-2 text-xs text-amber-200" x-show="voiceProfileRestrictionLabel(sid)" x-text="voiceProfileRestrictionLabel(sid)"></div>
+                    <div class="mt-2 text-xs text-red-200" x-show="voiceProfileError[sid]" x-text="voiceProfileError[sid]"></div>
+
+                    <button type="button"
+                            class="mt-3 rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs disabled:opacity-50"
+                            :disabled="!canEditVoices || voiceProfileSaving[sid]"
+                            @click="saveVoiceProfileConsent(sid)">
+                      Save consent
+                    </button>
+                  </div>
+                </template>
+
+                <template x-if="voiceProfileSuggestionError[sid]">
+                  <div class="mt-2 text-xs text-red-200" x-text="voiceProfileSuggestionError[sid]"></div>
+                </template>
+                <template x-if="(voiceProfileSuggestions[sid] || []).length">
+                  <div class="mt-3 rounded border border-amber-800/40 bg-amber-900/10 p-3">
+                    <div class="text-xs text-amber-200">Similarity suggestion</div>
+                    <template x-for="sug in (voiceProfileSuggestions[sid] || [])" :key="sug.id">
+                      <div class="mt-2">
+                        <div class="text-sm text-slate-200">
+                          This voice looks similar to
+                          <span class="font-mono text-xs"
+                                x-text="sug.suggested_display_name || sug.suggested_profile_id"></span>.
+                        </div>
+                        <div class="text-xs text-slate-500">
+                          <span x-text="Math.round(Number(sug.similarity || 0) * 100) + '%'"></span>
+                          <span class="mx-1">·</span>
+                          <span x-text="sug.suggested_series_lock ? ('series: ' + sug.suggested_series_lock) : ('scope: ' + (sug.suggested_scope || 'global'))"></span>
+                        </div>
+                        <div class="mt-2 flex flex-wrap gap-2">
+                          <button type="button"
+                                  class="rounded bg-emerald-700/30 hover:bg-emerald-700/40 border border-emerald-700/50 px-3 py-2 text-xs text-emerald-100 disabled:opacity-50"
+                                  :disabled="!canEditVoices"
+                                  @click="acceptVoiceSuggestion(sid, sug.id, 'use_existing')">
+                            Use existing
+                          </button>
+                          <button type="button"
+                                  class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs text-slate-200 disabled:opacity-50"
+                                  :disabled="!canEditVoices"
+                                  @click="acceptVoiceSuggestion(sid, sug.id, 'keep_separate')">
+                            Keep separate
+                          </button>
+                        </div>
+                      </div>
+                    </template>
                   </div>
                 </template>
 
@@ -874,6 +1064,15 @@
       voiceRefsLoaded: false,
       voiceRefs: null,
       voiceRefsError: "",
+      voiceProfileSource: {},
+      voiceProfileScope: {},
+      voiceProfileReuse: {},
+      voiceProfileShare: {},
+      voiceProfileExport: {},
+      voiceProfileSaving: {},
+      voiceProfileError: {},
+      voiceProfileSuggestions: {},
+      voiceProfileSuggestionError: {},
       voicesError: "",
       seriesCharsLoaded: false,
       seriesCharacters: [],
@@ -912,8 +1111,9 @@
       qaSummary: null,
       qaTopMd: "",
       reviewLoaded: false,
-      reviewState: null,
+      qaSegments: [],
       reviewError: "",
+      rerunWarning: "",
       overridesLoaded: false,
       overrides: null,
       overridesError: "",
@@ -1438,29 +1638,220 @@
             }));
         } catch (e) {}
       },
+      qaCountsLabel() {
+        const counts = { pending: 0, approved: 0, rejected: 0 };
+        for (const seg of (this.qaSegments || [])) {
+          const s = String(seg && seg.qa_status ? seg.qa_status : "pending").toLowerCase();
+          if (s === "approved") counts.approved += 1;
+          else if (s === "rejected") counts.rejected += 1;
+          else counts.pending += 1;
+        }
+        return "Pending " + counts.pending + " · Approved " + counts.approved + " · Rejected " + counts.rejected;
+      },
+      qaStatusBadge(status) {
+        const s = String(status || "").toLowerCase();
+        if (s === "approved") return "bg-emerald-900/30 border-emerald-800 text-emerald-200";
+        if (s === "rejected") return "bg-red-900/30 border-red-800 text-red-200";
+        return "bg-slate-900/60 border-slate-800 text-slate-200";
+      },
+      rerunActive() {
+        try {
+          if (!this.job) return false;
+          const state = String(this.job.state || "");
+          const rt = this.job.runtime || {};
+          const resynth = rt && typeof rt === "object" ? rt.resynth : null;
+          if (!resynth) return false;
+          return ["QUEUED", "RUNNING", "PAUSED"].includes(state);
+        } catch (e) {
+          return false;
+        }
+      },
+      changedSegments() {
+        return (this.qaSegments || []).filter(s => !!(s && s._needsRerun));
+      },
+      _normalizePron(raw) {
+        if (!raw) return [];
+        if (Array.isArray(raw)) return raw.map(r => ({ term: String(r.term || r.from || "").trim(), ipa: String(r.ipa || r.phoneme || "").trim() }));
+        if (raw && Array.isArray(raw.entries)) {
+          return raw.entries.map(r => ({ term: String(r.term || r.from || "").trim(), ipa: String(r.ipa || r.phoneme || "").trim() }));
+        }
+        if (raw && typeof raw === "object") {
+          const out = [];
+          for (const k of Object.keys(raw)) {
+            out.push({ term: String(k || "").trim(), ipa: String(raw[k] || "").trim() });
+          }
+          return out;
+        }
+        return [];
+      },
+      _normalizeGlossary(raw) {
+        if (!raw) return { enabled: false, entries: [] };
+        const enabled = !!raw.enabled;
+        const entries = [];
+        const rows = Array.isArray(raw.entries) ? raw.entries : (Array.isArray(raw.rules) ? raw.rules : []);
+        for (const r of rows) {
+          if (!r) continue;
+          entries.push({ from: String(r.from || r.term || r.src || "").trim(), to: String(r.to || r.value || r.dst || "").trim() });
+        }
+        if (raw.map && typeof raw.map === "object") {
+          for (const k of Object.keys(raw.map)) {
+            entries.push({ from: String(k || "").trim(), to: String(raw.map[k] || "").trim() });
+          }
+        }
+        return { enabled, entries };
+      },
+      markSegmentDirty(seg) {
+        if (!seg) return;
+        seg._dirty = true;
+        seg._needsRerun = true;
+        if (seg.glossaryEnabled) this.refreshGlossaryPreview(seg);
+      },
+      addPronEntry(seg) {
+        if (!seg) return;
+        if (!Array.isArray(seg.pronEntries)) seg.pronEntries = [];
+        seg.pronEntries.push({ term: "", ipa: "" });
+        this.markSegmentDirty(seg);
+      },
+      removePronEntry(seg, idx) {
+        if (!seg || !Array.isArray(seg.pronEntries)) return;
+        seg.pronEntries.splice(Number(idx), 1);
+        this.markSegmentDirty(seg);
+      },
+      addGlossaryEntry(seg) {
+        if (!seg) return;
+        if (!Array.isArray(seg.glossaryEntries)) seg.glossaryEntries = [];
+        seg.glossaryEntries.push({ from: "", to: "" });
+        this.markSegmentDirty(seg);
+        if (seg.glossaryEnabled) this.refreshGlossaryPreview(seg);
+      },
+      removeGlossaryEntry(seg, idx) {
+        if (!seg || !Array.isArray(seg.glossaryEntries)) return;
+        seg.glossaryEntries.splice(Number(idx), 1);
+        this.markSegmentDirty(seg);
+        if (seg.glossaryEnabled) this.refreshGlossaryPreview(seg);
+      },
+      toggleGlossary(seg) {
+        if (!seg) return;
+        if (!seg.glossaryEnabled) {
+          seg.glossaryDiffHtml = "";
+          seg.glossaryPreviewText = "";
+          return;
+        }
+        this.refreshGlossaryPreview(seg);
+      },
+      refreshGlossaryPreview(seg) {
+        if (!seg || !seg.glossaryEnabled) return;
+        const before = String(seg.editText || "");
+        const after = this.applyGlossaryToText(before, seg.glossaryEntries || []);
+        seg.glossaryPreviewText = after;
+        seg.glossaryDiffHtml = this.buildDiffHtml(before, after);
+      },
+      applyGlossaryPreview(seg) {
+        if (!seg) return;
+        if (!seg.glossaryEnabled) {
+          seg.glossaryEnabled = true;
+          this.refreshGlossaryPreview(seg);
+        }
+        if (seg.glossaryPreviewText !== undefined && seg.glossaryPreviewText !== null) {
+          seg.editText = String(seg.glossaryPreviewText || "");
+          this.markSegmentDirty(seg);
+        }
+      },
+      applyGlossaryToText(text, entries) {
+        let out = String(text || "");
+        const rules = Array.isArray(entries) ? entries : [];
+        for (const r of rules) {
+          const from = String(r.from || "").trim();
+          const to = String(r.to || "").trim();
+          if (!from) continue;
+          try {
+            const re = new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+            out = out.replace(re, to);
+          } catch (e) {}
+        }
+        return out;
+      },
+      buildDiffHtml(before, after) {
+        const a = String(before || "");
+        const b = String(after || "");
+        if (a === b) return "<span class='text-slate-400'>No changes</span>";
+        const at = a.split(/\s+/).filter(Boolean);
+        const bt = b.split(/\s+/).filter(Boolean);
+        const dp = Array(at.length + 1).fill(0).map(() => Array(bt.length + 1).fill(0));
+        for (let i = at.length - 1; i >= 0; i--) {
+          for (let j = bt.length - 1; j >= 0; j--) {
+            dp[i][j] = at[i] === bt[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+          }
+        }
+        const out = [];
+        let i = 0;
+        let j = 0;
+        while (i < at.length && j < bt.length) {
+          if (at[i] === bt[j]) {
+            out.push({ t: at[i], k: "same" });
+            i += 1;
+            j += 1;
+          } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+            out.push({ t: at[i], k: "del" });
+            i += 1;
+          } else {
+            out.push({ t: bt[j], k: "add" });
+            j += 1;
+          }
+        }
+        while (i < at.length) {
+          out.push({ t: at[i], k: "del" });
+          i += 1;
+        }
+        while (j < bt.length) {
+          out.push({ t: bt[j], k: "add" });
+          j += 1;
+        }
+        const esc = (s) => String(s || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+        return out.map((p) => {
+          const txt = esc(p.t);
+          if (p.k === "add") return "<ins class='bg-emerald-900/30 text-emerald-200 no-underline px-0.5 rounded'>" + txt + "</ins>";
+          if (p.k === "del") return "<del class='bg-red-900/30 text-red-200 px-0.5 rounded'>" + txt + "</del>";
+          return "<span class='text-slate-200'>" + txt + "</span>";
+        }).join(" ");
+      },
       async loadReview() {
         this.reviewLoaded = true;
         this.reviewError = "";
         try {
-          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments", { credentials: "include" });
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/segments", { credentials: "include" });
           const data = await r.json().catch(() => ({}));
           if (!r.ok) {
             this.reviewError = data.detail || ("Review load failed (" + r.status + ")");
             return;
           }
-          this.reviewState = data;
-          // Pull speaker overrides (cheap) so dropdown shows current selection.
+          const items = Array.isArray(data.items) ? data.items : [];
+          this.qaSegments = items.map((seg) => {
+            const s = { ...seg };
+            s.qa_status = String(s.qa_status || "pending").toLowerCase();
+            s.editText = String(s.chosen_text || s.translated_text || "");
+            s._dirty = false;
+            s._needsRerun = false;
+            s._lastSavedText = s.editText;
+            s.pronEntries = this._normalizePron(s.pronunciation_overrides);
+            const gloss = this._normalizeGlossary(s.glossary_used);
+            s.glossaryEntries = gloss.entries;
+            s.glossaryEnabled = !!gloss.enabled;
+            s.glossaryDiffHtml = "";
+            s.glossaryPreviewText = "";
+            if (s.glossaryEnabled) this.refreshGlossaryPreview(s);
+            return s;
+          });
+          // Pull speaker overrides so dropdown shows current selection.
           try {
             const r2 = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/overrides", { credentials: "include" });
             const ov = await r2.json().catch(() => ({}));
             if (r2.ok && ov && typeof ov === "object") {
               const so = ov.speaker_overrides && typeof ov.speaker_overrides === "object" ? ov.speaker_overrides : {};
               this.speakerOverrides = so;
-              if (this.reviewState && Array.isArray(this.reviewState.segments)) {
-                for (const seg of this.reviewState.segments) {
-                  const sid = String(seg && seg.segment_id !== undefined ? seg.segment_id : "");
-                  seg._speaker_override = (so && so[sid]) ? String(so[sid]) : "";
-                }
+              for (const seg of this.qaSegments) {
+                const sid = String(seg && seg.segment_id !== undefined ? seg.segment_id : "");
+                seg._speaker_override = (so && so[sid]) ? String(so[sid]) : "";
               }
             }
           } catch (e) {}
@@ -1468,59 +1859,132 @@
           this.reviewError = "Review load failed";
         }
       },
-      async reviewSave(seg) {
+      async saveSegment(seg) {
+        if (!seg) return;
+        const prev = {
+          qa_status: seg.qa_status,
+          editText: seg.editText,
+          dirty: seg._dirty,
+        };
         try {
           const csrf = document.getElementById("csrf")?.value || "";
-          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/edit", {
+          seg._dirty = false;
+          seg.qa_status = "pending";
+          const pron = (seg.pronEntries || []).filter(r => String(r.term || "").trim());
+          const glossEntries = (seg.glossaryEntries || []).filter(r => String(r.from || "").trim());
+          const body = {
+            translated_text: String(seg.editText || ""),
+            pronunciation_overrides: { entries: pron },
+            glossary_used: { enabled: !!seg.glossaryEnabled, entries: glossEntries },
+          };
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/segments/" + encodeURIComponent(seg.segment_id), {
+            method: "PATCH",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify(body),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            seg.qa_status = prev.qa_status;
+            seg._dirty = prev.dirty;
+            window.showToast(data.detail || ("Save failed (" + r.status + ")"), "error");
+            return;
+          }
+          seg._needsRerun = true;
+          seg._lastSavedText = seg.editText;
+          window.showToast("Saved", "success");
+        } catch (e) {
+          seg.qa_status = prev.qa_status;
+          seg._dirty = prev.dirty;
+          window.showToast("Save failed", "error");
+        }
+      },
+      async approveSegment(seg) {
+        if (!seg) return;
+        const prev = String(seg.qa_status || "");
+        seg.qa_status = "approved";
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/segments/" + encodeURIComponent(seg.segment_id) + "/approve", {
             method: "POST",
             credentials: "include",
             headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
-            body: JSON.stringify({ text: String(seg.chosen_text || "") }),
+            body: JSON.stringify({}),
           });
           const data = await r.json().catch(() => ({}));
           if (!r.ok) {
-            try { window.showToast(data.detail || ("Save failed (" + r.status + ")"), "error"); } catch (e) {}
+            seg.qa_status = prev;
+            window.showToast(data.detail || ("Approve failed (" + r.status + ")"), "error");
             return;
           }
-          try { window.showToast("Saved", "success"); } catch (e) {}
-          await this.loadReview();
-        } catch (e) {}
+          seg._needsRerun = true;
+          window.showToast("Approved", "success");
+        } catch (e) {
+          seg.qa_status = prev;
+          window.showToast("Approve failed", "error");
+        }
       },
-      async reviewRegen(seg) {
+      async rejectSegment(seg) {
+        if (!seg) return;
+        const prev = String(seg.qa_status || "");
+        seg.qa_status = "rejected";
         try {
           const csrf = document.getElementById("csrf")?.value || "";
-          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/regen", {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/segments/" + encodeURIComponent(seg.segment_id) + "/reject", {
             method: "POST",
             credentials: "include",
-            headers: { "X-CSRF-Token": csrf },
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({}),
           });
           const data = await r.json().catch(() => ({}));
           if (!r.ok) {
-            try { window.showToast(data.detail || ("Regen failed (" + r.status + ")"), "error"); } catch (e) {}
+            seg.qa_status = prev;
+            window.showToast(data.detail || ("Reject failed (" + r.status + ")"), "error");
             return;
           }
-          try { window.showToast("Regenerated", "success"); } catch (e) {}
-          await this.loadReview();
-        } catch (e) {}
+          seg._needsRerun = true;
+          window.showToast("Rejected", "success");
+        } catch (e) {
+          seg.qa_status = prev;
+          window.showToast("Reject failed", "error");
+        }
       },
-      async reviewToggleLock(seg) {
+      async rerunChangedSegments() {
         try {
+          this.rerunWarning = "";
+          const dirty = (this.qaSegments || []).filter(s => s && s._dirty);
+          if (dirty.length) {
+            window.showToast("Save changes before rerun", "error");
+            return;
+          }
+          const ids = this.changedSegments().map(s => Number(s.segment_id || 0)).filter(n => n > 0);
+          if (!ids.length) {
+            window.showToast("No changed segments to rerun", "error");
+            return;
+          }
           const csrf = document.getElementById("csrf")?.value || "";
-          const locked = String(seg.status || "") === "locked";
-          const action = locked ? "unlock" : "lock";
-          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/review/segments/" + encodeURIComponent(seg.segment_id) + "/" + action, {
+          const r = await fetch("/api/jobs/" + encodeURIComponent(this.jobId) + "/segments/rerun", {
             method: "POST",
             credentials: "include",
-            headers: { "X-CSRF-Token": csrf },
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ segment_ids: ids }),
           });
           const data = await r.json().catch(() => ({}));
           if (!r.ok) {
-            try { window.showToast(data.detail || ("Action failed (" + r.status + ")"), "error"); } catch (e) {}
+            window.showToast(data.detail || ("Rerun failed (" + r.status + ")"), "error");
             return;
           }
-          try { window.showToast(action + " OK", "success"); } catch (e) {}
-          await this.loadReview();
-        } catch (e) {}
+          this.rerunWarning = data.warning || "";
+          for (const seg of this.qaSegments || []) {
+            if (ids.includes(Number(seg.segment_id || 0))) {
+              seg._needsRerun = false;
+            }
+          }
+          window.showToast("Rerun queued", "success");
+          await this.refresh();
+        } catch (e) {
+          window.showToast("Rerun failed", "error");
+        }
       },
       async applyHelper(seg, kind) {
         try {
@@ -1529,7 +1993,7 @@
             method: "POST",
             credentials: "include",
             headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
-            body: JSON.stringify({ kind: String(kind || ""), text: String(seg.chosen_text || "") }),
+            body: JSON.stringify({ kind: String(kind || ""), text: String(seg.editText || "") }),
           });
           const data = await r.json().catch(() => ({}));
           if (!r.ok) {
@@ -1537,7 +2001,8 @@
             return;
           }
           if (data && data.text !== undefined) {
-            seg.chosen_text = String(data.text || "");
+            seg.editText = String(data.text || "");
+            this.markSegmentDirty(seg);
             try { window.showToast("Applied helper", "success"); } catch (e) {}
           }
         } catch (e) {}
@@ -1587,8 +2052,128 @@
             return;
           }
           this.voiceRefs = d;
+          this.voiceProfileSource = {};
+          this.voiceProfileScope = {};
+          this.voiceProfileReuse = {};
+          this.voiceProfileShare = {};
+          this.voiceProfileExport = {};
+          this.voiceProfileSaving = {};
+          this.voiceProfileError = {};
+          try {
+            const items = (d && d.items) ? d.items : {};
+            for (const sid of Object.keys(items || {})) {
+              const vp = (items[sid] || {}).voice_profile || null;
+              if (!vp) continue;
+              this.voiceProfileSource[sid] = String(vp.source_type || "unknown");
+              this.voiceProfileScope[sid] = String(vp.scope || "private");
+              this.voiceProfileReuse[sid] = !!vp.reuse_allowed;
+              this.voiceProfileShare[sid] = !!vp.share_allowed;
+              this.voiceProfileExport[sid] = !!vp.export_allowed;
+              this.voiceProfileSaving[sid] = false;
+              this.voiceProfileError[sid] = "";
+            }
+          } catch (e) {}
+          await this.loadVoiceProfileSuggestions();
         } catch (e) {
           this.voiceRefsError = "Voice refs load failed";
+        }
+      },
+      voiceProfileLocked(sid) {
+        const src = String(this.voiceProfileSource[sid] || "");
+        return src === "extracted_from_media";
+      },
+      voiceProfileNeedsSource(sid) {
+        const src = String(this.voiceProfileSource[sid] || "");
+        return src === "" || src === "unknown";
+      },
+      voiceProfileRestrictionLabel(sid) {
+        if (this.voiceProfileLocked(sid)) return "This voice can’t be shared or exported.";
+        if (this.voiceProfileNeedsSource(sid)) return "Select a source to enable reuse/sharing.";
+        if ((this.voiceProfileScope[sid] || "") !== "private" && !this.voiceProfileReuse[sid]) {
+          return "Enable reuse before sharing globally.";
+        }
+        return "";
+      },
+      async saveVoiceProfileConsent(sid) {
+        const items = (this.voiceRefs && this.voiceRefs.items) ? this.voiceRefs.items : {};
+        const vpId = String((items[sid] || {}).voice_profile_id || "");
+        if (!vpId) return;
+        this.voiceProfileSaving[sid] = true;
+        this.voiceProfileError[sid] = "";
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/voices/" + encodeURIComponent(vpId) + "/consent", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({
+              source_type: String(this.voiceProfileSource[sid] || "unknown"),
+              scope: String(this.voiceProfileScope[sid] || "private"),
+              reuse_allowed: !!this.voiceProfileReuse[sid],
+              share_allowed: !!this.voiceProfileShare[sid],
+              export_allowed: !!this.voiceProfileExport[sid],
+            }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.voiceProfileError[sid] = d.detail || ("Save failed (" + r.status + ")");
+            try { window.showToast(this.voiceProfileError[sid], "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Consent saved", "success"); } catch (e) {}
+          await this.loadVoiceRefs();
+        } catch (e) {
+          this.voiceProfileError[sid] = "Save failed";
+        } finally {
+          this.voiceProfileSaving[sid] = false;
+        }
+      },
+      async loadVoiceProfileSuggestions() {
+        this.voiceProfileSuggestions = {};
+        this.voiceProfileSuggestionError = {};
+        try {
+          const items = (this.voiceRefs && this.voiceRefs.items) ? this.voiceRefs.items : {};
+          for (const sid of Object.keys(items || {})) {
+            const pid = String((items[sid] || {}).voice_profile_id || "");
+            if (!pid) continue;
+            try {
+              const r = await fetch("/api/voices/" + encodeURIComponent(pid) + "/suggestions", { credentials: "include" });
+              const d = await r.json().catch(() => ({}));
+              if (!r.ok) {
+                this.voiceProfileSuggestionError[sid] = d.detail || ("Suggestion load failed (" + r.status + ")");
+                continue;
+              }
+              this.voiceProfileSuggestions[sid] = Array.isArray(d.items) ? d.items : [];
+            } catch (e) {
+              this.voiceProfileSuggestionError[sid] = "Suggestion load failed";
+            }
+          }
+        } catch (e) {}
+      },
+      async acceptVoiceSuggestion(sid, suggestionId, action) {
+        const items = (this.voiceRefs && this.voiceRefs.items) ? this.voiceRefs.items : {};
+        const pid = String(((items[sid] || {}).voice_profile_id) || "");
+        if (!pid) return;
+        const act = String(action || "use_existing");
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/voices/" + encodeURIComponent(pid) + "/accept_suggestion", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ suggestion_id: String(suggestionId || ""), action: act }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(d.detail || ("Action failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try {
+            window.showToast(act === "use_existing" ? "Suggestion accepted" : "Suggestion dismissed", "success");
+          } catch (e) {}
+          await this.loadVoiceProfileSuggestions();
+        } catch (e) {
+          try { window.showToast("Action failed", "error"); } catch (e2) {}
         }
       },
       async uploadRefOverride(speakerId) {

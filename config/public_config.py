@@ -335,6 +335,14 @@ class PublicConfig(BaseSettings):
     voice_ref_overlap_eps_s: float = Field(default=0.05, alias="VOICE_REF_OVERLAP_EPS_S")
     voice_ref_min_speech_ratio: float = Field(default=0.60, alias="VOICE_REF_MIN_SPEECH_RATIO")
 
+    # Voice profile similarity suggestions (track-clone).
+    voice_profile_suggest_threshold: float = Field(
+        default=0.82, alias="VOICE_PROFILE_SUGGEST_THRESHOLD"
+    )
+    voice_profile_embedding_model_id: str | None = Field(
+        default=None, alias="VOICE_PROFILE_EMBEDDING_MODEL"
+    )
+
     # Two-pass voice cloning: pass1 runs without cloning to build speaker refs; pass2 reruns TTS+mix using refs.
     voice_clone_two_pass: bool = Field(default=False, alias="VOICE_CLONE_TWO_PASS")
 

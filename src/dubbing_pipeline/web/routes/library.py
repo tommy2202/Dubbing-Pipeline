@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from dubbing_pipeline.api.access import require_job_access, require_library_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
+from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import now_utc
 from dubbing_pipeline.web.routes.jobs_common import (
@@ -25,6 +26,102 @@ from dubbing_pipeline.web.routes.jobs_common import (
 )
 
 router = APIRouter()
+
+
+def _require_voice_profile_access(profile: dict[str, Any], ident: Identity) -> None:
+    if ident.user and ident.user.role and ident.user.role.value == Role.admin.value:
+        return
+    created_by = str(profile.get("created_by") or "").strip()
+    if created_by and str(ident.user.id) == created_by:
+        return
+    raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _normalize_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    s = str(value).strip().lower()
+    if s in {"1", "true", "yes", "on"}:
+        return True
+    if s in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _apply_voice_profile_policy(
+    *,
+    existing: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    source_type = str(payload.get("source_type") or "").strip()
+    if source_type not in {"user_upload", "licensed_pack", "extracted_from_media", "unknown"}:
+        raise HTTPException(status_code=422, detail="source_type is required")
+    scope = str(payload.get("scope") or existing.get("scope") or "private").strip().lower()
+    if scope not in {"private", "friends", "global"}:
+        raise HTTPException(status_code=422, detail="Invalid scope")
+    share_allowed = _normalize_bool(payload.get("share_allowed"), default=bool(existing.get("share_allowed")))
+    export_allowed = _normalize_bool(
+        payload.get("export_allowed"), default=bool(existing.get("export_allowed"))
+    )
+    reuse_allowed = _normalize_bool(
+        payload.get("reuse_allowed"), default=bool(existing.get("reuse_allowed"))
+    )
+    series_lock = str(payload.get("series_lock") or existing.get("series_lock") or "").strip()
+
+    existing_source = str(existing.get("source_type") or "").strip()
+    if existing_source == "extracted_from_media" and source_type != "extracted_from_media":
+        raise HTTPException(status_code=422, detail="Cannot change source for extracted media")
+
+    if source_type == "extracted_from_media":
+        if not series_lock:
+            raise HTTPException(status_code=422, detail="Series lock required for extracted media")
+        if str(payload.get("series_lock") or "").strip() and series_lock != str(existing.get("series_lock") or ""):
+            raise HTTPException(status_code=422, detail="Series lock is enforced for extracted media")
+        if scope != "private" or share_allowed or export_allowed or reuse_allowed:
+            raise HTTPException(
+                status_code=422,
+                detail="Extracted media voices must remain private and cannot be shared/exported",
+            )
+        scope = "private"
+        share_allowed = False
+        export_allowed = False
+        reuse_allowed = False
+
+    if source_type == "unknown":
+        if scope != "private" or share_allowed or export_allowed or reuse_allowed:
+            raise HTTPException(
+                status_code=422,
+                detail="Select a source before enabling sharing or reuse",
+            )
+        scope = "private"
+        share_allowed = False
+        export_allowed = False
+        reuse_allowed = False
+
+    if source_type in {"user_upload", "licensed_pack"}:
+        if scope in {"global", "friends"} and not reuse_allowed:
+            raise HTTPException(
+                status_code=422,
+                detail="Enable reuse before sharing globally",
+            )
+        if scope in {"global", "friends"} and not share_allowed:
+            raise HTTPException(
+                status_code=422,
+                detail="Sharing must be enabled for global visibility",
+            )
+
+    return {
+        "source_type": source_type,
+        "scope": scope,
+        "share_allowed": share_allowed,
+        "export_allowed": export_allowed,
+        "reuse_allowed": reuse_allowed,
+        "series_lock": series_lock,
+    }
 
 
 @router.get("/api/series/{series_slug}/characters")
@@ -436,3 +533,170 @@ async def rollback_voice_version(
         meta={"series_slug": slug, "voice_id": cslug, "version": int(version)},
     )
     return {"ok": True, "voice_id": cslug, "path": str(outp)}
+
+
+@router.get("/api/voices/{profile_id}/suggestions")
+async def get_voice_profile_suggestions(
+    request: Request,
+    profile_id: str,
+    status: str | None = "pending",
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    pid = str(profile_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="profile_id required")
+    profile = store.get_voice_profile(pid)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="voice profile not found")
+    _require_voice_profile_access(profile, ident)
+    status_eff = None if not status or status == "all" else str(status)
+    items = store.list_voice_profile_suggestions(pid, status=status_eff)
+    out_items: list[dict[str, Any]] = []
+    for rec in items:
+        sid = str(rec.get("suggested_profile_id") or "").strip()
+        target = store.get_voice_profile(sid) if sid else None
+        out_items.append(
+            {
+                "id": str(rec.get("id") or ""),
+                "profile_id": str(rec.get("voice_profile_id") or ""),
+                "suggested_profile_id": sid,
+                "similarity": float(rec.get("similarity") or 0.0),
+                "status": str(rec.get("status") or ""),
+                "created_at": rec.get("created_at"),
+                "updated_at": rec.get("updated_at"),
+                "suggested_display_name": (
+                    str(target.get("display_name") or "") if isinstance(target, dict) else ""
+                ),
+                "suggested_series_lock": (
+                    str(target.get("series_lock") or "") if isinstance(target, dict) else ""
+                ),
+                "suggested_scope": (
+                    str(target.get("scope") or "") if isinstance(target, dict) else ""
+                ),
+                "reuse_allowed": bool(target.get("reuse_allowed") or False)
+                if isinstance(target, dict)
+                else False,
+            }
+        )
+    return {"ok": True, "profile_id": pid, "items": out_items}
+
+
+@router.post("/api/voices/{profile_id}/accept_suggestion")
+async def accept_voice_profile_suggestion(
+    request: Request,
+    profile_id: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    pid = str(profile_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="profile_id required")
+    profile = store.get_voice_profile(pid)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="voice profile not found")
+    _require_voice_profile_access(profile, ident)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    suggestion_id = str(body.get("suggestion_id") or "").strip()
+    action = str(body.get("action") or "use_existing").strip().lower()
+    if not suggestion_id:
+        raise HTTPException(status_code=422, detail="suggestion_id required")
+    if action not in {"use_existing", "keep_separate"}:
+        raise HTTPException(status_code=422, detail="Invalid action")
+    sugg = store.get_voice_profile_suggestion(suggestion_id)
+    if sugg is None:
+        raise HTTPException(status_code=404, detail="suggestion not found")
+    if str(sugg.get("voice_profile_id") or "") != pid:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if str(sugg.get("status") or "") not in {"pending", "accepted"}:
+        raise HTTPException(status_code=409, detail="Suggestion already resolved")
+
+    alias = None
+    if action == "use_existing":
+        alias = store.upsert_voice_profile_alias(
+            voice_profile_id=pid,
+            alias_of_voice_profile_id=str(sugg.get("suggested_profile_id") or ""),
+            confidence=float(sugg.get("similarity") or 0.0),
+            approved_by_admin=False,
+            approved_at=None,
+        )
+        store.set_voice_profile_suggestion_status(suggestion_id, status="accepted")
+        audit_event(
+            "voice_profile.suggestion.accept",
+            request=request,
+            user_id=ident.user.id,
+            meta={"profile_id": pid, "suggestion_id": suggestion_id},
+        )
+    else:
+        store.set_voice_profile_suggestion_status(suggestion_id, status="rejected")
+        audit_event(
+            "voice_profile.suggestion.reject",
+            request=request,
+            user_id=ident.user.id,
+            meta={"profile_id": pid, "suggestion_id": suggestion_id},
+        )
+    return {
+        "ok": True,
+        "profile_id": pid,
+        "suggestion_id": suggestion_id,
+        "status": "accepted" if action == "use_existing" else "rejected",
+        "alias": alias,
+    }
+
+
+@router.post("/api/voices/{profile_id}/consent")
+async def update_voice_profile_consent(
+    request: Request,
+    profile_id: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    pid = str(profile_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="profile_id required")
+    prof = store.get_voice_profile(pid)
+    if prof is None:
+        raise HTTPException(status_code=404, detail="voice profile not found")
+    _require_voice_profile_access(prof, ident)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    try:
+        normalized = _apply_voice_profile_policy(existing=prof, payload=body)
+    except HTTPException as ex:
+        audit_event(
+            "voice_profile.policy_blocked",
+            request=request,
+            user_id=ident.user.id,
+            meta={
+                "profile_id": pid,
+                "reason": str(ex.detail),
+                "source_type": str(body.get("source_type") or ""),
+                "scope": str(body.get("scope") or ""),
+            },
+        )
+        raise
+    rec = store.upsert_voice_profile(
+        profile_id=pid,
+        display_name=str(prof.get("display_name") or ""),
+        created_by=str(prof.get("created_by") or ""),
+        scope=str(normalized["scope"]),
+        series_lock=str(normalized["series_lock"] or "") or None,
+        source_type=str(normalized["source_type"]),
+        export_allowed=bool(normalized["export_allowed"]),
+        share_allowed=bool(normalized["share_allowed"]),
+        reuse_allowed=1 if bool(normalized["reuse_allowed"]) else 0,
+        expires_at=prof.get("expires_at"),
+        embedding_vector=prof.get("embedding_vector"),
+        embedding_model_id=str(prof.get("embedding_model_id") or ""),
+        metadata_json=prof.get("metadata_json"),
+    )
+    audit_event(
+        "voice_profile.consent_updated",
+        request=request,
+        user_id=ident.user.id,
+        meta={"profile_id": pid, "source_type": normalized["source_type"]},
+    )
+    return {"ok": True, "profile_id": pid, "item": rec}

@@ -118,6 +118,21 @@ async def get_job_voice_refs(
                 cslug = str(rec.get("character_slug") or "").strip()
                 if sid and cslug:
                     speaker_map[sid] = cslug
+    # Track-clone voice profile mapping (best-effort; speaker_id -> profile_id).
+    voice_profile_map: dict[str, dict[str, Any]] = {}
+    try:
+        rt = dict(job.runtime or {})
+        vp = rt.get("voice_profile_map")
+        if isinstance(vp, dict):
+            for sid, rec in vp.items():
+                if not str(sid or "").strip():
+                    continue
+                if isinstance(rec, dict):
+                    voice_profile_map[str(sid)] = dict(rec)
+                else:
+                    voice_profile_map[str(sid)] = {"profile_id": str(rec)}
+    except Exception:
+        voice_profile_map = {}
 
     allow_audio = not _privacy_blocks_voice_refs(job)
     items_out: dict[str, Any] = {}
@@ -168,6 +183,26 @@ async def get_job_voice_refs(
                         used_ref_kind = "character"
                     else:
                         used_ref_kind = "speaker"
+        vp = voice_profile_map.get(safe_sid) if isinstance(voice_profile_map, dict) else None
+        vp_id = str((vp or {}).get("profile_id") or "").strip() if isinstance(vp, dict) else ""
+        vp_meta: dict[str, Any] | None = None
+        if vp_id:
+            try:
+                prof = store.get_voice_profile(vp_id)
+                if isinstance(prof, dict):
+                    vp_meta = {
+                        "id": str(prof.get("id") or ""),
+                        "source_type": str(prof.get("source_type") or "unknown"),
+                        "scope": str(prof.get("scope") or "private"),
+                        "series_lock": str(prof.get("series_lock") or ""),
+                        "share_allowed": bool(prof.get("share_allowed") or False),
+                        "export_allowed": bool(prof.get("export_allowed") or False),
+                        "reuse_allowed": bool(prof.get("reuse_allowed") or False),
+                        "display_name": str(prof.get("display_name") or ""),
+                    }
+            except Exception:
+                vp_meta = None
+
         items_out[safe_sid] = {
             "speaker_id": safe_sid,
             "duration_s": float(rec.get("duration_s") or 0.0),
@@ -178,6 +213,8 @@ async def get_job_voice_refs(
             "character_slug": character_slug or None,
             "character_ref_path": character_ref_path,
             "used_ref_kind": used_ref_kind,
+            "voice_profile_id": vp_id,
+            "voice_profile": vp_meta,
             "allow_audio": bool(allow_audio),
             "audio_url": (
                 f"/api/jobs/{id}/voice_refs/{safe_sid}/audio" if allow_audio else None
