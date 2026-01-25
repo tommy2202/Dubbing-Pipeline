@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import secrets
 import socket
 import tempfile
+import time
 from contextlib import contextmanager
 from importlib import import_module
 from pathlib import Path
@@ -12,9 +14,11 @@ from urllib.request import Request, urlopen
 
 from config.secret_config import SecretConfig
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.runtime.lifecycle import _ensure_writable_dir, _run_version
 from dubbing_pipeline.doctor.models import build_model_requirement_checks, selected_pipeline_mode
 from dubbing_pipeline.utils.doctor_types import CheckResult
+from dubbing_pipeline.utils.ffmpeg_safe import FFmpegError, run_ffmpeg
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.paths import default_paths
 
@@ -281,6 +285,264 @@ def check_writable_dirs() -> CheckResult:
     )
 
 
+def _random_secret(n: int = 24) -> str:
+    try:
+        return secrets.token_urlsafe(int(max(8, n)))
+    except Exception:
+        return secrets.token_urlsafe(12)
+
+
+def _ensure_tiny_mp4(path: Path) -> None:
+    s = get_settings()
+    ffmpeg_bin = str(getattr(s, "ffmpeg_bin", "ffmpeg") or "ffmpeg")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    argv = [
+        ffmpeg_bin,
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=320x180:rate=10",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=channel_layout=stereo:sample_rate=44100",
+        "-t",
+        "1.5",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-shortest",
+        str(path),
+    ]
+    run_ffmpeg(argv, timeout_s=30, retries=0, capture=True)
+
+
+def _login_admin(client, *, username: str, password: str) -> dict[str, str]:
+    r = client.post("/api/auth/login", json={"username": username, "password": password})
+    if r.status_code != 200:
+        raise RuntimeError(f"admin_login_failed status={r.status_code}")
+    data = r.json()
+    return {"Authorization": f"Bearer {data['access_token']}", "X-CSRF-Token": data["csrf_token"]}
+
+
+def _pick_output_path(files: dict) -> Path | None:
+    for key in ("mkv", "mp4", "mobile_mp4", "mobile_original_mp4", "lipsync_mp4"):
+        ent = files.get(key)
+        if isinstance(ent, dict) and ent.get("path"):
+            return Path(str(ent["path"]))
+    return None
+
+
+def check_full_job(*, timeout_s: int = 120) -> CheckResult:
+    """
+    Run a tiny low-mode job via the API and validate outputs.
+    """
+    try:
+        from fastapi.testclient import TestClient
+    except Exception as ex:
+        return CheckResult(
+            id="full_job",
+            name="Full mode tiny job",
+            status="FAIL",
+            details={"error": f"testclient_unavailable:{type(ex).__name__}"},
+            remediation=["python3 -m pip install fastapi"],
+        )
+
+    admin_user = "admin"
+    admin_pass = _random_secret(16)
+    with tempfile.TemporaryDirectory(prefix="dp_doctor_full_") as td:
+        root = Path(td).resolve()
+        in_dir = root / "Input"
+        out_dir = root / "Output"
+        logs_dir = root / "logs"
+        in_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        mp4_path = in_dir / "Doctor.mp4"
+        try:
+            _ensure_tiny_mp4(mp4_path)
+        except FFmpegError as ex:
+            return CheckResult(
+                id="full_job",
+                name="Full mode tiny job",
+                status="FAIL",
+                details={"error": "ffmpeg_failed", "message": str(ex)[:200]},
+                remediation=["ffmpeg -version", "sudo apt-get install -y ffmpeg"],
+            )
+        except Exception as ex:
+            return CheckResult(
+                id="full_job",
+                name="Full mode tiny job",
+                status="FAIL",
+                details={"error": "ffmpeg_failed", "message": str(ex)[:200]},
+                remediation=["ffmpeg -version", "sudo apt-get install -y ffmpeg"],
+            )
+
+        env = {
+            "APP_ROOT": str(root),
+            "INPUT_DIR": str(in_dir),
+            "DUBBING_OUTPUT_DIR": str(out_dir),
+            "DUBBING_LOG_DIR": str(logs_dir),
+            "ADMIN_USERNAME": admin_user,
+            "ADMIN_PASSWORD": admin_pass,
+            "COOKIE_SECURE": "0",
+            "STRICT_SECRETS": "0",
+            "OFFLINE_MODE": "1",
+            "ALLOW_EGRESS": "0",
+            "ALLOW_HF_EGRESS": "0",
+            "ENABLE_MODEL_DOWNLOADS": "0",
+            "ENABLE_PYANNOTE": "0",
+            "COQUI_TOS_AGREED": "0",
+            "TTS_PROVIDER": "espeak",
+            "JWT_SECRET": _random_secret(32),
+            "CSRF_SECRET": _random_secret(32),
+            "SESSION_SECRET": _random_secret(32),
+            "API_TOKEN": _random_secret(32),
+        }
+
+        with _temp_env(env):
+            get_settings.cache_clear()
+            lifecycle.end_draining()
+            try:
+                import importlib
+                import dubbing_pipeline.server as server
+
+                server = importlib.reload(server)
+                app = server.app
+            except Exception as ex:
+                return CheckResult(
+                    id="full_job",
+                    name="Full mode tiny job",
+                    status="FAIL",
+                    details={"error": f"app_import_failed:{type(ex).__name__}"},
+                    remediation=["python3 -m pip install -e ."],
+                )
+
+            with TestClient(app) as client:
+                try:
+                    headers = _login_admin(client, username=admin_user, password=admin_pass)
+                except Exception as ex:
+                    return CheckResult(
+                        id="full_job",
+                        name="Full mode tiny job",
+                        status="FAIL",
+                        details={"error": f"login_failed:{type(ex).__name__}"},
+                        remediation=["Check ADMIN_USERNAME/ADMIN_PASSWORD configuration."],
+                    )
+
+                resp = client.post(
+                    "/api/jobs",
+                    headers=headers,
+                    json={
+                        "video_path": str(mp4_path),
+                        "mode": "low",
+                        "device": "cpu",
+                        "series_title": "Doctor Series",
+                        "season_number": 1,
+                        "episode_number": 1,
+                    },
+                )
+                if resp.status_code != 200:
+                    return CheckResult(
+                        id="full_job",
+                        name="Full mode tiny job",
+                        status="FAIL",
+                        details={"error": "job_submit_failed", "status": int(resp.status_code)},
+                        remediation=["Check logs under Output/ and ensure Input/Output are writable."],
+                    )
+                job_id = resp.json().get("id")
+                if not job_id:
+                    return CheckResult(
+                        id="full_job",
+                        name="Full mode tiny job",
+                        status="FAIL",
+                        details={"error": "job_submit_no_id"},
+                        remediation=["Check server logs for job submission errors."],
+                    )
+
+                deadline = time.monotonic() + float(timeout_s)
+                job = None
+                state = ""
+                while time.monotonic() < deadline:
+                    jr = client.get(f"/api/jobs/{job_id}", headers=headers)
+                    if jr.status_code != 200:
+                        time.sleep(1.0)
+                        continue
+                    job = jr.json()
+                    state = str(job.get("state") or "")
+                    if state in {"DONE", "FAILED", "CANCELED"}:
+                        break
+                    time.sleep(1.0)
+
+                if not job or state != "DONE":
+                    return CheckResult(
+                        id="full_job",
+                        name="Full mode tiny job",
+                        status="FAIL",
+                        details={
+                            "error": "job_timeout_or_failed",
+                            "state": state or "unknown",
+                            "job_id": str(job_id),
+                        },
+                        remediation=[
+                            "python3 scripts/smoke_run.py",
+                            "Check logs under Output/ for pipeline errors.",
+                        ],
+                    )
+
+                if str(job.get("visibility") or "") != "private":
+                    return CheckResult(
+                        id="full_job",
+                        name="Full mode tiny job",
+                        status="FAIL",
+                        details={"error": "visibility_not_private", "visibility": job.get("visibility")},
+                        remediation=["Verify default visibility settings in the server config."],
+                    )
+
+                files = client.get(f"/api/jobs/{job_id}/files", headers=headers)
+                if files.status_code != 200:
+                    return CheckResult(
+                        id="full_job",
+                        name="Full mode tiny job",
+                        status="FAIL",
+                        details={"error": "files_endpoint_failed", "status": int(files.status_code)},
+                        remediation=["Check job output directories for artifacts."],
+                    )
+
+                data = files.json()
+                output_path = _pick_output_path(data)
+                if not output_path or not output_path.exists():
+                    return CheckResult(
+                        id="full_job",
+                        name="Full mode tiny job",
+                        status="FAIL",
+                        details={"error": "output_missing", "job_id": str(job_id)},
+                        remediation=["Check job output directories for artifacts."],
+                    )
+
+                manifest = output_path.parent / "manifest.json"
+                if not manifest.exists():
+                    return CheckResult(
+                        id="full_job",
+                        name="Full mode tiny job",
+                        status="FAIL",
+                        details={"error": "manifest_missing", "job_id": str(job_id)},
+                        remediation=["Check job output directories for manifest.json."],
+                    )
+
+        return CheckResult(
+            id="full_job",
+            name="Full mode tiny job",
+            status="PASS",
+            details={"job": "ok", "output": "present", "manifest": "present"},
+            remediation=[],
+        )
+
+
 def check_redis() -> CheckResult:
     s = get_settings()
     redis_url = str(getattr(s, "redis_url", "") or "").strip()
@@ -395,16 +657,30 @@ def check_turn() -> CheckResult:
     )
 
 
-def build_container_quick_checks(*, require_gpu: bool) -> list[Callable[[], CheckResult]]:
+def build_container_quick_checks(
+    *,
+    require_gpu: bool,
+    include_model_checks: bool = True,
+    include_secrets: bool = True,
+) -> list[Callable[[], CheckResult]]:
     mode = selected_pipeline_mode()
-    return [
+    checks: list[Callable[[], CheckResult]] = [
         check_import_smoke,
         check_ffmpeg,
         lambda: check_torch_cuda(require_gpu=require_gpu),
-        check_required_secrets,
-        check_writable_dirs,
-        *build_model_requirement_checks(mode=mode),
-        check_redis,
-        check_ntfy,
-        check_turn,
     ]
+    if include_secrets:
+        checks.append(check_required_secrets)
+    checks.append(check_writable_dirs)
+    if include_model_checks:
+        checks.extend(build_model_requirement_checks(mode=mode))
+    checks.extend([check_redis, check_ntfy, check_turn])
+    return checks
+
+
+def build_container_full_checks(*, require_gpu: bool) -> list[Callable[[], CheckResult]]:
+    checks = build_container_quick_checks(
+        require_gpu=require_gpu, include_model_checks=False, include_secrets=False
+    )
+    checks.append(check_full_job)
+    return checks

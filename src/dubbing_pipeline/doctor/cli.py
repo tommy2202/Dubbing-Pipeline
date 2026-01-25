@@ -4,7 +4,11 @@ from pathlib import Path
 
 import click
 
-from dubbing_pipeline.doctor.container import build_container_quick_checks, default_report_path
+from dubbing_pipeline.doctor.container import (
+    build_container_full_checks,
+    build_container_quick_checks,
+    default_report_path,
+)
 from dubbing_pipeline.utils.doctor_report import format_report_json, format_report_text
 from dubbing_pipeline.utils.doctor_runner import run_checks, write_report
 from dubbing_pipeline.utils.doctor_types import CheckResult
@@ -50,7 +54,7 @@ def doctor(write_report_path: Path | None, mode: str, json_flag: bool, require_g
 
     mode = str(mode or "quick").strip().lower()
     if mode == "full":
-        checks = [_full_not_implemented]
+        checks = build_container_full_checks(require_gpu=require_gpu)
     else:
         checks = build_container_quick_checks(require_gpu=require_gpu)
 
