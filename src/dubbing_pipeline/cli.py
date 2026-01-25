@@ -3242,6 +3242,7 @@ def run(
 
 # Public entrypoint (project.scripts -> dubbing_pipeline.cli:cli)
 from dubbing_pipeline.character.cli import character as character  # noqa: E402
+from dubbing_pipeline.doctor.cli import doctor as doctor  # noqa: E402
 from dubbing_pipeline.overrides.cli import overrides as overrides  # noqa: E402
 from dubbing_pipeline.plugins.lipsync.cli import lipsync as lipsync  # noqa: E402
 from dubbing_pipeline.qa.cli import qa as qa  # noqa: E402
@@ -3256,6 +3257,7 @@ cli.add_command(overrides)
 cli.add_command(voice)
 cli.add_command(lipsync)
 cli.add_command(character)
+cli.add_command(doctor)
 
 
 if __name__ == "__main__":  # pragma: no cover
