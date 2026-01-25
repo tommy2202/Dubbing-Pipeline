@@ -1,0 +1,209 @@
+{% extends "_base.html" %}
+
+{% block title %}Admin Pronunciation • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Pronunciation Dictionary</h1>
+    <p class="mt-1 text-sm text-slate-400">Term mappings to IPA/phoneme/spelling hints.</p>
+  </div>
+  <button class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm" onclick="loadPron()">Refresh</button>
+</div>
+
+<div class="mt-4 grid gap-4 lg:grid-cols-3">
+  <div class="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <div class="flex flex-wrap items-center gap-3">
+      <div>
+        <label class="block text-xs text-slate-500" for="prLang">Language</label>
+        <input id="prLang" class="mt-1 w-32 rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm" placeholder="en" />
+      </div>
+      <button class="mt-5 rounded bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm" onclick="loadPron()">Filter</button>
+      <div id="pronMsg" class="text-xs text-slate-400"></div>
+    </div>
+    <div class="mt-4 space-y-2 text-sm" id="pronList"></div>
+  </div>
+
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <div class="text-sm text-slate-300">Create / Edit</div>
+    <div class="mt-3 space-y-3 text-sm">
+      <div>
+        <label class="block text-xs text-slate-500" for="prId">ID</label>
+        <input id="prId" class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="(auto)" />
+      </div>
+      <div class="grid gap-2 grid-cols-2">
+        <div>
+          <label class="block text-xs text-slate-500" for="prLang2">Language</label>
+          <input id="prLang2" class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="en" />
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500" for="prTerm">Term</label>
+          <input id="prTerm" class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="Rimuru" />
+        </div>
+      </div>
+      <div class="grid gap-2 grid-cols-2">
+        <div>
+          <label class="block text-xs text-slate-500" for="prFormat">Format</label>
+          <select id="prFormat" class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2">
+            <option value="ipa">IPA</option>
+            <option value="phoneme">Phoneme</option>
+            <option value="spelling">Spelling</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500" for="prEngine">Engine (optional)</label>
+          <input id="prEngine" class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="xtts" />
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500" for="prValue">Value</label>
+        <input id="prValue" class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="ri-mu-ru" />
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500" for="prExample">Example (optional)</label>
+        <input id="prExample" class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2" placeholder="Rimuru Tempest" />
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button class="rounded bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm" onclick="savePron()">Save</button>
+        <button class="rounded bg-slate-800 hover:bg-slate-700 px-4 py-2 text-sm" onclick="clearPronForm()">Clear</button>
+        <div id="pronFormMsg" class="text-xs text-slate-400"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let _pron = [];
+
+  function esc(s) {
+    return String(s || "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+  }
+
+  function _valueFromEntry(it) {
+    if (it.ipa_or_phoneme && typeof it.ipa_or_phoneme === "object") {
+      return { format: it.ipa_or_phoneme.format || "ipa", value: it.ipa_or_phoneme.value || "", engine: it.ipa_or_phoneme.engine || "" };
+    }
+    return { format: "ipa", value: String(it.ipa_or_phoneme || ""), engine: "" };
+  }
+
+  function renderPronItem(it) {
+    const id = esc(it.id);
+    const lang = esc(it.lang);
+    const term = esc(it.term);
+    const ex = esc(it.example || "");
+    const v = _valueFromEntry(it);
+    return `
+      <div class="rounded-lg border border-slate-800 bg-slate-950/20 p-3">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="text-slate-200 font-medium truncate">${term}</div>
+            <div class="mt-1 text-xs text-slate-500">
+              <span>${lang}</span>
+              <span class="ml-2">format:</span> <span>${esc(v.format)}</span>
+              ${v.engine ? `<span class="ml-2">engine:</span> <span>${esc(v.engine)}</span>` : ``}
+            </div>
+            <div class="mt-1 text-xs text-slate-400">${esc(v.value)}</div>
+            ${ex ? `<div class="mt-1 text-xs text-slate-500">example: ${ex}</div>` : ``}
+          </div>
+          <div class="shrink-0 flex items-center gap-2">
+            <button class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs" onclick="editPron('${id}')">Edit</button>
+            <button class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-xs text-red-100" onclick="deletePron('${id}')">Delete</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  async function loadPron() {
+    const csrf = document.getElementById("csrf")?.value || "";
+    const lang = document.getElementById("prLang").value.trim();
+    const qs = new URLSearchParams();
+    if (lang) qs.set("lang", lang);
+    const r = await fetch("/api/admin/pronunciation?" + qs.toString(), { headers: { "X-CSRF-Token": csrf } });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      document.getElementById("pronMsg").textContent = data.detail || ("Load failed (" + r.status + ")");
+      return;
+    }
+    _pron = Array.isArray(data.items) ? data.items : [];
+    document.getElementById("pronMsg").textContent = `${_pron.length} terms`;
+    document.getElementById("pronList").innerHTML = _pron.map(renderPronItem).join("");
+  }
+
+  function clearPronForm() {
+    document.getElementById("prId").value = "";
+    document.getElementById("prLang2").value = "";
+    document.getElementById("prTerm").value = "";
+    document.getElementById("prFormat").value = "ipa";
+    document.getElementById("prEngine").value = "";
+    document.getElementById("prValue").value = "";
+    document.getElementById("prExample").value = "";
+    document.getElementById("pronFormMsg").textContent = "";
+  }
+
+  function editPron(id) {
+    const it = _pron.find(x => String(x.id) === String(id));
+    if (!it) return;
+    const v = _valueFromEntry(it);
+    document.getElementById("prId").value = it.id || "";
+    document.getElementById("prLang2").value = it.lang || "";
+    document.getElementById("prTerm").value = it.term || "";
+    document.getElementById("prFormat").value = v.format || "ipa";
+    document.getElementById("prEngine").value = v.engine || "";
+    document.getElementById("prValue").value = v.value || "";
+    document.getElementById("prExample").value = it.example || "";
+    document.getElementById("pronFormMsg").textContent = "Editing " + String(it.id || "");
+  }
+
+  async function savePron() {
+    const csrf = document.getElementById("csrf")?.value || "";
+    const id = document.getElementById("prId").value.trim();
+    const lang = document.getElementById("prLang2").value.trim().toLowerCase();
+    const term = document.getElementById("prTerm").value.trim();
+    const format = document.getElementById("prFormat").value.trim();
+    const engine = document.getElementById("prEngine").value.trim();
+    const value = document.getElementById("prValue").value.trim();
+    const example = document.getElementById("prExample").value.trim();
+    if (!lang || !term || !value) {
+      document.getElementById("pronFormMsg").textContent = "lang, term, and value required";
+      return;
+    }
+    const payload = {
+      id: id || undefined,
+      lang,
+      term,
+      example,
+      ipa_or_phoneme: { format, value, engine: engine || undefined },
+    };
+    const url = id ? ("/api/admin/pronunciation/" + encodeURIComponent(id)) : "/api/admin/pronunciation";
+    const method = id ? "PUT" : "POST";
+    const r = await fetch(url, {
+      method,
+      headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      document.getElementById("pronFormMsg").textContent = data.detail || ("Save failed (" + r.status + ")");
+      return;
+    }
+    document.getElementById("pronFormMsg").textContent = "Saved";
+    clearPronForm();
+    await loadPron();
+  }
+
+  async function deletePron(id) {
+    if (!confirm("Delete pronunciation " + id + "?")) return;
+    const csrf = document.getElementById("csrf")?.value || "";
+    const r = await fetch("/api/admin/pronunciation/" + encodeURIComponent(id), { method: "DELETE", headers: { "X-CSRF-Token": csrf } });
+    if (!r.ok) {
+      window.showToast("Delete failed", "error");
+      return;
+    }
+    window.showToast("Deleted", "success");
+    await loadPron();
+  }
+
+  loadPron();
+</script>
+{% endblock %}

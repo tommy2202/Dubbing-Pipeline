@@ -217,6 +217,8 @@ def run(
     max_stretch: float = 0.15,
     job_id: str | None = None,
     audio_hash: str | None = None,
+    pronunciation_dict: list[dict] | None = None,
+    pronunciation_overrides: dict[int, list[dict]] | None = None,
     **_,
 ) -> Path:
     """
@@ -458,6 +460,38 @@ def run(
     _saved_character_refs: set[tuple[str, str]] = set()
 
     voice_db_embeddings_dir = (settings.voice_db_path.parent / "embeddings").resolve()
+
+    # Pronunciation dictionary (global + per-segment overrides).
+    pron_global: list[Any] = []
+    pron_overrides: dict[int, list[Any]] = {}
+    try:
+        from dubbing_pipeline.text.pronunciation import normalize_pronunciations
+
+        if isinstance(pronunciation_dict, list):
+            pron_global = normalize_pronunciations(pronunciation_dict)
+        if isinstance(pronunciation_overrides, dict):
+            for k, v in pronunciation_overrides.items():
+                try:
+                    sid = int(k)
+                except Exception:
+                    continue
+                entries: list[dict[str, Any]] = []
+                if isinstance(v, list):
+                    entries = [x for x in v if isinstance(x, dict)]
+                elif isinstance(v, dict):
+                    if isinstance(v.get("entries"), list):
+                        entries = [x for x in v.get("entries") if isinstance(x, dict)]
+                    else:
+                        entries = [
+                            {"term": str(t), "ipa_or_phoneme": v[t]}
+                            for t in v.keys()
+                            if str(t).strip()
+                        ]
+                if entries:
+                    pron_overrides[int(sid)] = normalize_pronunciations(entries)
+    except Exception:
+        pron_global = []
+        pron_overrides = {}
 
     def _rep(speaker_id: str) -> dict[str, Any]:
         sid = str(speaker_id or "default")
@@ -704,6 +738,30 @@ def run(
             elif pause_style == "dramatic":
                 mul = 1.5
             pause_tail_ms = int(max(0, min(800, int(float(pause_tail_ms) * float(mul)))))
+        # Apply pronunciation dictionary just before synthesis (text hints only).
+        tts_text = text
+        if text and (pron_global or pron_overrides):
+            try:
+                from dubbing_pipeline.text.pronunciation import apply_pronunciation
+
+                entries = list(pron_global)
+                entries.extend(pron_overrides.get(int(i + 1), []))
+                if entries:
+                    tts_text, warnings = apply_pronunciation(
+                        tts_text, entries, provider=str(eff_tts_provider)
+                    )
+                    if tts_text != text:
+                        line["text_pre_pron"] = text
+                        line["text_post_pron"] = tts_text
+                    if warnings:
+                        logger.warning(
+                            "pronunciation_fallback",
+                            segment_id=int(i + 1),
+                            provider=str(eff_tts_provider),
+                            warnings=int(len(warnings)),
+                        )
+            except Exception:
+                tts_text = text
         if not text:
             # keep timing, but skip synthesis (silence clip)
             clip = clips_dir / f"{i:04d}_{speaker_id}.wav"
@@ -949,7 +1007,7 @@ def run(
                 try:
                     _retry_wrap(
                         "xtts_clone",
-                        lambda text=text, speaker_wav=speaker_wav, raw_clip=raw_clip: engine.synthesize(
+                        lambda text=tts_text, speaker_wav=speaker_wav, raw_clip=raw_clip: engine.synthesize(
                             text,
                             language=eff_tts_lang,
                             speaker_wav=speaker_wav,
@@ -993,7 +1051,7 @@ def run(
                 try:
                     _retry_wrap(
                         "xtts_preset",
-                        lambda text=text, preset=preset, raw_clip=raw_clip: engine.synthesize(
+                        lambda text=tts_text, preset=preset, raw_clip=raw_clip: engine.synthesize(
                             text,
                             language=eff_tts_lang,
                             speaker_id=preset,
@@ -1033,7 +1091,7 @@ def run(
                 dev = pick_device("auto")
                 tts_basic = ModelManager.instance().get_tts(basic_model, dev)
 
-                def _basic(tts_basic=tts_basic, text=text, raw_clip=raw_clip):
+                def _basic(tts_basic=tts_basic, text=tts_text, raw_clip=raw_clip):
                     try:
                         return tts_basic.tts_to_file(text=text, file_path=str(raw_clip))
                     except TypeError:
@@ -1051,7 +1109,7 @@ def run(
         if not synthesized and eff_tts_provider in {"auto", "xtts", "basic", "espeak"}:
             try:
                 _retry_wrap(
-                    "espeak", lambda text=text, raw_clip=raw_clip: _espeak_fallback(text, raw_clip)
+                    "espeak", lambda text=tts_text, raw_clip=raw_clip: _espeak_fallback(text, raw_clip)
                 )
                 synthesized = True
                 provider_used = "espeak"
@@ -1141,7 +1199,7 @@ def run(
                             # Prefer preset path for speed-control re-synth (clone w/ speed is model-dependent)
                             _retry_wrap(
                                 "xtts_speed",
-                                lambda text=text, raw2=raw2, speed=speed: engine.synthesize(
+                                lambda text=tts_text, raw2=raw2, speed=speed: engine.synthesize(
                                     text,
                                     language=eff_tts_lang,
                                     speaker_id=eff_tts_speaker,
@@ -1184,10 +1242,22 @@ def run(
                             actions.append(
                                 {"kind": "shorten_resynth", "before": text, "after": shorter}
                             )
+                            shorter_tts = shorter
+                            try:
+                                from dubbing_pipeline.text.pronunciation import apply_pronunciation
+
+                                entries = list(pron_global)
+                                entries.extend(pron_overrides.get(int(i + 1), []))
+                                if entries:
+                                    shorter_tts, _warn = apply_pronunciation(
+                                        shorter_tts, entries, provider=str(eff_tts_provider)
+                                    )
+                            except Exception:
+                                shorter_tts = shorter
                             raw3 = raw_clip.with_suffix(".short.raw.wav")
                             _retry_wrap(
                                 "xtts_short",
-                                lambda shorter=shorter, raw3=raw3: engine.synthesize(
+                                lambda shorter=shorter_tts, raw3=raw3: engine.synthesize(
                                     shorter,
                                     language=eff_tts_lang,
                                     speaker_id=eff_tts_speaker,

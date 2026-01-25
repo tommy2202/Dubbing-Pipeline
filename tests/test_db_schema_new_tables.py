@@ -105,6 +105,7 @@ def test_new_schema_tables_exist(tmp_path: Path) -> None:
             "id",
             "name",
             "language_pair",
+            "series_slug",
             "priority",
             "enabled",
             "rules_json",
@@ -224,10 +225,10 @@ def test_new_tables_crud(tmp_path: Path) -> None:
         con.execute(
             """
             INSERT INTO glossaries (
-              id, name, language_pair, priority, enabled, rules_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+              id, name, language_pair, series_slug, priority, enabled, rules_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
-            ("gl_1", "Main", "en->ja", 1, 1, '{"map":{"A":"B"}}', 20.0, 21.0),
+            ("gl_1", "Main", "en->ja", None, 1, 1, '{"map":{"A":"B"}}', 20.0, 21.0),
         )
 
         con.execute(

@@ -333,6 +333,205 @@ async def admin_job_visibility(
     return {"ok": True, "job_id": str(id), "visibility": vis}
 
 
+@router.get("/glossaries")
+async def admin_list_glossaries(
+    request: Request,
+    language_pair: str | None = None,
+    series_slug: str | None = None,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    store = _store(request)
+    items = store.list_glossaries(
+        language_pair=str(language_pair or "").strip().lower() or None,
+        series_slug=str(series_slug or "").strip() or None,
+        enabled_only=False,
+    )
+    return {"ok": True, "items": items}
+
+
+@router.post("/glossaries")
+async def admin_create_glossary(
+    request: Request,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    gid = str(body.get("id") or "").strip() or f"gloss_{secrets.token_hex(8)}"
+    name = str(body.get("name") or "").strip()
+    language_pair = str(body.get("language_pair") or "").strip().lower()
+    if not name or not language_pair or "->" not in language_pair:
+        raise HTTPException(status_code=400, detail="name and language_pair are required")
+    rules = body.get("rules_json") if "rules_json" in body else body.get("rules")
+    if rules is None:
+        raise HTTPException(status_code=400, detail="rules_json is required")
+    series_slug = str(body.get("series_slug") or "").strip() or None
+    priority = int(body.get("priority") or 0)
+    enabled = bool(body.get("enabled", True))
+    store = _store(request)
+    rec = store.upsert_glossary(
+        glossary_id=gid,
+        name=name,
+        language_pair=language_pair,
+        series_slug=series_slug,
+        priority=priority,
+        enabled=enabled,
+        rules_json=rules,
+    )
+    audit.emit(
+        "admin.glossary.create",
+        user_id=str(ident.user.id),
+        meta={"glossary_id": gid, "language_pair": language_pair, "series_slug": series_slug},
+    )
+    return {"ok": True, "item": rec}
+
+
+@router.put("/glossaries/{id}")
+async def admin_update_glossary(
+    request: Request,
+    id: str,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    name = str(body.get("name") or "").strip()
+    language_pair = str(body.get("language_pair") or "").strip().lower()
+    if not name or not language_pair or "->" not in language_pair:
+        raise HTTPException(status_code=400, detail="name and language_pair are required")
+    rules = body.get("rules_json") if "rules_json" in body else body.get("rules")
+    if rules is None:
+        raise HTTPException(status_code=400, detail="rules_json is required")
+    series_slug = str(body.get("series_slug") or "").strip() or None
+    priority = int(body.get("priority") or 0)
+    enabled = bool(body.get("enabled", True))
+    store = _store(request)
+    rec = store.upsert_glossary(
+        glossary_id=str(id),
+        name=name,
+        language_pair=language_pair,
+        series_slug=series_slug,
+        priority=priority,
+        enabled=enabled,
+        rules_json=rules,
+    )
+    audit.emit(
+        "admin.glossary.update",
+        user_id=str(ident.user.id),
+        meta={"glossary_id": str(id), "language_pair": language_pair, "series_slug": series_slug},
+    )
+    return {"ok": True, "item": rec}
+
+
+@router.delete("/glossaries/{id}")
+async def admin_delete_glossary(
+    request: Request,
+    id: str,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    store = _store(request)
+    ok = bool(store.delete_glossary(str(id)))
+    audit.emit(
+        "admin.glossary.delete",
+        user_id=str(ident.user.id),
+        meta={"glossary_id": str(id)},
+    )
+    return {"ok": ok}
+
+
+@router.get("/pronunciation")
+async def admin_list_pronunciation(
+    request: Request,
+    lang: str | None = None,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    store = _store(request)
+    items = store.list_pronunciations(lang=str(lang or "").strip().lower() or None)
+    return {"ok": True, "items": items}
+
+
+@router.post("/pronunciation")
+async def admin_create_pronunciation(
+    request: Request,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    entry_id = str(body.get("id") or "").strip() or f"pron_{secrets.token_hex(8)}"
+    lang = str(body.get("lang") or "").strip().lower()
+    term = str(body.get("term") or "").strip()
+    ipa = body.get("ipa_or_phoneme")
+    if ipa is None:
+        ipa = {"format": str(body.get("format") or "ipa"), "value": str(body.get("value") or "")}
+    if not lang or not term:
+        raise HTTPException(status_code=400, detail="lang and term are required")
+    store = _store(request)
+    rec = store.upsert_pronunciation(
+        entry_id=entry_id,
+        lang=lang,
+        term=term,
+        ipa_or_phoneme=ipa,
+        example=str(body.get("example") or ""),
+        created_by=str(ident.user.id),
+    )
+    audit.emit(
+        "admin.pronunciation.create",
+        user_id=str(ident.user.id),
+        meta={"entry_id": entry_id, "lang": lang},
+    )
+    return {"ok": True, "item": rec}
+
+
+@router.put("/pronunciation/{id}")
+async def admin_update_pronunciation(
+    request: Request,
+    id: str,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    lang = str(body.get("lang") or "").strip().lower()
+    term = str(body.get("term") or "").strip()
+    ipa = body.get("ipa_or_phoneme")
+    if ipa is None:
+        ipa = {"format": str(body.get("format") or "ipa"), "value": str(body.get("value") or "")}
+    if not lang or not term:
+        raise HTTPException(status_code=400, detail="lang and term are required")
+    store = _store(request)
+    rec = store.upsert_pronunciation(
+        entry_id=str(id),
+        lang=lang,
+        term=term,
+        ipa_or_phoneme=ipa,
+        example=str(body.get("example") or ""),
+        created_by=str(ident.user.id),
+    )
+    audit.emit(
+        "admin.pronunciation.update",
+        user_id=str(ident.user.id),
+        meta={"entry_id": str(id), "lang": lang},
+    )
+    return {"ok": True, "item": rec}
+
+
+@router.delete("/pronunciation/{id}")
+async def admin_delete_pronunciation(
+    request: Request,
+    id: str,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict:
+    store = _store(request)
+    ok = bool(store.delete_pronunciation(str(id)))
+    audit.emit(
+        "admin.pronunciation.delete",
+        user_id=str(ident.user.id),
+        meta={"entry_id": str(id)},
+    )
+    return {"ok": ok}
+
+
 @router.get("/invites")
 async def admin_list_invites(
     request: Request,

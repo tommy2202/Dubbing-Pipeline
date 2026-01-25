@@ -408,6 +408,24 @@ def run_streaming(
                                             sort_keys=True,
                                         )
                                     )
+                # Deterministic glossary application (TSV fallback).
+                with suppress(Exception):
+                    from dubbing_pipeline.text.glossary import (
+                        apply_glossary_to_segments,
+                        parse_tsv_glossary,
+                    )
+
+                    rules = []
+                    if glossary:
+                        p = Path(str(glossary))
+                        if p.exists():
+                            rules.extend(
+                                parse_tsv_glossary(
+                                    p.read_text(encoding="utf-8").splitlines(), base_priority=0
+                                )
+                            )
+                    if rules:
+                        translated = apply_glossary_to_segments(translated, rules)
 
                 # Tier-Next C: per-run PG mode (opt-in; OFF by default), before timing-fit/TTS/subs.
                 if str(pg).lower() != "off":

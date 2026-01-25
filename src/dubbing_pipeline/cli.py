@@ -2486,6 +2486,26 @@ def run(
                 except Exception:
                     logger.exception("style_guide_failed_continue")
 
+            # Deterministic glossary application (TSV fallback).
+            try:
+                from dubbing_pipeline.text.glossary import (
+                    apply_glossary_to_segments,
+                    parse_tsv_glossary,
+                )
+
+                rules = []
+                if glossary:
+                    p = Path(str(glossary))
+                    if p.exists():
+                        rules.extend(
+                            parse_tsv_glossary(p.read_text(encoding="utf-8").splitlines(), base_priority=0)
+                        )
+                if rules:
+                    translated_segments = apply_glossary_to_segments(translated_segments, rules)
+                    logger.info("[dp] glossary applied rules=%s", len(rules))
+            except Exception:
+                logger.warning("[dp] glossary apply failed; continuing")
+
             # Snapshot for subtitle variants (literal translation, before PG + timing-fit).
             translated_segments_literal = [
                 dict(s) for s in translated_segments if isinstance(s, dict)

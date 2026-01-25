@@ -536,6 +536,7 @@ class JobStore:
                       id TEXT PRIMARY KEY,
                       name TEXT NOT NULL,
                       language_pair TEXT NOT NULL,
+                      series_slug TEXT,
                       priority INTEGER DEFAULT 0,
                       enabled INTEGER DEFAULT 1,
                       rules_json TEXT NOT NULL,
@@ -554,6 +555,7 @@ class JobStore:
                     "id": "TEXT",
                     "name": "TEXT",
                     "language_pair": "TEXT",
+                    "series_slug": "TEXT",
                     "priority": "INTEGER DEFAULT 0",
                     "enabled": "INTEGER DEFAULT 1",
                     "rules_json": "TEXT",
@@ -565,6 +567,12 @@ class JobStore:
                         continue
                     with suppress(Exception):
                         con.execute(f"ALTER TABLE glossaries ADD COLUMN {name} {typ};")
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_glossaries_lang_series ON glossaries(language_pair, series_slug, priority DESC);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_glossaries_enabled ON glossaries(enabled);"
+                )
                 con.commit()
             finally:
                 con.close()
@@ -1422,6 +1430,280 @@ class JobStore:
             finally:
                 con.close()
         return rec
+
+    # --- deterministic glossaries ---
+    def list_glossaries(
+        self,
+        *,
+        language_pair: str | None = None,
+        series_slug: str | None = None,
+        enabled_only: bool = True,
+    ) -> list[dict[str, Any]]:
+        lp = str(language_pair or "").strip().lower()
+        series = str(series_slug or "").strip()
+        con = self._conn()
+        try:
+            where = []
+            params: list[Any] = []
+            if lp:
+                where.append("language_pair = ?")
+                params.append(lp)
+            if series:
+                where.append("series_slug = ?")
+                params.append(series)
+            if enabled_only:
+                where.append("enabled = 1")
+            clause = ("WHERE " + " AND ".join(where)) if where else ""
+            rows = con.execute(
+                f"""
+                SELECT id, name, language_pair, series_slug, priority, enabled, rules_json, created_at, updated_at
+                FROM glossaries
+                {clause}
+                ORDER BY priority DESC, name ASC, id ASC;
+                """,
+                tuple(params),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                d = {k: r[k] for k in r.keys()}
+                with suppress(Exception):
+                    d["priority"] = int(d.get("priority") or 0)
+                with suppress(Exception):
+                    d["enabled"] = bool(int(d.get("enabled") or 0))
+                with suppress(Exception):
+                    d["created_at"] = float(d.get("created_at") or 0)
+                with suppress(Exception):
+                    d["updated_at"] = float(d.get("updated_at") or 0)
+                if isinstance(d.get("rules_json"), str):
+                    try:
+                        d["rules_json"] = json.loads(d["rules_json"])
+                    except Exception:
+                        pass
+                out.append(d)
+            return out
+        finally:
+            con.close()
+
+    def get_glossary(self, glossary_id: str) -> dict[str, Any] | None:
+        gid = str(glossary_id or "").strip()
+        if not gid:
+            return None
+        con = self._conn()
+        try:
+            row = con.execute(
+                """
+                SELECT id, name, language_pair, series_slug, priority, enabled, rules_json, created_at, updated_at
+                FROM glossaries
+                WHERE id = ?
+                LIMIT 1;
+                """,
+                (gid,),
+            ).fetchone()
+            if row is None:
+                return None
+            d = {k: row[k] for k in row.keys()}
+            with suppress(Exception):
+                d["priority"] = int(d.get("priority") or 0)
+            with suppress(Exception):
+                d["enabled"] = bool(int(d.get("enabled") or 0))
+            if isinstance(d.get("rules_json"), str):
+                with suppress(Exception):
+                    d["rules_json"] = json.loads(d["rules_json"])
+            return d
+        finally:
+            con.close()
+
+    def upsert_glossary(
+        self,
+        *,
+        glossary_id: str,
+        name: str,
+        language_pair: str,
+        rules_json: dict[str, Any] | str,
+        series_slug: str | None = None,
+        priority: int = 0,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        gid = str(glossary_id or "").strip()
+        if not gid:
+            raise ValueError("glossary_id is required")
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("name is required")
+        lp = str(language_pair or "").strip().lower()
+        if not lp or "->" not in lp:
+            raise ValueError("language_pair must be like 'ja->en'")
+        series = str(series_slug or "").strip() or None
+        now = float(time.time())
+        if isinstance(rules_json, str):
+            rules_raw = rules_json
+        else:
+            rules_raw = json.dumps(rules_json, sort_keys=True)
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO glossaries (
+                      id, name, language_pair, series_slug, priority, enabled, rules_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      name=excluded.name,
+                      language_pair=excluded.language_pair,
+                      series_slug=excluded.series_slug,
+                      priority=excluded.priority,
+                      enabled=excluded.enabled,
+                      rules_json=excluded.rules_json,
+                      updated_at=excluded.updated_at;
+                    """,
+                    (
+                        gid,
+                        name,
+                        lp,
+                        series,
+                        int(priority),
+                        1 if bool(enabled) else 0,
+                        rules_raw,
+                        now,
+                        now,
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
+        return {
+            "id": gid,
+            "name": name,
+            "language_pair": lp,
+            "series_slug": series,
+            "priority": int(priority),
+            "enabled": bool(enabled),
+            "rules_json": json.loads(rules_raw) if isinstance(rules_raw, str) else rules_raw,
+        }
+
+    def delete_glossary(self, glossary_id: str) -> bool:
+        gid = str(glossary_id or "").strip()
+        if not gid:
+            return False
+        with self._write_lock():
+            con = self._conn()
+            try:
+                cur = con.execute("DELETE FROM glossaries WHERE id = ?;", (gid,))
+                con.commit()
+                return bool(cur.rowcount)
+            finally:
+                con.close()
+
+    # --- pronunciation dictionary ---
+    def list_pronunciations(self, *, lang: str | None = None, term: str | None = None) -> list[dict]:
+        lang_q = str(lang or "").strip().lower()
+        term_q = str(term or "").strip()
+        con = self._conn()
+        try:
+            where = []
+            params: list[Any] = []
+            if lang_q:
+                where.append("lang = ?")
+                params.append(lang_q)
+            if term_q:
+                where.append("term = ?")
+                params.append(term_q)
+            clause = ("WHERE " + " AND ".join(where)) if where else ""
+            rows = con.execute(
+                f"""
+                SELECT id, lang, term, ipa_or_phoneme, example, created_by, created_at
+                FROM pronunciation_dict
+                {clause}
+                ORDER BY term ASC, id ASC;
+                """,
+                tuple(params),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                d = {k: r[k] for k in r.keys()}
+                with suppress(Exception):
+                    d["created_at"] = float(d.get("created_at") or 0)
+                if isinstance(d.get("ipa_or_phoneme"), str):
+                    with suppress(Exception):
+                        d["ipa_or_phoneme"] = json.loads(d["ipa_or_phoneme"])
+                out.append(d)
+            return out
+        finally:
+            con.close()
+
+    def upsert_pronunciation(
+        self,
+        *,
+        entry_id: str,
+        lang: str,
+        term: str,
+        ipa_or_phoneme: dict[str, Any] | str,
+        example: str | None = None,
+        created_by: str | None = None,
+    ) -> dict[str, Any]:
+        eid = str(entry_id or "").strip()
+        if not eid:
+            raise ValueError("entry_id is required")
+        lang_n = str(lang or "").strip().lower()
+        term_n = str(term or "").strip()
+        if not lang_n or not term_n:
+            raise ValueError("lang and term are required")
+        raw = ipa_or_phoneme if isinstance(ipa_or_phoneme, str) else json.dumps(
+            ipa_or_phoneme, sort_keys=True
+        )
+        now = float(time.time())
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO pronunciation_dict (
+                      id, lang, term, ipa_or_phoneme, example, created_by, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      lang=excluded.lang,
+                      term=excluded.term,
+                      ipa_or_phoneme=excluded.ipa_or_phoneme,
+                      example=excluded.example,
+                      created_by=pronunciation_dict.created_by,
+                      created_at=pronunciation_dict.created_at;
+                    """,
+                    (
+                        eid,
+                        lang_n,
+                        term_n,
+                        raw,
+                        str(example or "") if example is not None else None,
+                        str(created_by or ""),
+                        now,
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
+        out: dict[str, Any] = {
+            "id": eid,
+            "lang": lang_n,
+            "term": term_n,
+            "ipa_or_phoneme": ipa_or_phoneme,
+            "example": str(example or "") if example is not None else None,
+            "created_by": str(created_by or ""),
+            "created_at": now,
+        }
+        return out
+
+    def delete_pronunciation(self, entry_id: str) -> bool:
+        eid = str(entry_id or "").strip()
+        if not eid:
+            return False
+        with self._write_lock():
+            con = self._conn()
+            try:
+                cur = con.execute("DELETE FROM pronunciation_dict WHERE id = ?;", (eid,))
+                con.commit()
+                return bool(cur.rowcount)
+            finally:
+                con.close()
 
     def _maybe_upsert_library_from_raw(self, job_id: str, raw: dict[str, Any]) -> None:
         """

@@ -2365,6 +2365,47 @@ class JobQueue:
                             job_id, f"[{now_utc()}] style_guide failed; continuing"
                         )
 
+                    # Deterministic glossary application (DB + optional TSV fallback).
+                    try:
+                        from dubbing_pipeline.text.glossary import (
+                            apply_glossary_to_segments,
+                            build_rules_from_glossaries,
+                            normalize_language_pair,
+                            parse_tsv_glossary,
+                        )
+
+                        curj = self.store.get(job_id)
+                        rt2 = dict((curj.runtime or {}) if curj else runtime)
+                        series_slug = str(
+                            getattr(job, "series_slug", "") or rt2.get("series_slug") or ""
+                        ).strip()
+                        lp = normalize_language_pair(job.src_lang, job.tgt_lang)
+                        all_glossaries = self.store.list_glossaries(
+                            language_pair=lp, series_slug=None, enabled_only=True
+                        )
+                        series_items = [
+                            g
+                            for g in all_glossaries
+                            if series_slug and str(g.get("series_slug") or "") == series_slug
+                        ]
+                        generic = [g for g in all_glossaries if not str(g.get("series_slug") or "")]
+                        glossaries = series_items + generic if series_slug else generic
+                        rules = build_rules_from_glossaries(glossaries)
+                        if settings.glossary_path:
+                            p = Path(str(settings.glossary_path))
+                            if p.exists():
+                                rules.extend(parse_tsv_glossary(p.read_text(encoding="utf-8").splitlines(), base_priority=-100))
+                        if rules:
+                            translated_segments = apply_glossary_to_segments(translated_segments, rules)
+                            self.store.append_log(
+                                job_id,
+                                f"[{now_utc()}] glossary applied rules={len(rules)}",
+                            )
+                    except Exception:
+                        self.store.append_log(
+                            job_id, f"[{now_utc()}] glossary apply failed; continuing"
+                        )
+
                     # Snapshot for subtitle variants (literal translation, before PG + timing-fit).
                     translated_segments_literal = [
                         dict(s) for s in translated_segments if isinstance(s, dict)
@@ -2728,6 +2769,44 @@ class JobQueue:
                         except Exception:
                             pass
                         review_state = base_dir / "review" / "state.json"
+                        # Pronunciation dictionary + per-segment overrides (best-effort).
+                        pron_dict = []
+                        pron_overrides: dict[int, list[dict]] = {}
+                        try:
+                            pron_dict = self.store.list_pronunciations(
+                                lang=str(job.tgt_lang or "").strip().lower()
+                            )
+                        except Exception:
+                            pron_dict = []
+                        try:
+                            rows = self.store.list_qa_reviews(job_id=str(job_id))
+                            for rec in rows:
+                                if not isinstance(rec, dict):
+                                    continue
+                                try:
+                                    sid = int(rec.get("segment_id") or 0)
+                                except Exception:
+                                    continue
+                                if sid <= 0:
+                                    continue
+                                po = rec.get("pronunciation_overrides")
+                                if not po:
+                                    continue
+                                entries: list[dict] = []
+                                if isinstance(po, list):
+                                    entries = [x for x in po if isinstance(x, dict)]
+                                elif isinstance(po, dict):
+                                    if isinstance(po.get("entries"), list):
+                                        entries = [x for x in po.get("entries") if isinstance(x, dict)]
+                                    else:
+                                        for k, v in po.items():
+                                            if not str(k).strip():
+                                                continue
+                                            entries.append({"term": str(k), "ipa_or_phoneme": v})
+                                if entries:
+                                    pron_overrides[int(sid)] = entries
+                        except Exception:
+                            pron_overrides = {}
                         return tts.run(
                             out_dir=work_dir,
                             translated_json=translated_json if translated_json.exists() else None,
@@ -2788,6 +2867,8 @@ class JobQueue:
                             max_stretch=float(settings.max_stretch),
                             job_id=job_id,
                             audio_hash=audio_hash,
+                            pronunciation_dict=pron_dict,
+                            pronunciation_overrides=pron_overrides,
                         )
 
                     # checkpoint-aware skip
