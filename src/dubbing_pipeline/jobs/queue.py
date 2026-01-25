@@ -3365,7 +3365,7 @@ class JobQueue:
                     rt3["two_pass"] = tp3
                     self.store.update(job_id, runtime=rt3)
                 self.store.append_log(job_id, f"[{now_utc()}] two_pass: queued pass2")
-                # Submit via Redis backend or local scheduler.
+                # Submit via queue backend when available, otherwise fall back to local queue.
                 try:
                     qb = getattr(self, "queue_backend", None)
                     if qb is not None:
@@ -3378,24 +3378,10 @@ class JobQueue:
                             meta={"two_pass": "pass2", "user_role": str(getattr(rt2.get("user_role"), "value", "") or "")},
                         )
                     else:
-                        sched2 = Scheduler.instance_optional()
-                        if sched2 is not None:
-                            from dubbing_pipeline.runtime.scheduler import JobRecord
-
-                            sched2.submit(
-                                JobRecord(
-                                    job_id=job_id,
-                                    mode=job.mode,
-                                    device_pref=job.device,
-                                    created_at=time.time(),
-                                    priority=120,
-                                )
-                            )
-                        else:
-                            await self._q.put(job_id)
+                        await self.enqueue_id(job_id)
                 except Exception:
                     with suppress(Exception):
-                        await self._q.put(job_id)
+                        await self.enqueue_id(job_id)
                 return
 
             # Mobile-friendly playback outputs (H.264/AAC MP4 + optional HLS).

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from contextlib import suppress
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,10 +10,9 @@ from dubbing_pipeline.api.deps import Identity, require_role, require_scope
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.jobs.models import JobState
-from dubbing_pipeline.runtime.scheduler import JobRecord
+from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
 from dubbing_pipeline.web.routes.jobs_common import (
     _get_queue,
-    _get_scheduler,
     _get_store,
     _new_short_id,
     _now_iso,
@@ -103,8 +101,6 @@ async def rerun_two_pass_admin(
     This does not create a new job; it re-queues the existing job with a runtime marker.
     """
     store = _get_store(request)
-    scheduler = _get_scheduler(request)
-    qb = getattr(request.app.state, "queue_backend", None)
     job = require_job_access(store=store, ident=ident, job_id=id)
 
     # Mark runtime so the worker can detect this is a pass-2-only rerun.
@@ -131,30 +127,18 @@ async def rerun_two_pass_admin(
         message="Queued (pass 2 rerun)",
     )
 
-    # Submit via canonical backend (best-effort).
-    with suppress(Exception):
-        if qb is not None:
-            await qb.submit_job(
-                job_id=str(id),
-                user_id=str(getattr(job, "owner_id", "") or ""),
-                mode=str(job.mode),
-                device=str(job.device),
-                priority=110,
-                meta={
-                    "user_role": str(getattr(ident.user.role, "value", "") or ""),
-                    "two_pass": "rerun_pass2",
-                },
-            )
-        else:
-            scheduler.submit(
-                JobRecord(
-                    job_id=id,
-                    mode=job.mode,
-                    device_pref=job.device,
-                    created_at=time.time(),
-                    priority=110,
-                )
-            )
+    await submit_job_or_503(
+        request,
+        job_id=str(id),
+        user_id=str(getattr(job, "owner_id", "") or ""),
+        mode=str(job.mode),
+        device=str(job.device),
+        priority=110,
+        meta={
+            "user_role": str(getattr(ident.user.role, "value", "") or ""),
+            "two_pass": "rerun_pass2",
+        },
+    )
     audit_event("two_pass.rerun", request=request, user_id=ident.user.id, meta={"job_id": id})
     job2 = require_job_access(store=store, ident=ident, job_id=id)
     return job2.to_dict()
