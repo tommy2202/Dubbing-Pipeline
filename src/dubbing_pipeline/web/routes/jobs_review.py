@@ -388,6 +388,7 @@ async def patch_job_segment(
         new_text = str(body.get("tgt_text") or "")
 
     pron_overrides = body.get("pronunciation_overrides") if "pronunciation_overrides" in body else None
+    glossary_used = body.get("glossary_used") if "glossary_used" in body else None
     notes = body.get("notes") if "notes" in body else None
 
     version = int(_load_transcript_store(base_dir).get("version") or 0)
@@ -413,6 +414,7 @@ async def patch_job_segment(
             notes=str(notes) if notes is not None else None,
             edited_text=new_text if new_text is not None else None,
             pronunciation_overrides=pron_overrides,
+            glossary_used=glossary_used,
             created_by=str(ident.user.id),
         )
     except Exception as ex:
@@ -425,6 +427,7 @@ async def patch_job_segment(
             segment_id=int(segment_id),
             text_hash=_hash_text(new_text),
             has_pron=bool(pron_overrides is not None),
+            has_glossary=bool(glossary_used is not None),
         )
     else:
         logger.info(
@@ -432,6 +435,7 @@ async def patch_job_segment(
             job_id=str(id),
             segment_id=int(segment_id),
             has_pron=bool(pron_overrides is not None),
+            has_glossary=bool(glossary_used is not None),
         )
     audit_event(
         "qa.segment.edit",
