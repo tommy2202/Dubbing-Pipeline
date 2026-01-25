@@ -505,6 +505,15 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                         remediation=["Verify default visibility settings in the server config."],
                     )
 
+                base_dir = None
+                try:
+                    from dubbing_pipeline.jobs.models import Job
+                    from dubbing_pipeline.library.paths import get_job_output_root
+
+                    base_dir = get_job_output_root(Job.from_dict(job))
+                except Exception:
+                    base_dir = None
+
                 files = client.get(f"/api/jobs/{job_id}/files", headers=headers)
                 if files.status_code != 200:
                     return CheckResult(
@@ -526,13 +535,17 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                         remediation=["Check job output directories for artifacts."],
                     )
 
-                manifest = output_path.parent / "manifest.json"
+                manifest = (Path(base_dir) if base_dir else output_path.parent) / "manifest.json"
                 if not manifest.exists():
                     return CheckResult(
                         id="full_job",
                         name="Full mode tiny job",
                         status="FAIL",
-                        details={"error": "manifest_missing", "job_id": str(job_id)},
+                        details={
+                            "error": "manifest_missing",
+                            "job_id": str(job_id),
+                            "base_dir": str(base_dir) if base_dir else None,
+                        },
                         remediation=["Check job output directories for manifest.json."],
                     )
 
