@@ -487,6 +487,8 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                             "error": "job_timeout_or_failed",
                             "state": state or "unknown",
                             "job_id": str(job_id),
+                            "message": (job or {}).get("message") if isinstance(job, dict) else None,
+                            "job_error": (job or {}).get("error") if isinstance(job, dict) else None,
                         },
                         remediation=[
                             "python3 scripts/smoke_run.py",
