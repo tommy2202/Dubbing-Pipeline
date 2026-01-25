@@ -289,6 +289,6 @@ def test_new_tables_crud(tmp_path: Path) -> None:
         ).fetchone()
         assert pron is not None
         assert pron["term"] == "Kobayashi"
-        assert pron["ipa_or_phoneme"] == "koʊbaɪɑːʃi"
+        assert pron["ipa_or_phoneme"] == "ko-ba-ya-shi"
     finally:
         con.close()
