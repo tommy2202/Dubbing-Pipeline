@@ -1,0 +1,41 @@
+Doctor Report
+=============
+Timestamp: 2026-01-25T19:40:00.000000+00:00
+App Version: 1.0.0
+Commit: abcdef0
+Note: secrets redacted
+
+FAILURES (1)
+-----------
+- [docker_daemon] Docker daemon running
+  running: false
+  error: Cannot connect to the Docker daemon
+  Remediation:
+    $ sudo systemctl start docker
+    $ sudo systemctl enable docker
+
+WARNINGS (2)
+-----------
+- [tailscale] Tailscale status (optional)
+  installed: false
+  state: not_installed
+  Remediation:
+    $ tailscale up
+- [disk_free] Disk free space
+  path: /data
+  free_gb: 8.2
+  total_gb: 500.0
+  Remediation:
+    $ Free disk space or increase MIN_FREE_GB.
+
+PASSED (3)
+----------
+- [docker_installed] Docker installed
+  version: Docker version 24.0.7
+- [port_available] Web port availability
+  host: 0.0.0.0
+  port: 8000
+  available: true
+- [nvidia_driver] NVIDIA driver present
+  nvidia_smi: true
+  proc_driver: true
