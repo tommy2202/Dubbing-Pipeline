@@ -20,7 +20,7 @@ _KV_RE = re.compile(
     r"(?i)\b([A-Z0-9_]*?(?:token|secret|password|key|auth|apikey|api_key))\b(\s*[:=]\s*)([^\s,;]+)"
 )
 _HEADER_RE = re.compile(
-    r"(?i)\b(authorization|x-api-key|x-auth-token|api-key)\b(\s*[:=]\s*)([^\s,;]+)"
+    r"(?i)\b(authorization|x-api-key|x-auth-token|api-key)\b(\s*[:=]\s*)(?!Bearer\b)(?!Basic\b)([^\s,;]+)"
 )
 _URL_PARAM_RE = re.compile(
     r"(?i)([?&])(token|access_token|api_key|apikey|secret|password)=([^&\s]+)"
