@@ -755,8 +755,6 @@ class JobQueue:
                 pass
             if not audio_logged:
                 _stage_end("audio", audio_t0, outcome=audio_outcome, error=audio_error)
-            except Exception:
-                pass
 
             # Tier-Next A/B: optional music/singing region detection (opt-in; OFF by default).
             analysis_dir = work_dir / "analysis"
