@@ -281,19 +281,30 @@ def _audio_path_for_segment(
     return None
 
 
-def _find_latest_tts_manifest(job_dir: Path) -> dict[str, Any] | None:
-    # Prefer base tts_manifest if present
-    p0 = Path(job_dir) / "tts_manifest.json"
+def find_latest_tts_manifest_path(job_dir: Path) -> Path | None:
+    """
+    Best-effort: return the newest/most stable tts_manifest.json path.
+    """
+    job_dir = Path(job_dir)
+    p0 = job_dir / "analysis" / "tts_manifest.json"
     if p0.exists():
-        data = read_json(p0, default=None)
-        return data if isinstance(data, dict) else None
-    # Else search newest work dir
+        return p0
+    p1 = job_dir / "tts_manifest.json"
+    if p1.exists():
+        return p1
     for wd in _iter_work_dirs(job_dir):
         cand = wd / "tts_manifest.json"
         if cand.exists():
-            data = read_json(cand, default=None)
-            return data if isinstance(data, dict) else None
+            return cand
     return None
+
+
+def _find_latest_tts_manifest(job_dir: Path) -> dict[str, Any] | None:
+    path = find_latest_tts_manifest_path(job_dir)
+    if path is None:
+        return None
+    data = read_json(path, default=None)
+    return data if isinstance(data, dict) else None
 
 
 def score_job(

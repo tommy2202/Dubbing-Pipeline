@@ -1903,8 +1903,24 @@ class JobQueue:
                 resynth = rt.get("resynth")
             except Exception:
                 resynth = None
+            resynth_type = ""
+            resynth_segments: set[int] = set()
+            if isinstance(resynth, dict):
+                resynth_type = str(resynth.get("type") or "").strip().lower()
+                if resynth_type == "segments":
+                    raw = resynth.get("segment_ids") or resynth.get("segments") or []
+                    if isinstance(raw, list):
+                        for v in raw:
+                            try:
+                                sid = int(v)
+                            except Exception:
+                                continue
+                            if sid > 0:
+                                resynth_segments.add(sid)
 
-            def _apply_transcript_to_translated_json(*, approved_only: bool) -> Path | None:
+            def _apply_transcript_to_translated_json(
+                *, approved_only: bool, segments_only: set[int] | None = None
+            ) -> Path | None:
                 try:
                     from dubbing_pipeline.utils.io import read_json, write_json
 
@@ -1954,14 +1970,14 @@ class JobQueue:
                     out_segments: list[dict] = []
                     for i, s in enumerate(segments, 1):
                         ov = seg_over.get(str(i), {})
-                        if isinstance(ov, dict):
+                        use_override = segments_only is None or int(i) in segments_only
+                        if use_override and isinstance(ov, dict):
                             tgt_text = str(
                                 ov.get("tgt_text") if "tgt_text" in ov else (s.get("text") or "")
                             )
-                            approved = bool(ov.get("approved"))
                         else:
                             tgt_text = str(s.get("text") or "")
-                            approved = False
+                        approved = bool(ov.get("approved")) if isinstance(ov, dict) else False
                         if approved_only and not approved:
                             tgt_text = ""
                         ss = dict(s)
@@ -2061,6 +2077,51 @@ class JobQueue:
                     return out_json
                 except Exception:
                     return None
+
+            def _prepare_segment_resynth(segment_ids: set[int]) -> bool:
+                if not segment_ids:
+                    return False
+                try:
+                    from dubbing_pipeline.qa.scoring import find_latest_tts_manifest_path
+                    from dubbing_pipeline.review.ops import edit_segment, lock_from_tts_manifest, unlock_segment
+                    from dubbing_pipeline.utils.io import read_json
+                except Exception:
+                    return False
+                manifest_path = find_latest_tts_manifest_path(base_dir)
+                if manifest_path is None or not manifest_path.exists():
+                    return False
+                try:
+                    lock_from_tts_manifest(
+                        job_dir=base_dir,
+                        tts_manifest=manifest_path,
+                        video_path=video_path,
+                        lock_nonempty_only=True,
+                    )
+                except Exception as ex:
+                    self.store.append_log(
+                        job_id,
+                        f"[{now_utc()}] resynth segments: lock failed: {ex}",
+                    )
+                    return False
+                overrides: dict[int, str] = {}
+                try:
+                    st = read_json(base_dir / "transcript_store.json", default={})
+                    seg_over = st.get("segments", {}) if isinstance(st, dict) else {}
+                    if isinstance(seg_over, dict):
+                        for sid in segment_ids:
+                            ov = seg_over.get(str(sid))
+                            if isinstance(ov, dict) and "tgt_text" in ov:
+                                overrides[int(sid)] = str(ov.get("tgt_text") or "")
+                except Exception:
+                    overrides = {}
+                for sid in segment_ids:
+                    try:
+                        unlock_segment(base_dir, int(sid))
+                        if int(sid) in overrides:
+                            edit_segment(base_dir, int(sid), text=overrides[int(sid)])
+                    except Exception:
+                        continue
+                return True
 
             # Import target subtitles/transcripts: skip MT and use imported target as subs_srt_path.
             try:
@@ -2518,11 +2579,29 @@ class JobQueue:
 
             # If resynth requested, generate an edited translation JSON for TTS.
             edited_json = None
-            if isinstance(resynth, dict) and str(resynth.get("type") or "") == "approved":
+            if resynth_type == "approved":
                 edited_json = _apply_transcript_to_translated_json(approved_only=True)
-                if edited_json is not None:
-                    translated_json = edited_json
+            elif resynth_type == "segments" and resynth_segments:
+                edited_json = _apply_transcript_to_translated_json(
+                    approved_only=False, segments_only=resynth_segments
+                )
+            if edited_json is not None:
+                translated_json = edited_json
             await self._check_canceled(job_id)
+
+            # Segment-only resynth: lock other segments to reuse audio where possible.
+            if resynth_type == "segments" and resynth_segments:
+                ok_lock = _prepare_segment_resynth(resynth_segments)
+                if ok_lock:
+                    self.store.append_log(
+                        job_id,
+                        f"[{now_utc()}] resynth segments: prepared {len(resynth_segments)}",
+                    )
+                else:
+                    self.store.append_log(
+                        job_id,
+                        f"[{now_utc()}] resynth segments: fallback to full (lock prep failed)",
+                    )
 
             # e) tts.synthesize aligned track (~0.95)
             tts_wav = work_dir / f"{video_path.stem}.tts.wav"
@@ -2718,19 +2797,13 @@ class JobQueue:
                         tts_wav.exists()
                         and tts_manifest.exists()
                         and stage_is_done(ckpt, "tts")
-                        and not (
-                            isinstance(resynth, dict)
-                            and str(resynth.get("type") or "") == "approved"
-                        )
+                        and resynth_type not in {"approved", "segments"}
                         and not is_pass2_outer
                     ):
                         self.store.append_log(job_id, f"[{now_utc()}] tts (checkpoint hit)")
                     else:
                         # Force rerun on resynth.
-                        if (
-                            isinstance(resynth, dict)
-                            and str(resynth.get("type") or "") == "approved"
-                        ):
+                        if resynth_type in {"approved", "segments"}:
                             with suppress(Exception):
                                 tts_wav.unlink(missing_ok=True)
                             with suppress(Exception):
@@ -2818,7 +2891,7 @@ class JobQueue:
 
             # Tier-2B canonicalization: if "resynth approved" was requested, persist the
             # generated clips into review/state.json as locked segments.
-            if isinstance(resynth, dict) and str(resynth.get("type") or "") == "approved":
+            if resynth_type in {"approved", "segments"}:
                 try:
                     from dubbing_pipeline.review.ops import lock_from_tts_manifest
 

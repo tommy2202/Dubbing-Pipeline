@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -1256,6 +1257,171 @@ class JobStore:
             return out
         finally:
             con.close()
+
+    # --- QA review entries ---
+    def _qa_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        out = {k: row[k] for k in row.keys()}
+        if "segment_id" in out and out["segment_id"] is not None:
+            with suppress(Exception):
+                out["segment_id"] = int(out["segment_id"])
+        for key in ("created_at", "updated_at"):
+            if key in out and out[key] is not None:
+                with suppress(Exception):
+                    out[key] = float(out[key])
+        for key in ("pronunciation_overrides", "glossary_used"):
+            if key in out and isinstance(out[key], str):
+                try:
+                    out[key] = json.loads(out[key])
+                except Exception:
+                    pass
+        return out
+
+    def get_qa_review(self, *, job_id: str, segment_id: int) -> dict[str, Any] | None:
+        jid = str(job_id or "").strip()
+        if not jid:
+            return None
+        try:
+            sid = int(segment_id)
+        except Exception:
+            return None
+        con = self._conn()
+        try:
+            row = con.execute(
+                "SELECT * FROM qa_reviews WHERE job_id = ? AND segment_id = ? LIMIT 1;",
+                (jid, int(sid)),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._qa_row_to_dict(row)
+        finally:
+            con.close()
+
+    def list_qa_reviews(self, *, job_id: str) -> list[dict[str, Any]]:
+        jid = str(job_id or "").strip()
+        if not jid:
+            return []
+        con = self._conn()
+        try:
+            rows = con.execute(
+                "SELECT * FROM qa_reviews WHERE job_id = ? ORDER BY segment_id ASC;",
+                (jid,),
+            ).fetchall()
+            return [self._qa_row_to_dict(r) for r in rows]
+        finally:
+            con.close()
+
+    def upsert_qa_review(
+        self,
+        *,
+        job_id: str,
+        segment_id: int,
+        status: str | None = None,
+        notes: str | None = None,
+        edited_text: str | None = None,
+        pronunciation_overrides: dict[str, Any] | str | None = None,
+        glossary_used: dict[str, Any] | str | None = None,
+        created_by: str | None = None,
+        created_at: float | None = None,
+        updated_at: float | None = None,
+    ) -> dict[str, Any]:
+        jid = str(job_id or "").strip()
+        if not jid:
+            raise ValueError("job_id is required")
+        try:
+            sid = int(segment_id)
+            if sid <= 0:
+                raise ValueError("segment_id must be positive")
+        except Exception as ex:
+            raise ValueError("segment_id must be an integer") from ex
+
+        existing = self.get_qa_review(job_id=jid, segment_id=sid) or {}
+        rec: dict[str, Any] = {}
+        rec["id"] = str(existing.get("id") or f"{jid}:{sid}")
+        rec["job_id"] = jid
+        rec["segment_id"] = int(sid)
+        rec["status"] = str(status or existing.get("status") or "pending")
+        rec["notes"] = (
+            str(notes)
+            if notes is not None
+            else (str(existing.get("notes")) if existing.get("notes") is not None else None)
+        )
+        rec["edited_text"] = (
+            str(edited_text)
+            if edited_text is not None
+            else (
+                str(existing.get("edited_text"))
+                if existing.get("edited_text") is not None
+                else None
+            )
+        )
+        rec["created_by"] = str(existing.get("created_by") or (created_by or ""))
+        rec["created_at"] = float(existing.get("created_at") or created_at or time.time())
+        rec["updated_at"] = float(updated_at or time.time())
+
+        def _json_dump(val: dict[str, Any] | str | None) -> str | None:
+            if val is None:
+                return None
+            if isinstance(val, str):
+                return val
+            try:
+                return json.dumps(val, sort_keys=True)
+            except Exception:
+                return json.dumps({})
+
+        if pronunciation_overrides is not None:
+            rec["pronunciation_overrides"] = _json_dump(pronunciation_overrides)
+        else:
+            rec["pronunciation_overrides"] = (
+                _json_dump(existing.get("pronunciation_overrides"))
+                if existing.get("pronunciation_overrides") is not None
+                else None
+            )
+        if glossary_used is not None:
+            rec["glossary_used"] = _json_dump(glossary_used)
+        else:
+            rec["glossary_used"] = (
+                _json_dump(existing.get("glossary_used"))
+                if existing.get("glossary_used") is not None
+                else None
+            )
+
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO qa_reviews (
+                      id, job_id, segment_id, status, notes, edited_text,
+                      pronunciation_overrides, glossary_used, created_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      status=excluded.status,
+                      notes=excluded.notes,
+                      edited_text=excluded.edited_text,
+                      pronunciation_overrides=excluded.pronunciation_overrides,
+                      glossary_used=excluded.glossary_used,
+                      updated_at=excluded.updated_at,
+                      created_by=qa_reviews.created_by,
+                      created_at=qa_reviews.created_at;
+                    """,
+                    (
+                        rec["id"],
+                        rec["job_id"],
+                        rec["segment_id"],
+                        rec["status"],
+                        rec["notes"],
+                        rec["edited_text"],
+                        rec["pronunciation_overrides"],
+                        rec["glossary_used"],
+                        rec["created_by"],
+                        rec["created_at"],
+                        rec["updated_at"],
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
+        return rec
 
     def _maybe_upsert_library_from_raw(self, job_id: str, raw: dict[str, Any]) -> None:
         """

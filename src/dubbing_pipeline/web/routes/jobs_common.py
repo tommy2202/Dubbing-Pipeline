@@ -459,6 +459,60 @@ def _append_transcript_version(base_dir: Path, entry: dict[str, Any]) -> None:
         f.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
+def _apply_transcript_updates(
+    *, base_dir: Path, updates: list[dict[str, Any]]
+) -> tuple[int, list[dict[str, Any]]]:
+    if not updates:
+        st = _load_transcript_store(base_dir)
+        return int(st.get("version") or 0), []
+    st = _load_transcript_store(base_dir)
+    segs = st.get("segments", {})
+    if not isinstance(segs, dict):
+        segs = {}
+        st["segments"] = segs
+
+    applied: list[dict[str, Any]] = []
+    for u in updates:
+        if not isinstance(u, dict):
+            continue
+        try:
+            idx = int(u.get("index"))
+            if idx <= 0:
+                continue
+        except Exception:
+            continue
+        rec = segs.get(str(idx), {})
+        if not isinstance(rec, dict):
+            rec = {}
+        if "tgt_text" in u:
+            rec["tgt_text"] = str(u.get("tgt_text") or "")
+        if "approved" in u:
+            rec["approved"] = bool(u.get("approved"))
+        if "flags" in u:
+            flags = u.get("flags")
+            if isinstance(flags, list):
+                rec["flags"] = [str(x) for x in flags]
+        segs[str(idx)] = rec
+        applied.append(
+            {
+                "index": idx,
+                "tgt_text": rec.get("tgt_text"),
+                "approved": rec.get("approved"),
+                "flags": rec.get("flags", []),
+            }
+        )
+
+    if not applied:
+        return int(st.get("version") or 0), []
+    st["version"] = int(st.get("version") or 0) + 1
+    st["updated_at"] = now_utc()
+    _save_transcript_store(base_dir, st)
+    _append_transcript_version(
+        base_dir, {"version": st["version"], "updated_at": st["updated_at"], "updates": applied}
+    )
+    return int(st.get("version") or 0), applied
+
+
 def _voice_refs_manifest_path(base_dir: Path) -> Path:
     return (base_dir / "analysis" / "voice_refs" / "manifest.json").resolve()
 

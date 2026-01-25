@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from contextlib import suppress
@@ -14,6 +15,7 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState, now_utc
 from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
+from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.web.routes.jobs_common import (
     _enforce_rate_limit,
     _file_range_response,
@@ -21,8 +23,7 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _job_base_dir,
     _load_transcript_store,
     _output_root,
-    _save_transcript_store,
-    _append_transcript_version,
+    _apply_transcript_updates,
 )
 
 router = APIRouter()
@@ -97,6 +98,75 @@ def _write_srt_segments(path: Path, segments: list[dict[str, Any]]) -> None:
             f.write(
                 f"{i}\n{_fmt_ts_srt(float(s['start']))} --> {_fmt_ts_srt(float(s['end']))}\n{str(s.get('text') or '').strip()}\n\n"
             )
+
+
+def _hash_text(text: str) -> str:
+    t = " ".join(str(text or "").split())
+    return hashlib.sha256(t.encode("utf-8")).hexdigest()
+
+
+def _ensure_review_state(base_dir: Path, job_video_path: str | None) -> dict[str, Any]:
+    rsp = _review_state_path(base_dir)
+    if not rsp.exists():
+        try:
+            from dubbing_pipeline.review.ops import init_review
+
+            init_review(base_dir, video_path=Path(job_video_path) if job_video_path else None)
+        except Exception as ex:
+            raise HTTPException(status_code=400, detail=f"review init failed: {ex}") from ex
+    from dubbing_pipeline.review.state import load_state
+
+    return load_state(base_dir)
+
+
+def _segments_from_state(
+    *,
+    state: dict[str, Any],
+    transcript_store: dict[str, Any],
+    qa_by_segment: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    segs = state.get("segments", [])
+    if not isinstance(segs, list):
+        return []
+    seg_over = transcript_store.get("segments", {}) if isinstance(transcript_store, dict) else {}
+    if not isinstance(seg_over, dict):
+        seg_over = {}
+    out: list[dict[str, Any]] = []
+    for s in segs:
+        if not isinstance(s, dict):
+            continue
+        try:
+            sid = int(s.get("segment_id") or 0)
+        except Exception:
+            continue
+        if sid <= 0:
+            continue
+        ov = seg_over.get(str(sid), {})
+        chosen = str(s.get("chosen_text") or s.get("translated_text") or "")
+        if isinstance(ov, dict) and "tgt_text" in ov:
+            chosen = str(ov.get("tgt_text") or "")
+        qa = qa_by_segment.get(int(sid), {})
+        qa_status = str(qa.get("status") or "").strip().lower()
+        if not qa_status:
+            qa_status = "approved" if bool(ov.get("approved")) else "pending"
+        out.append(
+            {
+                "segment_id": int(sid),
+                "start": float(s.get("start", 0.0)),
+                "end": float(s.get("end", 0.0)),
+                "speaker_id": str(s.get("speaker") or s.get("speaker_id") or "SPEAKER_01"),
+                "source_text": str(s.get("source_text") or ""),
+                "translated_text": str(s.get("translated_text") or ""),
+                "chosen_text": chosen,
+                "qa_status": qa_status,
+                "qa_notes": qa.get("notes"),
+                "qa_updated_at": qa.get("updated_at"),
+                "edited_text": qa.get("edited_text"),
+                "pronunciation_overrides": qa.get("pronunciation_overrides"),
+                "glossary_used": qa.get("glossary_used"),
+            }
+        )
+    return out
 
 
 @router.get("/api/jobs/{id}/overrides")
@@ -268,6 +338,279 @@ async def put_job_characters(
     return {"ok": True, "items": items}
 
 
+@router.get("/api/jobs/{id}/segments")
+async def get_job_segments(
+    request: Request, id: str, ident: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=id, allow_shared_read=True)
+    base_dir = _job_base_dir(job)
+    state = _ensure_review_state(base_dir, job.video_path)
+    transcript_store = _load_transcript_store(base_dir)
+    qa_by_segment: dict[int, dict[str, Any]] = {}
+    try:
+        rows = store.list_qa_reviews(job_id=str(id))
+        qa_by_segment = {
+            int(r.get("segment_id") or 0): dict(r)
+            for r in rows
+            if isinstance(r, dict) and int(r.get("segment_id") or 0) > 0
+        }
+    except Exception:
+        qa_by_segment = {}
+    items = _segments_from_state(
+        state=state, transcript_store=transcript_store, qa_by_segment=qa_by_segment
+    )
+    return {
+        "items": items,
+        "total": len(items),
+        "transcript_version": int(transcript_store.get("version") or 0),
+    }
+
+
+@router.patch("/api/jobs/{id}/segments/{segment_id}")
+async def patch_job_segment(
+    request: Request,
+    id: str,
+    segment_id: int,
+    ident: Identity = Depends(require_scope("edit:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=id)
+    base_dir = _job_base_dir(job)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    new_text = None
+    if "translated_text" in body:
+        new_text = str(body.get("translated_text") or "")
+    elif "tgt_text" in body:
+        new_text = str(body.get("tgt_text") or "")
+
+    pron_overrides = body.get("pronunciation_overrides") if "pronunciation_overrides" in body else None
+    notes = body.get("notes") if "notes" in body else None
+
+    version = int(_load_transcript_store(base_dir).get("version") or 0)
+    if new_text is not None:
+        version, applied = _apply_transcript_updates(
+            base_dir=base_dir,
+            updates=[{"index": int(segment_id), "tgt_text": new_text, "approved": False}],
+        )
+        if applied:
+            rt = dict(job.runtime or {})
+            rt["transcript_version"] = int(version)
+            store.update(id, runtime=rt)
+        with suppress(Exception):
+            from dubbing_pipeline.review.ops import edit_segment
+
+            edit_segment(base_dir, int(segment_id), text=new_text)
+
+    try:
+        store.upsert_qa_review(
+            job_id=str(id),
+            segment_id=int(segment_id),
+            status="pending" if new_text is not None else None,
+            notes=str(notes) if notes is not None else None,
+            edited_text=new_text if new_text is not None else None,
+            pronunciation_overrides=pron_overrides,
+            created_by=str(ident.user.id),
+        )
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=f"Failed to update QA review: {ex}") from ex
+
+    if new_text is not None:
+        logger.info(
+            "qa_segment_edit",
+            job_id=str(id),
+            segment_id=int(segment_id),
+            text_hash=_hash_text(new_text),
+            has_pron=bool(pron_overrides is not None),
+        )
+    else:
+        logger.info(
+            "qa_segment_update",
+            job_id=str(id),
+            segment_id=int(segment_id),
+            has_pron=bool(pron_overrides is not None),
+        )
+    audit_event(
+        "qa.segment.edit",
+        request=request,
+        user_id=ident.user.id,
+        meta={
+            "job_id": id,
+            "segment_id": int(segment_id),
+            "text_hash": _hash_text(new_text) if new_text is not None else None,
+        },
+    )
+    return {"ok": True, "version": int(version)}
+
+
+@router.post("/api/jobs/{id}/segments/{segment_id}/approve")
+async def post_job_segment_approve(
+    request: Request,
+    id: str,
+    segment_id: int,
+    ident: Identity = Depends(require_scope("edit:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=id)
+    base_dir = _job_base_dir(job)
+    body = {}
+    if "application/json" in (request.headers.get("content-type") or "").lower():
+        with suppress(Exception):
+            body = await request.json()
+    notes = body.get("notes") if isinstance(body, dict) else None
+
+    version, applied = _apply_transcript_updates(
+        base_dir=base_dir, updates=[{"index": int(segment_id), "approved": True}]
+    )
+    if applied:
+        rt = dict(job.runtime or {})
+        rt["transcript_version"] = int(version)
+        store.update(id, runtime=rt)
+    try:
+        store.upsert_qa_review(
+            job_id=str(id),
+            segment_id=int(segment_id),
+            status="approved",
+            notes=str(notes) if notes is not None else None,
+            created_by=str(ident.user.id),
+        )
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=f"Failed to update QA review: {ex}") from ex
+
+    logger.info("qa_segment_approve", job_id=str(id), segment_id=int(segment_id))
+    audit_event(
+        "qa.segment.approve",
+        request=request,
+        user_id=ident.user.id,
+        meta={"job_id": id, "segment_id": int(segment_id)},
+    )
+    return {"ok": True, "status": "approved", "version": int(version)}
+
+
+@router.post("/api/jobs/{id}/segments/{segment_id}/reject")
+async def post_job_segment_reject(
+    request: Request,
+    id: str,
+    segment_id: int,
+    ident: Identity = Depends(require_scope("edit:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=id)
+    base_dir = _job_base_dir(job)
+    body = {}
+    if "application/json" in (request.headers.get("content-type") or "").lower():
+        with suppress(Exception):
+            body = await request.json()
+    notes = body.get("notes") if isinstance(body, dict) else None
+
+    version, applied = _apply_transcript_updates(
+        base_dir=base_dir, updates=[{"index": int(segment_id), "approved": False}]
+    )
+    if applied:
+        rt = dict(job.runtime or {})
+        rt["transcript_version"] = int(version)
+        store.update(id, runtime=rt)
+    try:
+        store.upsert_qa_review(
+            job_id=str(id),
+            segment_id=int(segment_id),
+            status="rejected",
+            notes=str(notes) if notes is not None else None,
+            created_by=str(ident.user.id),
+        )
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=f"Failed to update QA review: {ex}") from ex
+
+    logger.info("qa_segment_reject", job_id=str(id), segment_id=int(segment_id))
+    audit_event(
+        "qa.segment.reject",
+        request=request,
+        user_id=ident.user.id,
+        meta={"job_id": id, "segment_id": int(segment_id)},
+    )
+    return {"ok": True, "status": "rejected", "version": int(version)}
+
+
+@router.post("/api/jobs/{id}/segments/rerun")
+async def post_job_segments_rerun(
+    request: Request, id: str, ident: Identity = Depends(require_scope("edit:job"))
+) -> dict[str, Any]:
+    store = _get_store(request)
+    job = require_job_access(store=store, ident=ident, job_id=id)
+    base_dir = _job_base_dir(job)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    raw = body.get("segment_ids") if "segment_ids" in body else body.get("segments")
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="segment_ids must be a list")
+    segment_ids: list[int] = []
+    for v in raw:
+        try:
+            sid = int(v)
+        except Exception:
+            continue
+        if sid > 0:
+            segment_ids.append(int(sid))
+    segment_ids = sorted({int(x) for x in segment_ids})
+    if not segment_ids:
+        raise HTTPException(status_code=400, detail="segment_ids must be non-empty")
+
+    transcript_store = _load_transcript_store(base_dir)
+    resynth = {
+        "type": "segments",
+        "segment_ids": segment_ids,
+        "requested_at": now_utc(),
+        "transcript_version": int(transcript_store.get("version") or 0),
+    }
+    warning = None
+    try:
+        from dubbing_pipeline.qa.scoring import find_latest_tts_manifest_path
+
+        if find_latest_tts_manifest_path(base_dir) is None:
+            warning = "Segment-only rerun not available; rerunning full job."
+            resynth["fallback"] = "full"
+    except Exception:
+        warning = "Segment-only rerun not available; rerunning full job."
+        resynth["fallback"] = "full"
+
+    rt = dict(job.runtime or {})
+    rt["resynth"] = resynth
+    job2 = store.update(
+        id,
+        state=JobState.QUEUED,
+        progress=0.0,
+        message="Segment resynth requested",
+        runtime=rt,
+    )
+    await submit_job_or_503(
+        request,
+        job_id=str(id),
+        user_id=str(ident.user.id),
+        mode=str((job2.mode if job2 else job.mode)),
+        device=str((job2.device if job2 else job.device)),
+        priority=50,
+        meta={"user_role": str(getattr(ident.user.role, "value", "") or "")},
+    )
+    logger.info(
+        "qa_segments_rerun_request",
+        job_id=str(id),
+        segment_count=len(segment_ids),
+        warning=warning,
+    )
+    audit_event(
+        "qa.segments.rerun",
+        request=request,
+        user_id=ident.user.id,
+        meta={"job_id": id, "segment_count": len(segment_ids), "warning": warning},
+    )
+    return {"ok": True, "segment_ids": segment_ids, "warning": warning}
+
+
 @router.get("/api/jobs/{id}/transcript")
 async def get_job_transcript(
     request: Request,
@@ -370,59 +713,19 @@ async def put_job_transcript(
     if not updates:
         return {"ok": True, "version": int(_load_transcript_store(base_dir).get("version") or 0)}
 
-    st = _load_transcript_store(base_dir)
-    segs = st.get("segments", {})
-    if not isinstance(segs, dict):
-        segs = {}
-        st["segments"] = segs
-
-    applied = []
-    for u in updates:
-        try:
-            idx = int(u.get("index"))
-            if idx <= 0:
-                continue
-        except Exception:
-            continue
-        rec = segs.get(str(idx), {})
-        if not isinstance(rec, dict):
-            rec = {}
-        if "tgt_text" in u:
-            rec["tgt_text"] = str(u.get("tgt_text") or "")
-        if "approved" in u:
-            rec["approved"] = bool(u.get("approved"))
-        if "flags" in u:
-            flags = u.get("flags")
-            if isinstance(flags, list):
-                rec["flags"] = [str(x) for x in flags]
-        segs[str(idx)] = rec
-        applied.append(
-            {
-                "index": idx,
-                "tgt_text": rec.get("tgt_text"),
-                "approved": rec.get("approved"),
-                "flags": rec.get("flags", []),
-            }
-        )
-
-    st["version"] = int(st.get("version") or 0) + 1
-    st["updated_at"] = now_utc()
-    _save_transcript_store(base_dir, st)
-    _append_transcript_version(
-        base_dir, {"version": st["version"], "updated_at": st["updated_at"], "updates": applied}
-    )
+    version, applied = _apply_transcript_updates(base_dir=base_dir, updates=updates)
 
     # Persist version on job runtime for visibility.
     rt = dict(job.runtime or {})
-    rt["transcript_version"] = st["version"]
+    rt["transcript_version"] = int(version)
     store.update(id, runtime=rt)
     audit_event(
         "transcript.update",
         request=request,
         user_id=ident.user.id,
-        meta={"job_id": id, "updates": int(len(applied)), "version": int(st["version"])},
+        meta={"job_id": id, "updates": int(len(applied)), "version": int(version)},
     )
-    return {"ok": True, "version": st["version"]}
+    return {"ok": True, "version": int(version)}
 
 
 @router.post("/api/jobs/{id}/overrides/speaker")
