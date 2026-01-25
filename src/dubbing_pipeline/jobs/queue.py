@@ -311,7 +311,7 @@ class JobQueue:
             logger.info(
                 "job_stage",
                 stage=str(stage),
-                event=str(event),
+                stage_event=str(event),
                 outcome=str(outcome or ""),
                 duration_s=float(duration_s) if duration_s is not None else None,
                 error=str(error or "")[:200] if error else None,
