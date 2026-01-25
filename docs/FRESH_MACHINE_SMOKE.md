@@ -24,6 +24,15 @@ python3 scripts/smoke_fresh_machine.py
 
 The script uses a temporary workspace and exits non-zero if ffmpeg is missing.
 
+## Post-upgrade gate
+
+To run the full post-upgrade gate (including this smoke test when ffmpeg is
+available), use:
+
+```
+python3 scripts/post_upgrade_gate.py
+```
+
 ## Notes
 
 - No GPU is required.
