@@ -507,10 +507,17 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
 
                 base_dir = None
                 try:
-                    from dubbing_pipeline.jobs.models import Job
-                    from dubbing_pipeline.library.paths import get_job_output_root
+                    from types import SimpleNamespace
+                    from dubbing_pipeline.library.paths import get_library_root_for_job
 
-                    base_dir = get_job_output_root(Job.from_dict(job))
+                    job_ns = SimpleNamespace(
+                        id=str(job_id),
+                        series_title=str(job.get("series_title") or ""),
+                        series_slug=str(job.get("series_slug") or ""),
+                        season_number=int(job.get("season_number") or 0),
+                        episode_number=int(job.get("episode_number") or 0),
+                    )
+                    base_dir = get_library_root_for_job(job_ns)
                 except Exception:
                     base_dir = None
 
