@@ -39,6 +39,81 @@ dubbing-web
 
 For the recommended Tailscale path, start at `docs/GOLDEN_PATH_TAILSCALE.md`.
 
+## Fresh Machine Setup (GPU + Docker)
+Golden path for a clean GPU + Docker host. See also: `docs/SETUP_WIZARD.md`.
+
+1) **Run host doctor (GPU host checks)**
+
+```bash
+python3 scripts/doctor_host.py --require-gpu
+```
+
+2) **Create env files**
+
+```bash
+cp .env.example .env
+cp .env.secrets.example .env.secrets
+```
+
+3) **Generate secrets (appends to .env.secrets)**
+
+```bash
+python3 - <<'PY' >> .env.secrets
+import secrets
+print("JWT_SECRET=" + secrets.token_urlsafe(32))
+print("CSRF_SECRET=" + secrets.token_urlsafe(32))
+print("SESSION_SECRET=" + secrets.token_urlsafe(32))
+print("API_TOKEN=" + secrets.token_urlsafe(32))
+print("ADMIN_USERNAME=admin")
+print("ADMIN_PASSWORD=" + secrets.token_urlsafe(16))
+PY
+```
+
+4) **Build Docker image (GPU)**
+
+```bash
+docker build -f docker/Dockerfile.cuda -t dubbing-pipeline:gpu .
+```
+
+5) **Run container doctor (quick)**
+
+```bash
+docker run --rm --gpus all \
+  --env-file .env --env-file .env.secrets \
+  -v "$PWD/Input":/app/Input \
+  -v "$PWD/Output":/app/Output \
+  -v "$PWD/Logs":/app/Logs \
+  -v "$PWD/models":/models \
+  dubbing-pipeline:gpu dubbing-pipeline doctor --mode quick --json
+```
+
+6) **Run container doctor (full)**
+
+```bash
+docker run --rm --gpus all \
+  --env-file .env --env-file .env.secrets \
+  -v "$PWD/Input":/app/Input \
+  -v "$PWD/Output":/app/Output \
+  -v "$PWD/Logs":/app/Logs \
+  -v "$PWD/models":/models \
+  dubbing-pipeline:gpu dubbing-pipeline doctor --mode full --json
+```
+
+7) **Run web + a high-mode job**
+
+```bash
+docker run -d --name dubbing-web --gpus all -p 8000:8000 \
+  --env-file .env --env-file .env.secrets \
+  -v "$PWD/Input":/app/Input \
+  -v "$PWD/Output":/app/Output \
+  -v "$PWD/Logs":/app/Logs \
+  -v "$PWD/models":/models \
+  dubbing-pipeline:gpu dubbing-web
+
+# Run a high-mode job inside the container
+docker exec -it dubbing-web dubbing-pipeline Input/Test.mp4 --mode high --device auto
+```
+
 ## Sharing model (Private vs Shared)
 - **Private**: only the owner (and admins) can access.
 - **Shared**: visible to other authenticated users in the library.

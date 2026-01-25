@@ -1,0 +1,56 @@
+Doctor Report
+=============
+Timestamp: 2026-01-25T19:40:00.000000+00:00
+App Version: 1.0.0
+Commit: abcdef0
+Note: secrets redacted
+
+FAILURES (2)
+-----------
+- [whisper_pkg] Whisper package installed
+  installed: false
+  mode: high
+  required: true
+  Remediation:
+    $ python3 -m pip install openai-whisper
+- [xtts_prereqs] XTTS prerequisites (TTS_PROVIDER + COQUI_TOS + package)
+  tts_provider: auto
+  coqui_tos_agreed: false
+  installed: false
+  mode: high
+  required: true
+  Remediation:
+    $ export TTS_PROVIDER=auto
+    $ export COQUI_TOS_AGREED=1
+    $ python3 -m pip install TTS
+
+WARNINGS (3)
+-----------
+- [torch_cuda] Torch CUDA availability
+  torch_installed: false
+  cuda_available: false
+- [redis] Redis connectivity (optional)
+  configured: false
+  reachable: false
+  Remediation:
+    $ export REDIS_URL="redis://host:6379/0"
+- [ntfy] ntfy notifications (optional)
+  enabled: false
+  base_configured: false
+  topic_configured: false
+  reachable: false
+  Remediation:
+    $ Set NTFY_ENABLED=1, NTFY_BASE_URL, and NTFY_TOPIC.
+
+PASSED (3)
+----------
+- [imports_smoke] Imports smoke (core modules)
+  attempted: ["config.settings", "dubbing_pipeline.config", "dubbing_pipeline.utils.log"]
+  failed: {}
+- [ffmpeg] ffmpeg available
+  available: true
+  version: ffmpeg version 6.1.1
+- [writable_dirs] Writable runtime directories
+  Input dir: ok
+  Output dir: ok
+  Logs dir: ok
