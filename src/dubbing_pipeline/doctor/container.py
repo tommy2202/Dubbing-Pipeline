@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from config.secret_config import SecretConfig
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.runtime.lifecycle import _ensure_writable_dir, _run_version
+from dubbing_pipeline.doctor.models import build_model_requirement_checks, selected_pipeline_mode
 from dubbing_pipeline.utils.doctor_types import CheckResult
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.paths import default_paths
@@ -395,12 +396,14 @@ def check_turn() -> CheckResult:
 
 
 def build_container_quick_checks(*, require_gpu: bool) -> list[Callable[[], CheckResult]]:
+    mode = selected_pipeline_mode()
     return [
         check_import_smoke,
         check_ffmpeg,
         lambda: check_torch_cuda(require_gpu=require_gpu),
         check_required_secrets,
         check_writable_dirs,
+        *build_model_requirement_checks(mode=mode),
         check_redis,
         check_ntfy,
         check_turn,
