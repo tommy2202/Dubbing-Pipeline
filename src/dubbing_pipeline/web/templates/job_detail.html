@@ -631,6 +631,43 @@
                   </div>
                 </template>
 
+                <template x-if="voiceProfileSuggestionError[sid]">
+                  <div class="mt-2 text-xs text-red-200" x-text="voiceProfileSuggestionError[sid]"></div>
+                </template>
+                <template x-if="(voiceProfileSuggestions[sid] || []).length">
+                  <div class="mt-3 rounded border border-amber-800/40 bg-amber-900/10 p-3">
+                    <div class="text-xs text-amber-200">Similarity suggestion</div>
+                    <template x-for="sug in (voiceProfileSuggestions[sid] || [])" :key="sug.id">
+                      <div class="mt-2">
+                        <div class="text-sm text-slate-200">
+                          This voice looks similar to
+                          <span class="font-mono text-xs"
+                                x-text="sug.suggested_display_name || sug.suggested_profile_id"></span>.
+                        </div>
+                        <div class="text-xs text-slate-500">
+                          <span x-text="Math.round(Number(sug.similarity || 0) * 100) + '%'"></span>
+                          <span class="mx-1">·</span>
+                          <span x-text="sug.suggested_series_lock ? ('series: ' + sug.suggested_series_lock) : ('scope: ' + (sug.suggested_scope || 'global'))"></span>
+                        </div>
+                        <div class="mt-2 flex flex-wrap gap-2">
+                          <button type="button"
+                                  class="rounded bg-emerald-700/30 hover:bg-emerald-700/40 border border-emerald-700/50 px-3 py-2 text-xs text-emerald-100 disabled:opacity-50"
+                                  :disabled="!canEditVoices"
+                                  @click="acceptVoiceSuggestion(sid, sug.id, 'use_existing')">
+                            Use existing
+                          </button>
+                          <button type="button"
+                                  class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs text-slate-200 disabled:opacity-50"
+                                  :disabled="!canEditVoices"
+                                  @click="acceptVoiceSuggestion(sid, sug.id, 'keep_separate')">
+                            Keep separate
+                          </button>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+
                 <div class="mt-3 grid gap-3 sm:grid-cols-2">
                   <div>
                     <div class="text-xs text-slate-500">Character (series)</div>
@@ -965,6 +1002,8 @@
       voiceRefsLoaded: false,
       voiceRefs: null,
       voiceRefsError: "",
+      voiceProfileSuggestions: {},
+      voiceProfileSuggestionError: {},
       voicesError: "",
       seriesCharsLoaded: false,
       seriesCharacters: [],
@@ -1944,8 +1983,57 @@
             return;
           }
           this.voiceRefs = d;
+          await this.loadVoiceProfileSuggestions();
         } catch (e) {
           this.voiceRefsError = "Voice refs load failed";
+        }
+      },
+      async loadVoiceProfileSuggestions() {
+        this.voiceProfileSuggestions = {};
+        this.voiceProfileSuggestionError = {};
+        try {
+          const items = (this.voiceRefs && this.voiceRefs.items) ? this.voiceRefs.items : {};
+          for (const sid of Object.keys(items || {})) {
+            const pid = String((items[sid] || {}).voice_profile_id || "");
+            if (!pid) continue;
+            try {
+              const r = await fetch("/api/voices/" + encodeURIComponent(pid) + "/suggestions", { credentials: "include" });
+              const d = await r.json().catch(() => ({}));
+              if (!r.ok) {
+                this.voiceProfileSuggestionError[sid] = d.detail || ("Suggestion load failed (" + r.status + ")");
+                continue;
+              }
+              this.voiceProfileSuggestions[sid] = Array.isArray(d.items) ? d.items : [];
+            } catch (e) {
+              this.voiceProfileSuggestionError[sid] = "Suggestion load failed";
+            }
+          }
+        } catch (e) {}
+      },
+      async acceptVoiceSuggestion(sid, suggestionId, action) {
+        const items = (this.voiceRefs && this.voiceRefs.items) ? this.voiceRefs.items : {};
+        const pid = String(((items[sid] || {}).voice_profile_id) || "");
+        if (!pid) return;
+        const act = String(action || "use_existing");
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/voices/" + encodeURIComponent(pid) + "/accept_suggestion", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({ suggestion_id: String(suggestionId || ""), action: act }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            try { window.showToast(d.detail || ("Action failed (" + r.status + ")"), "error"); } catch (e) {}
+            return;
+          }
+          try {
+            window.showToast(act === "use_existing" ? "Suggestion accepted" : "Suggestion dismissed", "success");
+          } catch (e) {}
+          await this.loadVoiceProfileSuggestions();
+        } catch (e) {
+          try { window.showToast("Action failed", "error"); } catch (e2) {}
         }
       },
       async uploadRefOverride(speakerId) {

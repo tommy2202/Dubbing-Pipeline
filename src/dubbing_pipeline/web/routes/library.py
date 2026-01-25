@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from dubbing_pipeline.api.access import require_job_access, require_library_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
+from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import now_utc
 from dubbing_pipeline.web.routes.jobs_common import (
@@ -25,6 +26,15 @@ from dubbing_pipeline.web.routes.jobs_common import (
 )
 
 router = APIRouter()
+
+
+def _require_voice_profile_access(profile: dict[str, Any], ident: Identity) -> None:
+    if ident.user and ident.user.role and ident.user.role.value == Role.admin.value:
+        return
+    created_by = str(profile.get("created_by") or "").strip()
+    if created_by and str(ident.user.id) == created_by:
+        return
+    raise HTTPException(status_code=403, detail="Forbidden")
 
 
 @router.get("/api/series/{series_slug}/characters")
@@ -436,3 +446,114 @@ async def rollback_voice_version(
         meta={"series_slug": slug, "voice_id": cslug, "version": int(version)},
     )
     return {"ok": True, "voice_id": cslug, "path": str(outp)}
+
+
+@router.get("/api/voices/{profile_id}/suggestions")
+async def get_voice_profile_suggestions(
+    request: Request,
+    profile_id: str,
+    status: str | None = "pending",
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    pid = str(profile_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="profile_id required")
+    profile = store.get_voice_profile(pid)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="voice profile not found")
+    _require_voice_profile_access(profile, ident)
+    status_eff = None if not status or status == "all" else str(status)
+    items = store.list_voice_profile_suggestions(pid, status=status_eff)
+    out_items: list[dict[str, Any]] = []
+    for rec in items:
+        sid = str(rec.get("suggested_profile_id") or "").strip()
+        target = store.get_voice_profile(sid) if sid else None
+        out_items.append(
+            {
+                "id": str(rec.get("id") or ""),
+                "profile_id": str(rec.get("voice_profile_id") or ""),
+                "suggested_profile_id": sid,
+                "similarity": float(rec.get("similarity") or 0.0),
+                "status": str(rec.get("status") or ""),
+                "created_at": rec.get("created_at"),
+                "updated_at": rec.get("updated_at"),
+                "suggested_display_name": (
+                    str(target.get("display_name") or "") if isinstance(target, dict) else ""
+                ),
+                "suggested_series_lock": (
+                    str(target.get("series_lock") or "") if isinstance(target, dict) else ""
+                ),
+                "suggested_scope": (
+                    str(target.get("scope") or "") if isinstance(target, dict) else ""
+                ),
+                "reuse_allowed": bool(target.get("reuse_allowed") or False)
+                if isinstance(target, dict)
+                else False,
+            }
+        )
+    return {"ok": True, "profile_id": pid, "items": out_items}
+
+
+@router.post("/api/voices/{profile_id}/accept_suggestion")
+async def accept_voice_profile_suggestion(
+    request: Request,
+    profile_id: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    pid = str(profile_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="profile_id required")
+    profile = store.get_voice_profile(pid)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="voice profile not found")
+    _require_voice_profile_access(profile, ident)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    suggestion_id = str(body.get("suggestion_id") or "").strip()
+    action = str(body.get("action") or "use_existing").strip().lower()
+    if not suggestion_id:
+        raise HTTPException(status_code=422, detail="suggestion_id required")
+    if action not in {"use_existing", "keep_separate"}:
+        raise HTTPException(status_code=422, detail="Invalid action")
+    sugg = store.get_voice_profile_suggestion(suggestion_id)
+    if sugg is None:
+        raise HTTPException(status_code=404, detail="suggestion not found")
+    if str(sugg.get("voice_profile_id") or "") != pid:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if str(sugg.get("status") or "") not in {"pending", "accepted"}:
+        raise HTTPException(status_code=409, detail="Suggestion already resolved")
+
+    alias = None
+    if action == "use_existing":
+        alias = store.upsert_voice_profile_alias(
+            voice_profile_id=pid,
+            alias_of_voice_profile_id=str(sugg.get("suggested_profile_id") or ""),
+            confidence=float(sugg.get("similarity") or 0.0),
+            approved_by_admin=False,
+            approved_at=None,
+        )
+        store.set_voice_profile_suggestion_status(suggestion_id, status="accepted")
+        audit_event(
+            "voice_profile.suggestion.accept",
+            request=request,
+            user_id=ident.user.id,
+            meta={"profile_id": pid, "suggestion_id": suggestion_id},
+        )
+    else:
+        store.set_voice_profile_suggestion_status(suggestion_id, status="rejected")
+        audit_event(
+            "voice_profile.suggestion.reject",
+            request=request,
+            user_id=ident.user.id,
+            meta={"profile_id": pid, "suggestion_id": suggestion_id},
+        )
+    return {
+        "ok": True,
+        "profile_id": pid,
+        "suggestion_id": suggestion_id,
+        "status": "accepted" if action == "use_existing" else "rejected",
+        "alias": alias,
+    }

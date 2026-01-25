@@ -438,6 +438,22 @@ class JobStore:
                     );
                     """
                 )
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS voice_profile_suggestions (
+                      id TEXT PRIMARY KEY,
+                      voice_profile_id TEXT NOT NULL,
+                      suggested_profile_id TEXT NOT NULL,
+                      similarity REAL NOT NULL DEFAULT 0.0,
+                      status TEXT NOT NULL DEFAULT 'pending',
+                      created_by TEXT,
+                      created_at REAL,
+                      updated_at REAL,
+                      FOREIGN KEY(voice_profile_id) REFERENCES voice_profiles(id) ON DELETE CASCADE,
+                      FOREIGN KEY(suggested_profile_id) REFERENCES voice_profiles(id) ON DELETE CASCADE
+                    );
+                    """
+                )
                 cols = []
                 with suppress(Exception):
                     cols = [
@@ -488,6 +504,30 @@ class JobStore:
                             f"ALTER TABLE voice_profile_aliases ADD COLUMN {name} {typ};"
                         )
 
+                cols_suggest = []
+                with suppress(Exception):
+                    cols_suggest = [
+                        str(r["name"])
+                        for r in con.execute("PRAGMA table_info(voice_profile_suggestions);").fetchall()
+                    ]
+                want_suggest: dict[str, str] = {
+                    "id": "TEXT",
+                    "voice_profile_id": "TEXT",
+                    "suggested_profile_id": "TEXT",
+                    "similarity": "REAL DEFAULT 0.0",
+                    "status": "TEXT DEFAULT 'pending'",
+                    "created_by": "TEXT",
+                    "created_at": "REAL",
+                    "updated_at": "REAL",
+                }
+                for name, typ in want_suggest.items():
+                    if name in cols_suggest:
+                        continue
+                    with suppress(Exception):
+                        con.execute(
+                            f"ALTER TABLE voice_profile_suggestions ADD COLUMN {name} {typ};"
+                        )
+
                 con.execute(
                     "CREATE INDEX IF NOT EXISTS idx_voice_profiles_series_lock ON voice_profiles(series_lock);"
                 )
@@ -499,6 +539,21 @@ class JobStore:
                 )
                 con.execute(
                     "CREATE INDEX IF NOT EXISTS idx_voice_profile_aliases_alias_id ON voice_profile_aliases(alias_of_voice_profile_id);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_voice_profile_suggest_voice_id ON voice_profile_suggestions(voice_profile_id);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_voice_profile_suggest_suggested_id ON voice_profile_suggestions(suggested_profile_id);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_voice_profile_suggest_status ON voice_profile_suggestions(status);"
+                )
+                con.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_profile_suggest_pair
+                    ON voice_profile_suggestions(voice_profile_id, suggested_profile_id);
+                    """
                 )
 
                 # Default policies (best-effort; only apply when reuse_allowed is NULL).
@@ -1890,6 +1945,266 @@ class JobStore:
             "embedding_model_id": str(embedding_model_id or ""),
             "metadata_json": self._parse_metadata_json(meta_raw),
         }
+
+    def list_voice_profile_suggestions(
+        self, profile_id: str, *, status: str | None = "pending"
+    ) -> list[dict[str, Any]]:
+        pid = str(profile_id or "").strip()
+        if not pid:
+            return []
+        con = self._conn()
+        try:
+            if status is None:
+                rows = con.execute(
+                    "SELECT * FROM voice_profile_suggestions WHERE voice_profile_id = ?;",
+                    (pid,),
+                ).fetchall()
+            else:
+                rows = con.execute(
+                    "SELECT * FROM voice_profile_suggestions WHERE voice_profile_id = ? AND status = ?;",
+                    (pid, str(status)),
+                ).fetchall()
+            out = []
+            for r in rows:
+                out.append({k: r[k] for k in r.keys()})
+            out.sort(key=lambda x: float(x.get("similarity") or 0.0), reverse=True)
+            return out
+        finally:
+            con.close()
+
+    def list_voice_profile_suggestions_all(
+        self, *, status: str | None = "pending", limit: int = 200, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        lim = max(1, min(1000, int(limit)))
+        off = max(0, int(offset))
+        con = self._conn()
+        try:
+            if status is None:
+                rows = con.execute(
+                    "SELECT * FROM voice_profile_suggestions ORDER BY created_at DESC LIMIT ? OFFSET ?;",
+                    (lim, off),
+                ).fetchall()
+            else:
+                rows = con.execute(
+                    """
+                    SELECT * FROM voice_profile_suggestions
+                    WHERE status = ?
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?;
+                    """,
+                    (str(status), lim, off),
+                ).fetchall()
+            return [{k: r[k] for k in r.keys()} for r in rows]
+        finally:
+            con.close()
+
+    def get_voice_profile_suggestion(self, suggestion_id: str) -> dict[str, Any] | None:
+        sid = str(suggestion_id or "").strip()
+        if not sid:
+            return None
+        con = self._conn()
+        try:
+            row = con.execute(
+                "SELECT * FROM voice_profile_suggestions WHERE id = ? LIMIT 1;", (sid,)
+            ).fetchone()
+            if row is None:
+                return None
+            return {k: row[k] for k in row.keys()}
+        finally:
+            con.close()
+
+    def insert_voice_profile_suggestion(
+        self,
+        *,
+        voice_profile_id: str,
+        suggested_profile_id: str,
+        similarity: float,
+        created_by: str,
+        status: str = "pending",
+    ) -> dict[str, Any] | None:
+        vp = str(voice_profile_id or "").strip()
+        sp = str(suggested_profile_id or "").strip()
+        if not vp or not sp or vp == sp:
+            return None
+        now = float(time.time())
+        sid = f"vps_{__import__('secrets').token_hex(8)}"
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT OR IGNORE INTO voice_profile_suggestions (
+                      id, voice_profile_id, suggested_profile_id, similarity,
+                      status, created_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        sid,
+                        vp,
+                        sp,
+                        float(similarity),
+                        str(status or "pending"),
+                        str(created_by or ""),
+                        now,
+                        now,
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
+        return self.get_voice_profile_suggestion(sid)
+
+    def set_voice_profile_suggestion_status(
+        self, suggestion_id: str, *, status: str
+    ) -> dict[str, Any] | None:
+        sid = str(suggestion_id or "").strip()
+        if not sid:
+            return None
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    "UPDATE voice_profile_suggestions SET status = ?, updated_at = ? WHERE id = ?;",
+                    (str(status), float(time.time()), sid),
+                )
+                con.commit()
+            finally:
+                con.close()
+        return self.get_voice_profile_suggestion(sid)
+
+    def upsert_voice_profile_alias(
+        self,
+        *,
+        voice_profile_id: str,
+        alias_of_voice_profile_id: str,
+        confidence: float,
+        approved_by_admin: bool = False,
+        approved_at: float | None = None,
+    ) -> dict[str, Any] | None:
+        vp = str(voice_profile_id or "").strip()
+        ap = str(alias_of_voice_profile_id or "").strip()
+        if not vp or not ap or vp == ap:
+            return None
+        now = float(time.time())
+        aid = f"vpa_{__import__('secrets').token_hex(8)}"
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT OR IGNORE INTO voice_profile_aliases (
+                      id, voice_profile_id, alias_of_voice_profile_id,
+                      confidence, approved_by_admin, approved_at
+                    ) VALUES (?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        aid,
+                        vp,
+                        ap,
+                        float(confidence),
+                        1 if bool(approved_by_admin) else 0,
+                        float(approved_at) if approved_at is not None else None,
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
+        # If insert was ignored, attempt to fetch existing alias.
+        con = self._conn()
+        try:
+            row = con.execute(
+                """
+                SELECT * FROM voice_profile_aliases
+                WHERE voice_profile_id = ? AND alias_of_voice_profile_id = ?
+                LIMIT 1;
+                """,
+                (vp, ap),
+            ).fetchone()
+            if row is None:
+                return None
+            d = {k: row[k] for k in row.keys()}
+        finally:
+            con.close()
+        return d
+
+    def approve_voice_profile_alias(
+        self, voice_profile_id: str, alias_of_voice_profile_id: str
+    ) -> dict[str, Any] | None:
+        vp = str(voice_profile_id or "").strip()
+        ap = str(alias_of_voice_profile_id or "").strip()
+        if not vp or not ap:
+            return None
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    UPDATE voice_profile_aliases
+                    SET approved_by_admin = 1, approved_at = ?
+                    WHERE voice_profile_id = ? AND alias_of_voice_profile_id = ?;
+                    """,
+                    (float(time.time()), vp, ap),
+                )
+                con.commit()
+            finally:
+                con.close()
+        con = self._conn()
+        try:
+            row = con.execute(
+                """
+                SELECT * FROM voice_profile_aliases
+                WHERE voice_profile_id = ? AND alias_of_voice_profile_id = ?
+                LIMIT 1;
+                """,
+                (vp, ap),
+            ).fetchone()
+            if row is None:
+                return None
+            return {k: row[k] for k in row.keys()}
+        finally:
+            con.close()
+
+    def has_voice_profile_alias(self, voice_profile_id: str, alias_of_voice_profile_id: str) -> bool:
+        vp = str(voice_profile_id or "").strip()
+        ap = str(alias_of_voice_profile_id or "").strip()
+        if not vp or not ap:
+            return False
+        con = self._conn()
+        try:
+            row = con.execute(
+                """
+                SELECT 1 FROM voice_profile_aliases
+                WHERE voice_profile_id = ? AND alias_of_voice_profile_id = ?
+                LIMIT 1;
+                """,
+                (vp, ap),
+            ).fetchone()
+            return row is not None
+        finally:
+            con.close()
+
+    def get_voice_profile_alias(
+        self, voice_profile_id: str, alias_of_voice_profile_id: str
+    ) -> dict[str, Any] | None:
+        vp = str(voice_profile_id or "").strip()
+        ap = str(alias_of_voice_profile_id or "").strip()
+        if not vp or not ap:
+            return None
+        con = self._conn()
+        try:
+            row = con.execute(
+                """
+                SELECT * FROM voice_profile_aliases
+                WHERE voice_profile_id = ? AND alias_of_voice_profile_id = ?
+                LIMIT 1;
+                """,
+                (vp, ap),
+            ).fetchone()
+            if row is None:
+                return None
+            return {k: row[k] for k in row.keys()}
+        finally:
+            con.close()
 
     def _maybe_upsert_library_from_raw(self, job_id: str, raw: dict[str, Any]) -> None:
         """

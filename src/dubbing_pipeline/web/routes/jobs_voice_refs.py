@@ -118,6 +118,21 @@ async def get_job_voice_refs(
                 cslug = str(rec.get("character_slug") or "").strip()
                 if sid and cslug:
                     speaker_map[sid] = cslug
+    # Track-clone voice profile mapping (best-effort; speaker_id -> profile_id).
+    voice_profile_map: dict[str, dict[str, Any]] = {}
+    try:
+        rt = dict(job.runtime or {})
+        vp = rt.get("voice_profile_map")
+        if isinstance(vp, dict):
+            for sid, rec in vp.items():
+                if not str(sid or "").strip():
+                    continue
+                if isinstance(rec, dict):
+                    voice_profile_map[str(sid)] = dict(rec)
+                else:
+                    voice_profile_map[str(sid)] = {"profile_id": str(rec)}
+    except Exception:
+        voice_profile_map = {}
 
     allow_audio = not _privacy_blocks_voice_refs(job)
     items_out: dict[str, Any] = {}
@@ -178,6 +193,7 @@ async def get_job_voice_refs(
             "character_slug": character_slug or None,
             "character_ref_path": character_ref_path,
             "used_ref_kind": used_ref_kind,
+            "voice_profile_id": str((voice_profile_map.get(safe_sid) or {}).get("profile_id") or ""),
             "allow_audio": bool(allow_audio),
             "audio_url": (
                 f"/api/jobs/{id}/voice_refs/{safe_sid}/audio" if allow_audio else None

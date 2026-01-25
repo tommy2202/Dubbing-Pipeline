@@ -532,6 +532,93 @@ async def admin_delete_pronunciation(
     return {"ok": ok}
 
 
+@router.get("/voices/suggestions")
+async def admin_list_voice_profile_suggestions(
+    request: Request,
+    status: str | None = "pending",
+    limit: int = 200,
+    offset: int = 0,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict[str, Any]:
+    store = _store(request)
+    status_eff = None if not status or status == "all" else str(status)
+    items = store.list_voice_profile_suggestions_all(
+        status=status_eff, limit=int(limit), offset=int(offset)
+    )
+    out: list[dict[str, Any]] = []
+    for rec in items:
+        pid = str(rec.get("voice_profile_id") or "")
+        sid = str(rec.get("suggested_profile_id") or "")
+        prof = store.get_voice_profile(pid) if pid else None
+        sugg = store.get_voice_profile(sid) if sid else None
+        out.append(
+            {
+                "id": str(rec.get("id") or ""),
+                "profile_id": pid,
+                "suggested_profile_id": sid,
+                "similarity": float(rec.get("similarity") or 0.0),
+                "status": str(rec.get("status") or ""),
+                "created_at": rec.get("created_at"),
+                "updated_at": rec.get("updated_at"),
+                "profile_display_name": (
+                    str(prof.get("display_name") or "") if isinstance(prof, dict) else ""
+                ),
+                "profile_series_lock": (
+                    str(prof.get("series_lock") or "") if isinstance(prof, dict) else ""
+                ),
+                "suggested_display_name": (
+                    str(sugg.get("display_name") or "") if isinstance(sugg, dict) else ""
+                ),
+                "suggested_series_lock": (
+                    str(sugg.get("series_lock") or "") if isinstance(sugg, dict) else ""
+                ),
+                "suggested_scope": (
+                    str(sugg.get("scope") or "") if isinstance(sugg, dict) else ""
+                ),
+            }
+        )
+    return {"ok": True, "items": out, "limit": int(limit), "offset": int(offset)}
+
+
+@router.post("/voices/approve_merge")
+async def admin_approve_voice_profile_merge(
+    request: Request,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict[str, Any]:
+    store = _store(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    suggestion_id = str(body.get("suggestion_id") or "").strip()
+    if not suggestion_id:
+        raise HTTPException(status_code=422, detail="suggestion_id required")
+    sugg = store.get_voice_profile_suggestion(suggestion_id)
+    if sugg is None:
+        raise HTTPException(status_code=404, detail="suggestion not found")
+    if str(sugg.get("status") or "") != "accepted":
+        raise HTTPException(status_code=409, detail="Suggestion not accepted by owner")
+    vp = str(sugg.get("voice_profile_id") or "")
+    ap = str(sugg.get("suggested_profile_id") or "")
+    alias = None
+    if not store.has_voice_profile_alias(vp, ap):
+        alias = store.upsert_voice_profile_alias(
+            voice_profile_id=vp,
+            alias_of_voice_profile_id=ap,
+            confidence=float(sugg.get("similarity") or 0.0),
+            approved_by_admin=True,
+            approved_at=time.time(),
+        )
+    else:
+        alias = store.approve_voice_profile_alias(vp, ap)
+    store.set_voice_profile_suggestion_status(suggestion_id, status="approved")
+    audit.emit(
+        "admin.voice_profile.approve_merge",
+        user_id=str(ident.user.id),
+        meta={"suggestion_id": suggestion_id, "voice_profile_id": vp, "alias_of": ap},
+    )
+    return {"ok": True, "alias": alias, "suggestion_id": suggestion_id}
+
+
 @router.get("/invites")
 async def admin_list_invites(
     request: Request,

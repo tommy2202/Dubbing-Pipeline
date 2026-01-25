@@ -596,6 +596,21 @@ async def ui_admin_pronunciation(request: Request) -> HTMLResponse:
     return _render(request, "admin_pronunciation.html", {})
 
 
+@router.get("/admin/voice-suggestions")
+async def ui_admin_voice_suggestions(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    try:
+        if not (user.role and user.role.value == "admin"):
+            return RedirectResponse(url="/ui/dashboard", status_code=302)
+    except Exception:
+        return RedirectResponse(url="/ui/dashboard", status_code=302)
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="admin_voice_suggestions")
+    return _render(request, "admin_voice_suggestions.html", {})
+
+
 @router.get("/admin/invites")
 async def ui_admin_invites(request: Request) -> HTMLResponse:
     user = _current_user_optional(request)
