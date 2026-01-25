@@ -37,6 +37,93 @@ def _require_voice_profile_access(profile: dict[str, Any], ident: Identity) -> N
     raise HTTPException(status_code=403, detail="Forbidden")
 
 
+def _normalize_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    s = str(value).strip().lower()
+    if s in {"1", "true", "yes", "on"}:
+        return True
+    if s in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _apply_voice_profile_policy(
+    *,
+    existing: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    source_type = str(payload.get("source_type") or "").strip()
+    if source_type not in {"user_upload", "licensed_pack", "extracted_from_media", "unknown"}:
+        raise HTTPException(status_code=422, detail="source_type is required")
+    scope = str(payload.get("scope") or existing.get("scope") or "private").strip().lower()
+    if scope not in {"private", "friends", "global"}:
+        raise HTTPException(status_code=422, detail="Invalid scope")
+    share_allowed = _normalize_bool(payload.get("share_allowed"), default=bool(existing.get("share_allowed")))
+    export_allowed = _normalize_bool(
+        payload.get("export_allowed"), default=bool(existing.get("export_allowed"))
+    )
+    reuse_allowed = _normalize_bool(
+        payload.get("reuse_allowed"), default=bool(existing.get("reuse_allowed"))
+    )
+    series_lock = str(payload.get("series_lock") or existing.get("series_lock") or "").strip()
+
+    existing_source = str(existing.get("source_type") or "").strip()
+    if existing_source == "extracted_from_media" and source_type != "extracted_from_media":
+        raise HTTPException(status_code=422, detail="Cannot change source for extracted media")
+
+    if source_type == "extracted_from_media":
+        if not series_lock:
+            raise HTTPException(status_code=422, detail="Series lock required for extracted media")
+        if str(payload.get("series_lock") or "").strip() and series_lock != str(existing.get("series_lock") or ""):
+            raise HTTPException(status_code=422, detail="Series lock is enforced for extracted media")
+        if scope != "private" or share_allowed or export_allowed or reuse_allowed:
+            raise HTTPException(
+                status_code=422,
+                detail="Extracted media voices must remain private and cannot be shared/exported",
+            )
+        scope = "private"
+        share_allowed = False
+        export_allowed = False
+        reuse_allowed = False
+
+    if source_type == "unknown":
+        if scope != "private" or share_allowed or export_allowed or reuse_allowed:
+            raise HTTPException(
+                status_code=422,
+                detail="Select a source before enabling sharing or reuse",
+            )
+        scope = "private"
+        share_allowed = False
+        export_allowed = False
+        reuse_allowed = False
+
+    if source_type in {"user_upload", "licensed_pack"}:
+        if scope in {"global", "friends"} and not reuse_allowed:
+            raise HTTPException(
+                status_code=422,
+                detail="Enable reuse before sharing globally",
+            )
+        if scope in {"global", "friends"} and not share_allowed:
+            raise HTTPException(
+                status_code=422,
+                detail="Sharing must be enabled for global visibility",
+            )
+
+    return {
+        "source_type": source_type,
+        "scope": scope,
+        "share_allowed": share_allowed,
+        "export_allowed": export_allowed,
+        "reuse_allowed": reuse_allowed,
+        "series_lock": series_lock,
+    }
+
+
 @router.get("/api/series/{series_slug}/characters")
 async def list_series_characters(
     request: Request,
@@ -557,3 +644,59 @@ async def accept_voice_profile_suggestion(
         "status": "accepted" if action == "use_existing" else "rejected",
         "alias": alias,
     }
+
+
+@router.post("/api/voices/{profile_id}/consent")
+async def update_voice_profile_consent(
+    request: Request,
+    profile_id: str,
+    ident: Identity = Depends(require_scope("read:job")),
+) -> dict[str, Any]:
+    store = _get_store(request)
+    pid = str(profile_id or "").strip()
+    if not pid:
+        raise HTTPException(status_code=400, detail="profile_id required")
+    prof = store.get_voice_profile(pid)
+    if prof is None:
+        raise HTTPException(status_code=404, detail="voice profile not found")
+    _require_voice_profile_access(prof, ident)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    try:
+        normalized = _apply_voice_profile_policy(existing=prof, payload=body)
+    except HTTPException as ex:
+        audit_event(
+            "voice_profile.policy_blocked",
+            request=request,
+            user_id=ident.user.id,
+            meta={
+                "profile_id": pid,
+                "reason": str(ex.detail),
+                "source_type": str(body.get("source_type") or ""),
+                "scope": str(body.get("scope") or ""),
+            },
+        )
+        raise
+    rec = store.upsert_voice_profile(
+        profile_id=pid,
+        display_name=str(prof.get("display_name") or ""),
+        created_by=str(prof.get("created_by") or ""),
+        scope=str(normalized["scope"]),
+        series_lock=str(normalized["series_lock"] or "") or None,
+        source_type=str(normalized["source_type"]),
+        export_allowed=bool(normalized["export_allowed"]),
+        share_allowed=bool(normalized["share_allowed"]),
+        reuse_allowed=1 if bool(normalized["reuse_allowed"]) else 0,
+        expires_at=prof.get("expires_at"),
+        embedding_vector=prof.get("embedding_vector"),
+        embedding_model_id=str(prof.get("embedding_model_id") or ""),
+        metadata_json=prof.get("metadata_json"),
+    )
+    audit_event(
+        "voice_profile.consent_updated",
+        request=request,
+        user_id=ident.user.id,
+        meta={"profile_id": pid, "source_type": normalized["source_type"]},
+    )
+    return {"ok": True, "profile_id": pid, "item": rec}

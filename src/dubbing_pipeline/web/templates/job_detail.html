@@ -631,6 +631,68 @@
                   </div>
                 </template>
 
+                <template x-if="(voiceRefs.items[sid]||{}).voice_profile">
+                  <div class="mt-3 rounded border border-slate-800 bg-slate-950/30 p-3">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="text-xs text-slate-500">Voice profile consent</div>
+                      <div class="text-xs text-slate-400 font-mono" x-text="(voiceRefs.items[sid]||{}).voice_profile_id || ''"></div>
+                    </div>
+                    <div class="mt-2">
+                      <label class="block text-xs text-slate-500">Source</label>
+                      <select class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100"
+                              x-model="voiceProfileSource[sid]"
+                              :disabled="voiceProfileLocked(sid)">
+                        <option value="unknown">Unknown</option>
+                        <option value="user_upload">User upload</option>
+                        <option value="licensed_pack">Licensed pack</option>
+                        <option value="extracted_from_media">Extracted from media</option>
+                      </select>
+                      <div class="mt-1 text-xs text-slate-500"
+                           x-text="voiceProfileLocked(sid) ? 'Extracted media voices are private-only.' : 'Choose the source type to set reuse rights.'"></div>
+                    </div>
+
+                    <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <label class="block text-xs text-slate-500">Visibility</label>
+                        <select class="mt-1 w-full rounded bg-slate-950 border border-slate-800 px-3 py-2 text-sm text-slate-100"
+                                x-model="voiceProfileScope[sid]"
+                                :disabled="voiceProfileLocked(sid) || voiceProfileNeedsSource(sid)">
+                          <option value="private">Private</option>
+                          <option value="friends">Friends</option>
+                          <option value="global">Global</option>
+                        </select>
+                      </div>
+                      <div class="space-y-2">
+                        <label class="flex items-center gap-2 text-xs text-slate-300">
+                          <input type="checkbox" class="h-4 w-4" x-model="voiceProfileReuse[sid]"
+                                 :disabled="voiceProfileLocked(sid) || voiceProfileNeedsSource(sid)" />
+                          <span>Allow reuse</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-slate-300">
+                          <input type="checkbox" class="h-4 w-4" x-model="voiceProfileShare[sid]"
+                                 :disabled="voiceProfileLocked(sid) || voiceProfileNeedsSource(sid)" />
+                          <span>Allow sharing</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-slate-300">
+                          <input type="checkbox" class="h-4 w-4" x-model="voiceProfileExport[sid]"
+                                 :disabled="voiceProfileLocked(sid) || voiceProfileNeedsSource(sid)" />
+                          <span>Allow export</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div class="mt-2 text-xs text-amber-200" x-show="voiceProfileRestrictionLabel(sid)" x-text="voiceProfileRestrictionLabel(sid)"></div>
+                    <div class="mt-2 text-xs text-red-200" x-show="voiceProfileError[sid]" x-text="voiceProfileError[sid]"></div>
+
+                    <button type="button"
+                            class="mt-3 rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs disabled:opacity-50"
+                            :disabled="!canEditVoices || voiceProfileSaving[sid]"
+                            @click="saveVoiceProfileConsent(sid)">
+                      Save consent
+                    </button>
+                  </div>
+                </template>
+
                 <template x-if="voiceProfileSuggestionError[sid]">
                   <div class="mt-2 text-xs text-red-200" x-text="voiceProfileSuggestionError[sid]"></div>
                 </template>
@@ -1002,6 +1064,13 @@
       voiceRefsLoaded: false,
       voiceRefs: null,
       voiceRefsError: "",
+      voiceProfileSource: {},
+      voiceProfileScope: {},
+      voiceProfileReuse: {},
+      voiceProfileShare: {},
+      voiceProfileExport: {},
+      voiceProfileSaving: {},
+      voiceProfileError: {},
       voiceProfileSuggestions: {},
       voiceProfileSuggestionError: {},
       voicesError: "",
@@ -1983,9 +2052,80 @@
             return;
           }
           this.voiceRefs = d;
+          this.voiceProfileSource = {};
+          this.voiceProfileScope = {};
+          this.voiceProfileReuse = {};
+          this.voiceProfileShare = {};
+          this.voiceProfileExport = {};
+          this.voiceProfileSaving = {};
+          this.voiceProfileError = {};
+          try {
+            const items = (d && d.items) ? d.items : {};
+            for (const sid of Object.keys(items || {})) {
+              const vp = (items[sid] || {}).voice_profile || null;
+              if (!vp) continue;
+              this.voiceProfileSource[sid] = String(vp.source_type || "unknown");
+              this.voiceProfileScope[sid] = String(vp.scope || "private");
+              this.voiceProfileReuse[sid] = !!vp.reuse_allowed;
+              this.voiceProfileShare[sid] = !!vp.share_allowed;
+              this.voiceProfileExport[sid] = !!vp.export_allowed;
+              this.voiceProfileSaving[sid] = false;
+              this.voiceProfileError[sid] = "";
+            }
+          } catch (e) {}
           await this.loadVoiceProfileSuggestions();
         } catch (e) {
           this.voiceRefsError = "Voice refs load failed";
+        }
+      },
+      voiceProfileLocked(sid) {
+        const src = String(this.voiceProfileSource[sid] || "");
+        return src === "extracted_from_media";
+      },
+      voiceProfileNeedsSource(sid) {
+        const src = String(this.voiceProfileSource[sid] || "");
+        return src === "" || src === "unknown";
+      },
+      voiceProfileRestrictionLabel(sid) {
+        if (this.voiceProfileLocked(sid)) return "This voice can’t be shared or exported.";
+        if (this.voiceProfileNeedsSource(sid)) return "Select a source to enable reuse/sharing.";
+        if ((this.voiceProfileScope[sid] || "") !== "private" && !this.voiceProfileReuse[sid]) {
+          return "Enable reuse before sharing globally.";
+        }
+        return "";
+      },
+      async saveVoiceProfileConsent(sid) {
+        const items = (this.voiceRefs && this.voiceRefs.items) ? this.voiceRefs.items : {};
+        const vpId = String((items[sid] || {}).voice_profile_id || "");
+        if (!vpId) return;
+        this.voiceProfileSaving[sid] = true;
+        this.voiceProfileError[sid] = "";
+        try {
+          const csrf = document.getElementById("csrf")?.value || "";
+          const r = await fetch("/api/voices/" + encodeURIComponent(vpId) + "/consent", {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json", "X-CSRF-Token": csrf },
+            body: JSON.stringify({
+              source_type: String(this.voiceProfileSource[sid] || "unknown"),
+              scope: String(this.voiceProfileScope[sid] || "private"),
+              reuse_allowed: !!this.voiceProfileReuse[sid],
+              share_allowed: !!this.voiceProfileShare[sid],
+              export_allowed: !!this.voiceProfileExport[sid],
+            }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.voiceProfileError[sid] = d.detail || ("Save failed (" + r.status + ")");
+            try { window.showToast(this.voiceProfileError[sid], "error"); } catch (e) {}
+            return;
+          }
+          try { window.showToast("Consent saved", "success"); } catch (e) {}
+          await this.loadVoiceRefs();
+        } catch (e) {
+          this.voiceProfileError[sid] = "Save failed";
+        } finally {
+          this.voiceProfileSaving[sid] = false;
         }
       },
       async loadVoiceProfileSuggestions() {
