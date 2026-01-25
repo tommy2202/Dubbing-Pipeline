@@ -1,0 +1,222 @@
+{% extends "_base.html" %}
+
+{% block title %}Admin Dashboard • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div class="flex items-start justify-between gap-4">
+  <div>
+    <div class="text-xs text-slate-500">Admin / Dashboard</div>
+    <h1 class="mt-1 text-2xl font-semibold">Admin dashboard</h1>
+    <p class="mt-1 text-sm text-slate-400">Queue, workers, failures, and storage usage.</p>
+  </div>
+  <button type="button" class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-sm"
+          x-data @click="document.dispatchEvent(new CustomEvent('admin-refresh'))">
+    Refresh
+  </button>
+</div>
+
+<div class="mt-6 space-y-4" x-data="adminDashboard()" x-init="init()">
+  <div class="grid gap-4 lg:grid-cols-4">
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-xs text-slate-500">Queue depth</div>
+      <div class="mt-2 text-2xl font-semibold" x-text="metrics ? metrics.queue.depth : '—'"></div>
+      <div class="mt-1 text-xs text-slate-500">
+        <span x-text="metrics ? ('queued ' + metrics.queue.queued) : ''"></span>
+        <span class="mx-1">·</span>
+        <span x-text="metrics ? ('running ' + metrics.queue.running) : ''"></span>
+      </div>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-xs text-slate-500">Active jobs</div>
+      <div class="mt-2 text-2xl font-semibold" x-text="metrics ? (metrics.active_jobs.length || 0) : '—'"></div>
+      <div class="mt-1 text-xs text-slate-500" x-text="metrics ? ('mode: ' + (metrics.queue.snapshot_mode || '')) : ''"></div>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-xs text-slate-500">Worker health</div>
+      <div class="mt-2 text-sm text-slate-200" x-text="workerLabel()"></div>
+      <div class="mt-1 text-xs text-slate-500" x-text="metrics ? ('alive ' + metrics.worker_health.workers_alive + '/' + metrics.worker_health.workers_total) : ''"></div>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-xs text-slate-500">Failures (total)</div>
+      <div class="mt-2 text-2xl font-semibold" x-text="failuresTotal()"></div>
+      <div class="mt-1 text-xs text-slate-500">By stage</div>
+    </div>
+  </div>
+
+  <div class="grid gap-4 lg:grid-cols-3">
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4 lg:col-span-2">
+      <div class="flex items-center justify-between gap-2">
+        <div class="text-sm text-slate-300">Active jobs</div>
+      </div>
+      <div class="mt-3 overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="text-xs text-slate-500">
+            <tr>
+              <th class="text-left py-2 pr-3">job</th>
+              <th class="text-left py-2 pr-3">user</th>
+              <th class="text-left py-2 pr-3">state</th>
+              <th class="text-left py-2 pr-3">progress</th>
+              <th class="text-left py-2 pr-3">series</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="j in (metrics ? metrics.active_jobs : [])" :key="j.job_id">
+              <tr class="border-t border-slate-900">
+                <td class="py-2 pr-3 font-mono text-xs" x-text="j.job_id"></td>
+                <td class="py-2 pr-3 text-xs text-slate-400" x-text="j.user_id"></td>
+                <td class="py-2 pr-3 text-xs" x-text="j.state"></td>
+                <td class="py-2 pr-3 text-xs" x-text="Math.round(Number(j.progress || 0) * 100) + '%'"></td>
+                <td class="py-2 pr-3 text-xs text-slate-400" x-text="j.series_slug ? (j.series_slug + ' S' + (j.season_number || 0) + 'E' + (j.episode_number || 0)) : ''"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-2 text-sm text-slate-500" x-show="metrics && !metrics.active_jobs.length" x-cloak>No active jobs.</div>
+    </div>
+
+    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div class="text-sm text-slate-300">Failures by stage</div>
+      <div class="mt-3 space-y-2 text-sm">
+        <template x-for="(count, stage) in (metrics ? metrics.failures_by_stage : {})" :key="stage">
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-slate-400" x-text="stage"></div>
+            <div class="text-slate-200" x-text="count"></div>
+          </div>
+        </template>
+      </div>
+      <div class="mt-2 text-sm text-slate-500" x-show="metrics && !Object.keys(metrics.failures_by_stage || {}).length" x-cloak>No failures recorded.</div>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <div class="text-sm text-slate-300">Recent failures</div>
+    <div class="mt-3 overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead class="text-xs text-slate-500">
+          <tr>
+            <th class="text-left py-2 pr-3">job</th>
+            <th class="text-left py-2 pr-3">stage</th>
+            <th class="text-left py-2 pr-3">user</th>
+            <th class="text-left py-2 pr-3">series</th>
+            <th class="text-left py-2 pr-3">error</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="f in failures" :key="f.job_id">
+            <tr class="border-t border-slate-900">
+              <td class="py-2 pr-3 font-mono text-xs" x-text="f.job_id"></td>
+              <td class="py-2 pr-3 text-xs" x-text="f.stage"></td>
+              <td class="py-2 pr-3 text-xs text-slate-400" x-text="f.user_id"></td>
+              <td class="py-2 pr-3 text-xs text-slate-400" x-text="f.series_slug ? (f.series_slug + ' S' + (f.season_number || 0) + 'E' + (f.episode_number || 0)) : ''"></td>
+              <td class="py-2 pr-3 text-xs text-slate-400" x-text="f.error || f.message"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <div class="mt-2 text-sm text-slate-500" x-show="!failures.length && !busy" x-cloak>No failed jobs.</div>
+  </div>
+
+  <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+    <div class="text-sm text-slate-300">Storage usage per user</div>
+    <div class="mt-3 overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead class="text-xs text-slate-500">
+          <tr>
+            <th class="text-left py-2 pr-3">user</th>
+            <th class="text-left py-2 pr-3">bytes</th>
+            <th class="text-left py-2 pr-3">updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="u in (metrics ? metrics.storage_usage : [])" :key="u.user_id">
+            <tr class="border-t border-slate-900">
+              <td class="py-2 pr-3 font-mono text-xs" x-text="u.user_id"></td>
+              <td class="py-2 pr-3 text-xs" x-text="fmtBytes(u.bytes)"></td>
+              <td class="py-2 pr-3 text-xs text-slate-400" x-text="fmtTime(u.updated_at)"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <div class="mt-2 text-sm text-slate-500" x-show="metrics && !metrics.storage_usage.length" x-cloak>No storage data.</div>
+  </div>
+
+  <div class="mt-3 text-sm text-red-200" role="alert" aria-live="polite" x-show="error" x-cloak x-text="error"></div>
+</div>
+
+<script>
+  function adminDashboard() {
+    return {
+      metrics: null,
+      failures: [],
+      busy: false,
+      error: "",
+      init() {
+        this.load();
+        document.addEventListener("admin-refresh", () => this.load());
+      },
+      async load() {
+        this.busy = true;
+        this.error = "";
+        try {
+          const r = await fetch("/api/admin/metrics", { credentials: "include" });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            this.error = d.detail || ("Metrics load failed (" + r.status + ")");
+            this.metrics = null;
+            return;
+          }
+          this.metrics = d;
+        } catch (e) {
+          this.error = "Metrics load failed";
+          this.metrics = null;
+        }
+        try {
+          const r2 = await fetch("/api/admin/jobs/failures?limit=50", { credentials: "include" });
+          const d2 = await r2.json().catch(() => ({}));
+          if (!r2.ok) {
+            this.error = d2.detail || ("Failures load failed (" + r2.status + ")");
+            this.failures = [];
+            return;
+          }
+          this.failures = Array.isArray(d2.items) ? d2.items : [];
+        } catch (e) {
+          this.error = "Failures load failed";
+          this.failures = [];
+        } finally {
+          this.busy = false;
+        }
+      },
+      failuresTotal() {
+        if (!this.metrics || !this.metrics.failures_by_stage) return "—";
+        let total = 0;
+        for (const k of Object.keys(this.metrics.failures_by_stage || {})) {
+          total += Number(this.metrics.failures_by_stage[k] || 0);
+        }
+        return total;
+      },
+      workerLabel() {
+        if (!this.metrics || !this.metrics.worker_health) return "—";
+        const h = this.metrics.worker_health;
+        return (h.queue_mode || "unknown") + (h.backend_ok ? " (ok)" : " (degraded)");
+      },
+      fmtTime(ts) {
+        const n = Number(ts || 0);
+        if (!Number.isFinite(n) || n <= 0) return "";
+        try { return new Date(n * 1000).toLocaleString(); } catch (e) { return ""; }
+      },
+      fmtBytes(n) {
+        const v = Number(n || 0);
+        if (!Number.isFinite(v) || v <= 0) return "0";
+        const units = ["B","KB","MB","GB","TB"];
+        let i = 0;
+        let x = v;
+        while (x >= 1024 && i < units.length - 1) { x /= 1024; i++; }
+        return x.toFixed(1) + " " + units[i];
+      },
+    };
+  }
+</script>
+{% endblock %}

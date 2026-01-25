@@ -290,6 +290,55 @@ class JobQueue:
         job = self.store.get(job_id)
         if job is None:
             return
+        def _stage_meta() -> dict[str, Any]:
+            return {
+                "job_id": str(job_id),
+                "user_id": str(getattr(job, "owner_id", "") or ""),
+                "series_slug": str(getattr(job, "series_slug", "") or ""),
+                "season_number": int(getattr(job, "season_number", 0) or 0),
+                "episode_number": int(getattr(job, "episode_number", 0) or 0),
+            }
+
+        def _log_stage_event(
+            stage: str,
+            event: str,
+            *,
+            outcome: str | None = None,
+            duration_s: float | None = None,
+            error: str | None = None,
+        ) -> None:
+            meta = _stage_meta()
+            logger.info(
+                "job_stage",
+                stage=str(stage),
+                event=str(event),
+                outcome=str(outcome or ""),
+                duration_s=float(duration_s) if duration_s is not None else None,
+                error=str(error or "")[:200] if error else None,
+                **meta,
+            )
+            msg = f"[{now_utc()}] stage={stage} event={event}"
+            if outcome:
+                msg += f" outcome={outcome}"
+            if duration_s is not None:
+                msg += f" duration_s={float(duration_s):.2f}"
+            if error:
+                msg += f" error={str(error)[:200]}"
+            msg += (
+                f" job_id={meta['job_id']} user_id={meta['user_id']}"
+                f" series={meta['series_slug']} season={meta['season_number']} episode={meta['episode_number']}"
+            )
+            with suppress(Exception):
+                self.store.append_log(job_id, msg)
+
+        def _stage_start(stage: str) -> float:
+            _log_stage_event(stage, "start")
+            return time.perf_counter()
+
+        def _stage_end(stage: str, t0: float, *, outcome: str, error: str | None = None) -> None:
+            dt = max(0.0, time.perf_counter() - float(t0 or 0.0)) if t0 else 0.0
+            _log_stage_event(stage, "end", outcome=outcome, duration_s=dt, error=error)
+
         limits = get_limits()
         sched = Scheduler.instance_optional()
 
@@ -562,6 +611,10 @@ class JobQueue:
             # a) audio_extractor.extract (~0.10)
             self.store.update(job_id, progress=0.05, message="Extracting audio")
             self.store.append_log(job_id, f"[{now_utc()}] audio_extractor")
+            audio_t0 = _stage_start("audio")
+            audio_outcome = "ok"
+            audio_error = None
+            audio_logged = False
             try:
                 wav_guess = work_dir / "audio.wav"
                 if is_pass2_outer and not (wav_guess.exists() and stage_is_done(ckpt, "audio")):
@@ -578,12 +631,17 @@ class JobQueue:
                     )
                     _auto_match_speakers_best_effort()
                     self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
+                    audio_outcome = "skipped"
+                    audio_error = "pass2_missing_checkpoint"
+                    _stage_end("audio", audio_t0, outcome=audio_outcome, error=audio_error)
+                    audio_logged = True
                     return
                 if wav_guess.exists() and stage_is_done(ckpt, "audio"):
                     wav = wav_guess
                     self.store.append_log(job_id, f"[{now_utc()}] audio_extractor (checkpoint hit)")
                     if is_pass2_outer:
                         _note_pass2_skip("audio_extractor", "checkpoint_hit")
+                    audio_outcome = "skipped"
                 else:
                     _fail_if_forbidden_stage("audio_extractor")
                     with suppress(Exception):
@@ -632,7 +690,17 @@ class JobQueue:
                         pass
             except PhaseTimeout as ex:
                 job_errors.labels(stage="audio_timeout").inc()
+                audio_outcome = "failed"
+                audio_error = str(ex)
+                _stage_end("audio", audio_t0, outcome=audio_outcome, error=audio_error)
+                audio_logged = True
                 raise RuntimeError(str(ex)) from ex
+            except Exception as ex:
+                audio_outcome = "failed"
+                audio_error = str(ex)
+                _stage_end("audio", audio_t0, outcome=audio_outcome, error=audio_error)
+                audio_logged = True
+                raise
             self.store.update(job_id, progress=0.10, message="Audio extracted")
             await self._check_canceled(job_id)
             # Stage manifest (resume-safe metadata; best-effort)
@@ -685,6 +753,8 @@ class JobQueue:
                 )
             except _Pass2Skip:
                 pass
+            if not audio_logged:
+                _stage_end("audio", audio_t0, outcome=audio_outcome, error=audio_error)
             except Exception:
                 pass
 
@@ -1060,6 +1130,9 @@ class JobQueue:
                         job_id, f"[{now_utc()}] voice_auto_match skipped: {ex}"
                     )
 
+            diar_t0 = _stage_start("diarize")
+            diar_outcome = "ok"
+            diar_error = None
             try:
                 if is_pass2_outer:
                     # Pass B must NOT redo diarization or ref extraction.
@@ -1517,9 +1590,14 @@ class JobQueue:
                 )
                 if not is_pass2_outer:
                     _build_voice_refs_best_effort()
+                diar_outcome = "skipped"
+                diar_error = "checkpoint_hit"
             except Exception as ex:
                 self.store.append_log(job_id, f"[{now_utc()}] diarize failed: {ex}")
                 self.store.update(job_id, progress=0.25, message="Diarize skipped")
+                diar_outcome = "failed"
+                diar_error = str(ex)
+            _stage_end("diarize", diar_t0, outcome=diar_outcome, error=diar_error)
             await self._check_canceled(job_id)
 
             # c) transcription.transcribe (~0.60)
@@ -1563,6 +1641,9 @@ class JobQueue:
             srt_out = work_dir / f"{stem}.srt"
             # Persist a stable copy in Output/<stem>/ for inspection / playback.
             srt_public = base_dir / f"{stem}.srt"
+            transcribe_t0 = _stage_start("transcribe")
+            transcribe_outcome = "ok"
+            transcribe_error = None
             self.store.update(job_id, progress=0.30, message=f"Transcribing (Whisper {model_name})")
             self.store.append_log(
                 job_id, f"[{now_utc()}] transcribe model={model_name} device={device}"
@@ -1587,11 +1668,20 @@ class JobQueue:
                         )
                         _auto_match_speakers_best_effort()
                         self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
+                        transcribe_outcome = "skipped"
+                        transcribe_error = "pass2_missing_checkpoint"
+                        _stage_end(
+                            "transcribe",
+                            transcribe_t0,
+                            outcome=transcribe_outcome,
+                            error=transcribe_error,
+                        )
                         return
                     if srt_out.exists() and srt_meta.exists() and stage_is_done(ckpt, "transcribe"):
                         self.store.append_log(job_id, f"[{now_utc()}] transcribe (checkpoint hit)")
                         if is_pass2_outer:
                             _note_pass2_skip("transcribe", "checkpoint_hit")
+                        transcribe_outcome = "skipped"
                     else:
                         # Import path: if a source SRT/transcript was provided at submit time, skip ASR.
                         try:
@@ -1677,6 +1767,8 @@ class JobQueue:
                             self.store.append_log(
                                 job_id, f"[{now_utc()}] transcribe skipped (import)"
                             )
+                            transcribe_outcome = "skipped"
+                            transcribe_error = "imported_transcript"
                         else:
                             _fail_if_forbidden_stage("transcribe")
                             with suppress(Exception):
@@ -1752,8 +1844,16 @@ class JobQueue:
                     dt = elapsed()
                     if dt > float(settings.budget_transcribe_sec):
                         _mark_degraded("budget_transcribe_exceeded")
-            except Exception:
+            except Exception as ex:
                 job_errors.labels(stage="whisper").inc()
+                transcribe_outcome = "failed"
+                transcribe_error = str(ex)
+                _stage_end(
+                    "transcribe",
+                    transcribe_t0,
+                    outcome=transcribe_outcome,
+                    error=transcribe_error,
+                )
                 raise
             try:
                 from dubbing_pipeline.utils.io import atomic_copy
@@ -1847,8 +1947,18 @@ class JobQueue:
             except Exception:
                 pass
 
+            _stage_end(
+                "transcribe",
+                transcribe_t0,
+                outcome=transcribe_outcome,
+                error=transcribe_error,
+            )
+
             # d) translation manager (~0.75) when needed
             # Prefer diarization utterances for timing; assign text/logprob from transcription overlaps.
+            translate_t0 = _stage_start("translate")
+            translate_outcome = "ok"
+            translate_error = None
             diar_utts = sorted(
                 [
                     {
@@ -2234,6 +2344,8 @@ class JobQueue:
                     self.store.append_log(
                         job_id, f"[{now_utc()}] translate skipped (import target srt)"
                     )
+                    translate_outcome = "skipped"
+                    translate_error = "imported_target_srt"
                 except Exception as ex:
                     self.store.append_log(
                         job_id, f"[{now_utc()}] import target srt failed: {ex} (continuing)"
@@ -2298,6 +2410,8 @@ class JobQueue:
                             self.store.append_log(
                                 job_id, f"[{now_utc()}] translate skipped (import transcript json)"
                             )
+                            translate_outcome = "skipped"
+                            translate_error = "imported_transcript_json"
                 except Exception:
                     pass
 
@@ -2311,6 +2425,8 @@ class JobQueue:
                 self.store.append_log(job_id, f"[{now_utc()}] translate (checkpoint hit)")
                 subs_srt_path = translated_srt
                 do_translate = False
+                translate_outcome = "skipped"
+                translate_error = "checkpoint_hit"
                 with suppress(Exception):
                     record_stage_skipped(
                         job_id,
@@ -2336,6 +2452,14 @@ class JobQueue:
                 )
                 _auto_match_speakers_best_effort()
                 self.store.append_log(job_id, f"[{now_utc()}] passB_complete")
+                translate_outcome = "skipped"
+                translate_error = "pass2_missing_checkpoint"
+                _stage_end(
+                    "translate",
+                    translate_t0,
+                    outcome=translate_outcome,
+                    error=translate_error,
+                )
                 return
             if is_pass2_outer and not do_translate:
                 _note_pass2_skip("translate", "not_needed_or_already_done")
@@ -2345,6 +2469,8 @@ class JobQueue:
                 with suppress(Exception):
                     record_stage_skipped(job_id, "translate", reason, ckpt_path=ckpt_path)
                     translate_skip_recorded = True
+                translate_outcome = "skipped"
+                translate_error = reason
 
             if do_translate:
                 with suppress(Exception):
@@ -2655,8 +2781,12 @@ class JobQueue:
                     self.store.update(
                         job_id, progress=0.75, message="Translation failed (using original text)"
                     )
+                    translate_outcome = "failed"
+                    translate_error = str(ex)
             else:
                 self.store.update(job_id, progress=0.75, message="Translation skipped")
+                if translate_outcome == "ok":
+                    translate_outcome = "skipped"
 
             # Checkpoint translation artifacts so pass-2 reruns can skip MT.
             with suppress(Exception):
@@ -2687,6 +2817,13 @@ class JobQueue:
                 translated_json = edited_json
             await self._check_canceled(job_id)
 
+            _stage_end(
+                "translate",
+                translate_t0,
+                outcome=translate_outcome,
+                error=translate_error,
+            )
+
             # Segment-only resynth: lock other segments to reuse audio where possible.
             if resynth_type == "segments" and resynth_segments:
                 ok_lock = _prepare_segment_resynth(resynth_segments)
@@ -2714,6 +2851,9 @@ class JobQueue:
             def cancel_cb() -> bool:
                 return job_id in self._cancel
 
+            tts_t0 = _stage_start("tts")
+            tts_outcome = "ok"
+            tts_error = None
             self.store.update(job_id, progress=0.76, message="Synthesizing TTS")
             self.store.append_log(job_id, f"[{now_utc()}] tts")
             with suppress(Exception):
@@ -3022,19 +3162,30 @@ class JobQueue:
                         _mark_degraded("budget_tts_exceeded")
             except tts.TTSCanceled:
                 job_errors.labels(stage="tts").inc()
+                tts_outcome = "failed"
+                tts_error = "canceled"
+                _stage_end("tts", tts_t0, outcome=tts_outcome, error=tts_error)
                 raise JobCanceled() from None
             except PhaseTimeout as ex:
                 job_errors.labels(stage="tts_timeout").inc()
                 self.store.append_log(job_id, f"[{now_utc()}] tts watchdog timeout: {ex}")
+                tts_outcome = "failed"
+                tts_error = str(ex)
+                _stage_end("tts", tts_t0, outcome=tts_outcome, error=tts_error)
                 raise RuntimeError(str(ex)) from ex
             except JobCanceled:
                 job_errors.labels(stage="tts").inc()
+                tts_outcome = "failed"
+                tts_error = "canceled"
+                _stage_end("tts", tts_t0, outcome=tts_outcome, error=tts_error)
                 raise
             except Exception as ex:
                 job_errors.labels(stage="tts").inc()
                 self.store.append_log(
                     job_id, f"[{now_utc()}] tts failed: {ex} (continuing with silence)"
                 )
+                tts_outcome = "failed"
+                tts_error = str(ex)
                 # Silence track is already best-effort within tts.run; ensure file exists.
                 if not tts_wav.exists():
                     from dubbing_pipeline.stages.tts import _write_silence_wav  # type: ignore
@@ -3074,6 +3225,7 @@ class JobQueue:
                         job_id, f"[{now_utc()}] review lock-from-resynth failed: {ex}"
                     )
             await self._check_canceled(job_id)
+            _stage_end("tts", tts_t0, outcome=tts_outcome, error=tts_error)
 
             # f) mixing (~1.00)
             out_mkv = work_dir / f"{video_path.stem}.dub.mkv"
@@ -3081,6 +3233,9 @@ class JobQueue:
             final_mkv = base_dir / f"{video_path.stem}.dub.mkv"
             final_mp4 = base_dir / f"{video_path.stem}.dub.mp4"
             used_mux_fallback = False
+            mix_t0 = _stage_start("mix")
+            mix_outcome = "ok"
+            mix_error = None
             self.store.update(job_id, progress=0.97, message="Mixing & muxing")
             self.store.append_log(job_id, f"[{now_utc()}] mix")
             with suppress(Exception):
@@ -3106,6 +3261,7 @@ class JobQueue:
 
                     if (stage_is_done(ckpt, "mix") or stage_is_done(ckpt, "mux")) and not is_pass2_outer:
                         self.store.append_log(job_id, f"[{now_utc()}] mix (checkpoint hit)")
+                        mix_outcome = "skipped"
                         # best-effort: reuse previous output paths if present in store state
                         existing = self.store.get(job_id)
                         if existing and existing.output_mkv and Path(existing.output_mkv).exists():
@@ -3491,6 +3647,8 @@ class JobQueue:
                     self.store.append_log(
                         job_id, f"[{now_utc()}] mix failed: {ex} (falling back to mux)"
                     )
+                    mix_outcome = "failed"
+                    mix_error = str(ex)
                     with suppress(Exception):
                         record_stage_skipped(
                             job_id,
@@ -3502,25 +3660,8 @@ class JobQueue:
                         with suppress(Exception):
                             record_stage_started(job_id, "mux", ckpt_path=ckpt_path)
                             used_mux_fallback = True
-                        run_with_timeout(
-                            "mux",
-                            timeout_s=limits.timeout_mux_s,
-                            fn=mkv_export.mux,
-                            kwargs={
-                                "src_video": video_in,
-                                "dub_wav": tts_wav,
-                                "srt_path": subs_srt_path,
-                                "out_mkv": out_mkv,
-                                "job_id": job_id,
-                            },
-                            cancel_check=_cancel_check_sync,
-                            cancel_exc=JobCanceled(),
-                        )
-                    else:
-                        with suppress(Exception):
-                            record_stage_started(job_id, "mux", ckpt_path=ckpt_path)
-                            used_mux_fallback = True
-                        with sched.phase("mux"):
+                        mux_t0 = _stage_start("mux")
+                        try:
                             run_with_timeout(
                                 "mux",
                                 timeout_s=limits.timeout_mux_s,
@@ -3535,6 +3676,35 @@ class JobQueue:
                                 cancel_check=_cancel_check_sync,
                                 cancel_exc=JobCanceled(),
                             )
+                        except Exception as ex:
+                            _stage_end("mux", mux_t0, outcome="failed", error=str(ex))
+                            raise
+                        _stage_end("mux", mux_t0, outcome="ok")
+                    else:
+                        with suppress(Exception):
+                            record_stage_started(job_id, "mux", ckpt_path=ckpt_path)
+                            used_mux_fallback = True
+                        mux_t0 = _stage_start("mux")
+                        try:
+                            with sched.phase("mux"):
+                                run_with_timeout(
+                                    "mux",
+                                    timeout_s=limits.timeout_mux_s,
+                                    fn=mkv_export.mux,
+                                    kwargs={
+                                        "src_video": video_in,
+                                        "dub_wav": tts_wav,
+                                        "srt_path": subs_srt_path,
+                                        "out_mkv": out_mkv,
+                                        "job_id": job_id,
+                                    },
+                                    cancel_check=_cancel_check_sync,
+                                    cancel_exc=JobCanceled(),
+                                )
+                        except Exception as ex:
+                            _stage_end("mux", mux_t0, outcome="failed", error=str(ex))
+                            raise
+                        _stage_end("mux", mux_t0, outcome="ok")
                 finally:
                     dt = elapsed_mux()
                     if dt > float(settings.budget_mux_sec):
@@ -3548,6 +3718,8 @@ class JobQueue:
                         "combined_with_mix",
                         ckpt_path=ckpt_path,
                     )
+                mux_t0 = _stage_start("mux")
+                _stage_end("mux", mux_t0, outcome="skipped", error="combined_with_mix")
 
             def _move_best_effort(src: Path, dst: Path) -> None:
                 try:
@@ -3564,6 +3736,8 @@ class JobQueue:
             _move_best_effort(Path(out_mkv), final_mkv)
             if out_mp4 and Path(out_mp4).exists():
                 _move_best_effort(Path(out_mp4), final_mp4)
+
+            _stage_end("mix", mix_t0, outcome=mix_outcome, error=mix_error)
 
             # Two-pass voice cloning: after pass1 mux, enqueue pass2 and stop (avoid re-running export/lipsync twice).
             if bool(two_pass_enabled) and str(two_pass_phase or "") != "pass2":

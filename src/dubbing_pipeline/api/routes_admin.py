@@ -10,6 +10,8 @@ from dubbing_pipeline.api.invites import invite_token_hash
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.ops import audit
+from dubbing_pipeline.ops.metrics import job_errors
+from dubbing_pipeline.jobs.models import JobState
 from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.net import get_client_ip
@@ -53,6 +55,59 @@ def _scheduler(request: Request) -> Scheduler:
 def _queue_backend(request: Request):
     qb = getattr(request.app.state, "queue_backend", None)
     return qb
+
+
+def _job_queue(request: Request):
+    q = getattr(request.app.state, "job_queue", None)
+    return q
+
+
+def _collect_job_error_counts() -> dict[str, int]:
+    out: dict[str, int] = {}
+    try:
+        for metric in job_errors.collect():
+            for sample in metric.samples:
+                if not sample.name.endswith("_total"):
+                    continue
+                stage = sample.labels.get("stage") if isinstance(sample.labels, dict) else None
+                if not stage:
+                    continue
+                out[str(stage)] = int(sample.value)
+    except Exception:
+        return {}
+    return out
+
+
+def _infer_failure_stage(log_tail: str, err: str | None) -> str:
+    text = "\n".join([str(err or ""), log_tail]).lower()
+    stages = [
+        "audio",
+        "audio_extractor",
+        "diarize",
+        "transcribe",
+        "translate",
+        "post_translate",
+        "tts",
+        "mix",
+        "mux",
+        "lipsync",
+        "qa",
+        "drift_report",
+        "retention",
+        "voice_refs",
+        "separation",
+    ]
+    for st in stages:
+        if f"{st} failed" in text or f"stage={st}" in text or f"{st} watchdog" in text:
+            return st
+    if "timeout" in text:
+        if "tts" in text:
+            return "tts"
+        if "whisper" in text or "transcribe" in text:
+            return "transcribe"
+        if "audio" in text:
+            return "audio"
+    return "unknown"
 
 
 @router.get("/queue")
@@ -530,6 +585,133 @@ async def admin_delete_pronunciation(
         meta={"entry_id": str(id)},
     )
     return {"ok": ok}
+
+
+@router.get("/metrics")
+async def admin_metrics(
+    request: Request, ident: Identity = Depends(require_role(Role.admin))
+) -> dict[str, Any]:
+    store = _store(request)
+    qb = _queue_backend(request)
+    q = _job_queue(request)
+    snapshot: dict[str, Any] = {}
+    if qb is not None:
+        try:
+            snapshot = await qb.admin_snapshot(limit=200)
+        except Exception:
+            snapshot = {}
+
+    # Queue depth + active jobs (fallback to JobStore).
+    queue_counts = {"queued": 0, "running": 0}
+    if isinstance(snapshot, dict):
+        if "counts" in snapshot and isinstance(snapshot.get("counts"), dict):
+            counts = snapshot.get("counts") or {}
+            queue_counts["queued"] = int(counts.get("pending") or 0)
+            queue_counts["running"] = int(counts.get("running") or 0)
+        elif "items" in snapshot and isinstance(snapshot.get("items"), list):
+            running = 0
+            queued = 0
+            for it in snapshot.get("items") or []:
+                st = str(it.get("state") or "").upper()
+                if st == "RUNNING":
+                    running += 1
+                if st == "QUEUED":
+                    queued += 1
+            queue_counts["queued"] = queued
+            queue_counts["running"] = running
+
+    active_jobs: list[dict[str, Any]] = []
+    try:
+        for j in store.list(limit=500):
+            if j.state not in {JobState.RUNNING, JobState.QUEUED}:
+                continue
+            active_jobs.append(
+                {
+                    "job_id": str(j.id),
+                    "user_id": str(j.owner_id or ""),
+                    "state": str(j.state.value),
+                    "progress": float(j.progress or 0.0),
+                    "message": str(j.message or ""),
+                    "series_slug": str(getattr(j, "series_slug", "") or ""),
+                    "season_number": int(getattr(j, "season_number", 0) or 0),
+                    "episode_number": int(getattr(j, "episode_number", 0) or 0),
+                }
+            )
+    except Exception:
+        active_jobs = []
+
+    q_status = None
+    if qb is not None:
+        try:
+            q_status = qb.status()
+        except Exception:
+            q_status = None
+    worker_health = {
+        "queue_mode": str(getattr(q_status, "mode", "unknown") or "unknown"),
+        "backend_ok": bool(getattr(q_status, "redis_ok", False)),
+        "workers_total": len(getattr(q, "_tasks", []) or []) if q is not None else 0,
+        "workers_alive": len([t for t in (getattr(q, "_tasks", []) or []) if not t.done()])
+        if q is not None
+        else 0,
+        "timestamp": float(time.time()),
+    }
+
+    storage_usage = []
+    try:
+        storage_usage = store.list_user_storage(limit=200)
+    except Exception:
+        storage_usage = []
+
+    failures_by_stage = _collect_job_error_counts()
+
+    return {
+        "ok": True,
+        "queue": {
+            "depth": int(queue_counts.get("queued", 0) + queue_counts.get("running", 0)),
+            "queued": int(queue_counts.get("queued", 0)),
+            "running": int(queue_counts.get("running", 0)),
+            "snapshot_mode": str(snapshot.get("mode") or ""),
+        },
+        "active_jobs": active_jobs,
+        "failures_by_stage": failures_by_stage,
+        "worker_health": worker_health,
+        "storage_usage": storage_usage,
+    }
+
+
+@router.get("/jobs/failures")
+async def admin_job_failures(
+    request: Request,
+    limit: int = 200,
+    ident: Identity = Depends(require_role(Role.admin)),
+) -> dict[str, Any]:
+    store = _store(request)
+    lim = max(1, min(1000, int(limit)))
+    items: list[dict[str, Any]] = []
+    try:
+        for j in store.list(limit=lim * 2):
+            if j.state != JobState.FAILED:
+                continue
+            tail = store.tail_log(str(j.id), n=120)
+            stage = _infer_failure_stage(tail, j.error)
+            items.append(
+                {
+                    "job_id": str(j.id),
+                    "user_id": str(j.owner_id or ""),
+                    "stage": str(stage),
+                    "error": str(j.error or ""),
+                    "message": str(j.message or ""),
+                    "series_slug": str(getattr(j, "series_slug", "") or ""),
+                    "season_number": int(getattr(j, "season_number", 0) or 0),
+                    "episode_number": int(getattr(j, "episode_number", 0) or 0),
+                    "log_tail": tail,
+                }
+            )
+            if len(items) >= lim:
+                break
+    except Exception:
+        items = []
+    return {"ok": True, "items": items, "limit": lim}
 
 
 @router.get("/voices/suggestions")

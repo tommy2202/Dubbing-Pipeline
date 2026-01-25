@@ -769,6 +769,31 @@ class JobStore:
         finally:
             con.close()
 
+    def list_user_storage(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        lim = max(1, min(1000, int(limit)))
+        off = max(0, int(offset))
+        con = self._conn()
+        try:
+            rows = con.execute(
+                """
+                SELECT user_id, bytes, updated_at
+                FROM user_storage
+                ORDER BY bytes DESC
+                LIMIT ? OFFSET ?;
+                """,
+                (lim, off),
+            ).fetchall()
+            return [
+                {
+                    "user_id": str(r["user_id"]),
+                    "bytes": max(0, int(r["bytes"] or 0)),
+                    "updated_at": float(r["updated_at"] or 0.0),
+                }
+                for r in rows
+            ]
+        finally:
+            con.close()
+
     def set_job_storage_bytes(self, job_id: str, *, user_id: str, bytes_count: int) -> int:
         job_id = str(job_id or "").strip()
         uid = str(user_id or "").strip()
