@@ -144,6 +144,9 @@ async def lifespan(app: FastAPI):
         get_store_cb=lambda: app.state.job_store,
         enqueue_job_id_cb=lambda job_id: q.enqueue_id(job_id),
     )
+    if queue_backend is None:
+        logger.error("queue_backend_init_failed")
+        raise RuntimeError("queue backend initialization failed")
     app.state.queue_backend = queue_backend
     # Let JobQueue consult the backend for locks/counters/acks.
     q.queue_backend = queue_backend

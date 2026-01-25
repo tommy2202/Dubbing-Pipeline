@@ -15,9 +15,9 @@ from dubbing_pipeline.jobs.limits import get_limits, resolve_user_quotas, used_m
 from dubbing_pipeline.jobs.models import Job, JobState, normalize_visibility, new_id, now_utc
 from dubbing_pipeline.jobs.policy import evaluate_submission
 from dubbing_pipeline.ops.metrics import jobs_queued, pipeline_job_total
+from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
 from dubbing_pipeline.ops.storage import ensure_free_space
 from dubbing_pipeline.runtime import lifecycle
-from dubbing_pipeline.runtime.scheduler import JobRecord
 from dubbing_pipeline.security.crypto import is_encrypted_path, materialize_decrypted
 from dubbing_pipeline.utils.ffmpeg_safe import FFmpegError
 from dubbing_pipeline.utils.log import request_id_var
@@ -28,7 +28,6 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _app_root,
     _client_ip_for_limits,
     _enforce_rate_limit,
-    _get_scheduler,
     _get_store,
     _input_dir,
     _input_imports_dir,
@@ -155,7 +154,6 @@ async def create_job(
     out_root.mkdir(parents=True, exist_ok=True)
     ensure_free_space(min_gb=int(s.min_free_gb), path=out_root)
 
-    scheduler = _get_scheduler(request)
     limits = get_limits()
 
     ctype = ctype0
@@ -567,41 +565,20 @@ async def create_job(
     if idem_key:
         store.put_idempotency(idem_key, jid)
     # Enqueue via the canonical queue backend (Redis L2 with fallback to local L1).
-    qb = getattr(request.app.state, "queue_backend", None)
-    try:
-        if qb is not None:
-            await qb.submit_job(
-                job_id=jid,
-                user_id=str(ident.user.id),
-                mode=str(mode),
-                device=str(device),
-                priority=100,
-                meta={
-                    "series_slug": series_slug,
-                    "season_number": int(season_number),
-                    "episode_number": int(episode_number),
-                    "user_role": str(getattr(ident.user.role, "value", "") or ""),
-                },
-            )
-        else:
-            scheduler.submit(
-                JobRecord(
-                    job_id=jid,
-                    mode=mode,
-                    device_pref=device,
-                    created_at=time.time(),
-                    priority=100,
-                )
-            )
-    except RuntimeError as ex:
-        if "draining" in str(ex).lower():
-            ra = str(lifecycle.retry_after_seconds(60))
-            raise HTTPException(
-                status_code=503,
-                detail="Server is draining; try again later",
-                headers={"Retry-After": ra},
-            ) from ex
-        raise
+    await submit_job_or_503(
+        request,
+        job_id=jid,
+        user_id=str(ident.user.id),
+        mode=str(mode),
+        device=str(device),
+        priority=100,
+        meta={
+            "series_slug": series_slug,
+            "season_number": int(season_number),
+            "episode_number": int(episode_number),
+            "user_role": str(getattr(ident.user.role, "value", "") or ""),
+        },
+    )
     jobs_queued.inc()
     pipeline_job_total.inc()
     return {"id": jid}
@@ -622,7 +599,6 @@ async def create_jobs_batch(
           - items: [{video_path|filename, preset_id?, project_id?}, ...]
     """
     store = _get_store(request)
-    scheduler = _get_scheduler(request)
     limits = get_limits()
     user_quota = store.get_user_quota(str(ident.user.id)) if store is not None else {}
     quotas = resolve_user_quotas(overrides=user_quota)
@@ -758,36 +734,20 @@ async def create_jobs_batch(
             rt["style_guide_path"] = str(style_guide_path).strip()
         job.runtime = rt
         store.put(job)
-        qb = getattr(request.app.state, "queue_backend", None)
-        try:
-            if qb is not None:
-                await qb.submit_job(
-                    job_id=jid,
-                    user_id=str(ident.user.id),
-                    mode=str(mode),
-                    device=str(device),
-                    priority=100,
-                    meta={
-                        "series_slug": str(series_slug),
-                        "season_number": int(season_number),
-                        "episode_number": int(episode_number),
-                        "user_role": str(getattr(ident.user.role, "value", "") or ""),
-                    },
-                )
-            else:
-                scheduler.submit(
-                    JobRecord(
-                        job_id=jid,
-                        mode=mode,
-                        device_pref=device,
-                        created_at=time.time(),
-                        priority=100,
-                    )
-                )
-        except RuntimeError as ex:
-            if "draining" in str(ex).lower():
-                raise HTTPException(status_code=503, detail="Server is draining; try again later") from ex
-            raise
+        await submit_job_or_503(
+            request,
+            job_id=jid,
+            user_id=str(ident.user.id),
+            mode=str(mode),
+            device=str(device),
+            priority=100,
+            meta={
+                "series_slug": str(series_slug),
+                "season_number": int(season_number),
+                "episode_number": int(episode_number),
+                "user_role": str(getattr(ident.user.role, "value", "") or ""),
+            },
+        )
         jobs_queued.inc()
         pipeline_job_total.inc()
         return jid

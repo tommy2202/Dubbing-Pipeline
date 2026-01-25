@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -14,11 +13,10 @@ from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState, now_utc
-from dubbing_pipeline.runtime.scheduler import JobRecord
+from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
 from dubbing_pipeline.web.routes.jobs_common import (
     _enforce_rate_limit,
     _file_range_response,
-    _get_scheduler,
     _get_store,
     _job_base_dir,
     _load_transcript_store,
@@ -483,8 +481,6 @@ async def synthesize_from_approved(
     request: Request, id: str, ident: Identity = Depends(require_scope("edit:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    scheduler = _get_scheduler(request)
-    qb = getattr(request.app.state, "queue_backend", None)
     job = require_job_access(store=store, ident=ident, job_id=id)
     base_dir = _job_base_dir(job)
     st = _load_transcript_store(base_dir)
@@ -502,26 +498,15 @@ async def synthesize_from_approved(
         message="Resynth requested (approved only)",
         runtime=rt,
     )
-    with suppress(Exception):
-        if qb is not None:
-            await qb.submit_job(
-                job_id=str(id),
-                user_id=str(ident.user.id),
-                mode=str((job2.mode if job2 else job.mode)),
-                device=str((job2.device if job2 else job.device)),
-                priority=50,
-                meta={"user_role": str(getattr(ident.user.role, "value", "") or "")},
-            )
-        else:
-            scheduler.submit(
-                JobRecord(
-                    job_id=id,
-                    mode=(job2.mode if job2 else job.mode),
-                    device_pref=(job2.device if job2 else job.device),
-                    created_at=time.time(),
-                    priority=50,
-                )
-            )
+    await submit_job_or_503(
+        request,
+        job_id=str(id),
+        user_id=str(ident.user.id),
+        mode=str((job2.mode if job2 else job.mode)),
+        device=str((job2.device if job2 else job.device)),
+        priority=50,
+        meta={"user_role": str(getattr(ident.user.role, "value", "") or "")},
+    )
     return {"ok": True}
 
 

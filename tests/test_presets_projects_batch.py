@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -10,6 +8,8 @@ from fastapi.testclient import TestClient
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.server import app
+from tests._helpers.auth import login_admin
+from tests._helpers.media import ensure_tiny_mp4
 
 
 def _runtime_video_path(tmp_path: Path) -> str:
@@ -17,10 +17,6 @@ def _runtime_video_path(tmp_path: Path) -> str:
     This test exercises submit paths that may call ffprobe, so we generate a real tiny MP4.
     """
     root = tmp_path.resolve()
-    if shutil.which("ffmpeg") is None:
-        import pytest
-
-        pytest.skip("ffmpeg not available")
     in_dir = root / "Input"
     out_dir = root / "Output"
     logs_dir = root / "logs"
@@ -28,47 +24,13 @@ def _runtime_video_path(tmp_path: Path) -> str:
     out_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    vp = in_dir / "Test.mp4"
-    if not vp.exists():
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                "testsrc=size=160x90:rate=10",
-                "-f",
-                "lavfi",
-                "-i",
-                "anullsrc=channel_layout=stereo:sample_rate=44100",
-                "-t",
-                "1.0",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                str(vp),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+    vp = ensure_tiny_mp4(in_dir / "Test.mp4", duration_s=1.0, skip_message="ffmpeg not available")
 
     os.environ["APP_ROOT"] = str(root)
     os.environ["INPUT_DIR"] = str(in_dir)
     os.environ["DUBBING_OUTPUT_DIR"] = str(out_dir)
     os.environ["DUBBING_LOG_DIR"] = str(logs_dir)
     return str(vp)
-
-
-def _login_admin(c: TestClient) -> dict[str, str]:
-    r = c.post("/api/auth/login", json={"username": "admin", "password": "adminpass"})
-    assert r.status_code == 200
-    data = r.json()
-    return {"Authorization": f"Bearer {data['access_token']}", "X-CSRF-Token": data["csrf_token"]}
 
 
 def test_presets_projects_and_batch(tmp_path: Path) -> None:
@@ -80,7 +42,7 @@ def test_presets_projects_and_batch(tmp_path: Path) -> None:
     get_settings.cache_clear()
 
     with TestClient(app) as c:
-        headers = _login_admin(c)
+        headers = login_admin(c)
         # preset
         pr = c.post(
             "/api/presets",

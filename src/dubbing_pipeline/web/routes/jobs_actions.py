@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from contextlib import suppress
 from typing import Any
 
@@ -12,8 +11,8 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.jobs.models import JobState, normalize_visibility
 from dubbing_pipeline.library.manifest import update_manifest_visibility
 from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
-from dubbing_pipeline.runtime.scheduler import JobRecord
-from dubbing_pipeline.web.routes.jobs_common import _get_queue, _get_scheduler, _get_store, _output_root
+from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
+from dubbing_pipeline.web.routes.jobs_common import _get_queue, _get_store, _output_root
 
 router = APIRouter()
 
@@ -125,33 +124,19 @@ async def resume_job(
 ) -> dict[str, Any]:
     store = _get_store(request)
     queue = _get_queue(request)
-    scheduler = _get_scheduler(request)
-    qb = getattr(request.app.state, "queue_backend", None)
     job = require_job_access(store=store, ident=ident, job_id=id)
     if job.state != JobState.PAUSED:
         raise HTTPException(status_code=409, detail="Can only resume PAUSED jobs")
     j2 = await queue.resume(id)
     if j2 is None:
         raise HTTPException(status_code=404, detail="Not found")
-    # Re-submit via canonical queue backend (best-effort).
-    with suppress(Exception):
-        if qb is not None:
-            await qb.submit_job(
-                job_id=str(id),
-                user_id=str(ident.user.id),
-                mode=str(j2.mode),
-                device=str(j2.device),
-                priority=100,
-                meta={"user_role": str(getattr(ident.user.role, "value", "") or "")},
-            )
-        else:
-            scheduler.submit(
-                JobRecord(
-                    job_id=id,
-                    mode=j2.mode,
-                    device_pref=j2.device,
-                    created_at=time.time(),
-                    priority=100,
-                )
-            )
+    await submit_job_or_503(
+        request,
+        job_id=str(id),
+        user_id=str(ident.user.id),
+        mode=str(j2.mode),
+        device=str(j2.device),
+        priority=100,
+        meta={"user_role": str(getattr(ident.user.role, "value", "") or "")},
+    )
     return j2.to_dict()

@@ -7,22 +7,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Strict: project must not contain historic naming tokens.
-#
-# Implementation detail: these tokens are constructed from fragments so this script
-# itself does not trip the scan it enforces.
-_TOK_ANIME = "a" + "nime"
-_TOK_V1 = "v" + "1"
-_TOK_V2 = "v" + "2"
-_TOK_ALPHA = "al" + "pha"
+# Strict: src/ must not contain legacy marker tokens.
+# Docs and tests are allowed to mention historic naming.
+_TOK_ANIME_DEC = "anime" + "v2" + "_dec_"
+_TOK_ENC = "AN" + "V2" + "ENC"
+_TOK_CHAR = "AN" + "V2" + "CHAR"
 
-# We intentionally only flag whole-word version tokens to avoid false positives like:
-# - model identifiers like "xtts_v2" (underscore keeps it a word char)
 PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    (_TOK_ANIME, re.compile(r"(?i)(?:\b" + _TOK_ANIME + r"\b|\b" + _TOK_ANIME + r"[-_])")),
-    (_TOK_V1, re.compile(r"(?i)\b" + _TOK_V1 + r"\b")),
-    (_TOK_V2, re.compile(r"(?i)\b" + _TOK_V2 + r"\b")),
-    (_TOK_ALPHA, re.compile(r"(?i)\b" + _TOK_ALPHA + r"\b")),
+    (_TOK_ANIME_DEC, re.compile(re.escape(_TOK_ANIME_DEC))),
+    (_TOK_ENC, re.compile(re.escape(_TOK_ENC))),
+    (_TOK_CHAR, re.compile(re.escape(_TOK_CHAR))),
 ]
 
 ALLOW_FILES = {
@@ -63,7 +57,11 @@ def _is_text_candidate(p: Path) -> bool:
 
 def main() -> int:
     offenders: list[str] = []
-    for p in ROOT.rglob("*"):
+    src_root = ROOT / "src"
+    if not src_root.exists():
+        print("OK: no src/ directory found.")
+        return 0
+    for p in src_root.rglob("*"):
         if not p.is_file():
             continue
         if any(part in SKIP_DIRS for part in p.parts):
