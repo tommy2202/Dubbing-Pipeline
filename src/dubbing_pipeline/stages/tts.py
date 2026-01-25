@@ -187,6 +187,7 @@ def run(
     two_pass_phase: str | None = None,
     series_slug: str | None = None,
     speaker_character_map: dict[str, str] | None = None,
+    voice_profile_map: dict[str, Any] | None = None,
     voice_ref_dir: Path | None = None,
     voice_store_dir: Path | None = None,
     voice_memory: bool | None = None,
@@ -353,6 +354,24 @@ def run(
         per_speaker_preset_override = {}
         per_speaker_voice_mode = {}
         per_speaker_keep_original = set()
+
+    # Optional per-speaker voice profile refs (track-clone).
+    voice_profile_ref_map: dict[str, Path] = {}
+    try:
+        if isinstance(voice_profile_map, dict):
+            for sid, rec in voice_profile_map.items():
+                ref_raw = ""
+                if isinstance(rec, dict):
+                    ref_raw = str(rec.get("ref_path") or rec.get("path") or "").strip()
+                else:
+                    ref_raw = str(rec or "").strip()
+                if not ref_raw:
+                    continue
+                p = Path(ref_raw)
+                if p.exists() and p.is_file():
+                    voice_profile_ref_map[str(sid)] = p
+    except Exception:
+        voice_profile_ref_map = {}
 
     # Determine lines to synthesize
     lines: list[dict]
@@ -842,9 +861,10 @@ def run(
         # Choose clone speaker wav priority:
         # 1) explicit per-speaker override (job map / UI override)
         # 2) persistent character ref (series-scoped) when speaker->character mapping exists
-        # 3) per-speaker extracted ref (this job; voice_ref_dir)
-        # 4) global TTS_SPEAKER_WAV
-        # 5) default voice preset (handled later via preset selection)
+        # 3) persistent voice profile ref (track-clone)
+        # 4) per-speaker extracted ref (this job; voice_ref_dir)
+        # 5) global TTS_SPEAKER_WAV
+        # 6) default voice preset (handled later via preset selection)
         speaker_wav = per_speaker_wav_override.get(speaker_id)
         # Per-segment voice mode (Feature K + Tier-2A): do not mutate job-level defaults.
         seg_voice_mode = (
@@ -904,7 +924,18 @@ def run(
             except Exception:
                 pass
 
-        # 3) Per-job voice reference directory: prefer extracted refs for this job.
+        # 3) Persistent voice profile ref (track-clone).
+        if speaker_wav is None and seg_voice_mode == "clone":
+            prof_ref = voice_profile_ref_map.get(str(speaker_id))
+            if prof_ref is not None and prof_ref.exists():
+                speaker_wav = prof_ref
+                logger.info(
+                    "voice_profile_ref_used",
+                    speaker_id=str(speaker_id),
+                    path=str(prof_ref),
+                )
+
+        # 4) Per-job voice reference directory: prefer extracted refs for this job.
         if speaker_wav is None and eff_voice_ref_dir and seg_voice_mode == "clone":
             with suppress(Exception):
                 base = Path(eff_voice_ref_dir).expanduser()

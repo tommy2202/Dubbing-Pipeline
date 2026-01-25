@@ -1705,6 +1705,192 @@ class JobStore:
             finally:
                 con.close()
 
+    # --- voice profiles ---
+    def _parse_embedding_vector(self, raw: object) -> list[float] | None:
+        if raw is None:
+            return None
+        data = raw
+        if isinstance(data, (bytes, bytearray)):
+            try:
+                data = data.decode("utf-8", errors="ignore")
+            except Exception:
+                return None
+        if isinstance(data, list):
+            try:
+                return [float(x) for x in data]
+            except Exception:
+                return None
+        if isinstance(data, str):
+            try:
+                parsed = json.loads(data)
+                if isinstance(parsed, list):
+                    return [float(x) for x in parsed]
+            except Exception:
+                return None
+        return None
+
+    def _parse_metadata_json(self, raw: object) -> dict[str, Any] | None:
+        if raw is None:
+            return None
+        data = raw
+        if isinstance(data, (bytes, bytearray)):
+            try:
+                data = data.decode("utf-8", errors="ignore")
+            except Exception:
+                return None
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, str):
+            try:
+                parsed = json.loads(data)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return None
+        return None
+
+    def get_voice_profile(self, profile_id: str) -> dict[str, Any] | None:
+        pid = str(profile_id or "").strip()
+        if not pid:
+            return None
+        con = self._conn()
+        try:
+            row = con.execute("SELECT * FROM voice_profiles WHERE id = ? LIMIT 1;", (pid,)).fetchone()
+            if row is None:
+                return None
+            d = {k: row[k] for k in row.keys()}
+            d["embedding_vector"] = self._parse_embedding_vector(d.get("embedding_vector"))
+            d["metadata_json"] = self._parse_metadata_json(d.get("metadata_json"))
+            return d
+        finally:
+            con.close()
+
+    def list_voice_profiles(
+        self, *, series_slug: str | None = None, allow_global: bool = False
+    ) -> list[dict[str, Any]]:
+        series = str(series_slug or "").strip()
+        con = self._conn()
+        try:
+            rows = con.execute("SELECT * FROM voice_profiles;", ()).fetchall()
+            out: list[dict[str, Any]] = []
+            now = float(time.time())
+            for r in rows:
+                d = {k: r[k] for k in r.keys()}
+                series_lock = str(d.get("series_lock") or "").strip()
+                scope = str(d.get("scope") or "private").strip().lower()
+                exp = d.get("expires_at")
+                try:
+                    if exp is not None and float(exp) > 0 and float(exp) < now:
+                        continue
+                except Exception:
+                    pass
+                if series:
+                    if series_lock == series:
+                        pass
+                    elif allow_global and not series_lock and scope in {"global", "friends"}:
+                        pass
+                    else:
+                        continue
+                d["embedding_vector"] = self._parse_embedding_vector(d.get("embedding_vector"))
+                d["metadata_json"] = self._parse_metadata_json(d.get("metadata_json"))
+                out.append(d)
+            return out
+        finally:
+            con.close()
+
+    def upsert_voice_profile(
+        self,
+        *,
+        profile_id: str,
+        display_name: str,
+        created_by: str,
+        scope: str,
+        series_lock: str | None,
+        source_type: str,
+        export_allowed: bool,
+        share_allowed: bool,
+        reuse_allowed: int | None,
+        expires_at: float | None,
+        embedding_vector: list[float] | None,
+        embedding_model_id: str | None,
+        metadata_json: dict[str, Any] | str | None,
+    ) -> dict[str, Any]:
+        pid = str(profile_id or "").strip()
+        if not pid:
+            raise ValueError("profile_id required")
+        existing = self.get_voice_profile(pid) or {}
+        created_at = float(existing.get("created_at") or time.time())
+        created_by_eff = str(existing.get("created_by") or created_by or "")
+        meta = metadata_json
+        if isinstance(meta, dict):
+            meta_raw: str | None = json.dumps(meta, sort_keys=True)
+        elif isinstance(meta, str):
+            meta_raw = meta
+        else:
+            meta_raw = None
+        emb_raw = None
+        if embedding_vector is not None:
+            emb_raw = json.dumps([float(x) for x in embedding_vector])
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    INSERT INTO voice_profiles (
+                      id, display_name, created_by, created_at, scope, series_lock,
+                      source_type, export_allowed, share_allowed, reuse_allowed,
+                      expires_at, embedding_vector, embedding_model_id, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      display_name=excluded.display_name,
+                      scope=excluded.scope,
+                      series_lock=excluded.series_lock,
+                      source_type=excluded.source_type,
+                      export_allowed=excluded.export_allowed,
+                      share_allowed=excluded.share_allowed,
+                      reuse_allowed=excluded.reuse_allowed,
+                      expires_at=excluded.expires_at,
+                      embedding_vector=excluded.embedding_vector,
+                      embedding_model_id=excluded.embedding_model_id,
+                      metadata_json=excluded.metadata_json;
+                    """,
+                    (
+                        pid,
+                        str(display_name or ""),
+                        created_by_eff,
+                        created_at,
+                        str(scope or "private"),
+                        str(series_lock or "") or None,
+                        str(source_type or "unknown"),
+                        1 if bool(export_allowed) else 0,
+                        1 if bool(share_allowed) else 0,
+                        int(reuse_allowed) if reuse_allowed is not None else None,
+                        float(expires_at) if expires_at is not None else None,
+                        emb_raw,
+                        str(embedding_model_id or ""),
+                        meta_raw,
+                    ),
+                )
+                con.commit()
+            finally:
+                con.close()
+        return {
+            "id": pid,
+            "display_name": str(display_name or ""),
+            "created_by": created_by_eff,
+            "created_at": created_at,
+            "scope": str(scope or "private"),
+            "series_lock": str(series_lock or "") or None,
+            "source_type": str(source_type or "unknown"),
+            "export_allowed": bool(export_allowed),
+            "share_allowed": bool(share_allowed),
+            "reuse_allowed": reuse_allowed,
+            "expires_at": expires_at,
+            "embedding_vector": embedding_vector,
+            "embedding_model_id": str(embedding_model_id or ""),
+            "metadata_json": self._parse_metadata_json(meta_raw),
+        }
+
     def _maybe_upsert_library_from_raw(self, job_id: str, raw: dict[str, Any]) -> None:
         """
         Best-effort denormalized index for library browsing.

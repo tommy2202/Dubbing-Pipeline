@@ -1352,6 +1352,63 @@ class JobQueue:
                     else:
                         lab_to_char[lab] = lab
 
+                # Track-clone voice profiles: match or create per-speaker profiles.
+                voice_profile_map: dict[str, dict[str, Any]] = {}
+                try:
+                    series_slug = str(getattr(job, "series_slug", "") or "").strip()
+                    if series_slug and label_refs:
+                        from dubbing_pipeline.voice_profiles.manager import (
+                            create_profiles_for_refs,
+                            match_profiles_for_refs,
+                        )
+
+                        curj = self.store.get(job_id)
+                        rt2 = dict((curj.runtime or {}) if curj else runtime)
+                        allow_global = bool(rt2.get("voice_profile_allow_global"))
+                        threshold = float(
+                            getattr(settings, "voice_match_threshold", 0.75) or 0.75
+                        )
+                        device_sel = _select_device(job.device)
+                        matched = match_profiles_for_refs(
+                            store=self.store,
+                            series_slug=series_slug,
+                            label_refs=label_refs,
+                            allow_global=allow_global,
+                            threshold=threshold,
+                            device=device_sel,
+                            voice_store_dir=Path(settings.voice_store_dir),
+                        )
+                        missing = {
+                            lab: ref for lab, ref in label_refs.items() if lab not in matched
+                        }
+                        created = create_profiles_for_refs(
+                            store=self.store,
+                            series_slug=series_slug,
+                            label_refs=missing,
+                            created_by=str(getattr(job, "owner_id", "") or ""),
+                            source_job_id=str(job_id),
+                            device=device_sel,
+                            voice_store_dir=Path(settings.voice_store_dir),
+                        )
+                        combined = {**matched, **created}
+                        for lab, rec in combined.items():
+                            spk_id = lab_to_char.get(lab, lab)
+                            voice_profile_map[str(spk_id)] = dict(rec)
+                        if voice_profile_map:
+                            with suppress(Exception):
+                                curj = self.store.get(job_id)
+                                rt3 = dict((curj.runtime or {}) if curj else runtime)
+                                rt3["voice_profile_map"] = voice_profile_map
+                                self.store.update(job_id, runtime=rt3)
+                            self.store.append_log(
+                                job_id,
+                                f"[{now_utc()}] voice_profiles matched={len(matched)} created={len(created)}",
+                            )
+                except Exception as ex:
+                    self.store.append_log(
+                        job_id, f"[{now_utc()}] voice_profiles skipped: {ex}"
+                    )
+
                 # Persist episode mapping (best-effort)
                 if vm_store is not None and episode_key:
                     with suppress(Exception):
@@ -2807,6 +2864,32 @@ class JobQueue:
                                     pron_overrides[int(sid)] = entries
                         except Exception:
                             pron_overrides = {}
+                        # Track-clone voice profile refs (best-effort).
+                        voice_profile_map: dict[str, Any] = {}
+                        try:
+                            vp = rt.get("voice_profile_map")
+                            if isinstance(vp, dict):
+                                for sid, rec in vp.items():
+                                    ref_path = ""
+                                    profile_id = ""
+                                    if isinstance(rec, dict):
+                                        ref_path = str(rec.get("ref_path") or "").strip()
+                                        profile_id = str(rec.get("profile_id") or "").strip()
+                                    else:
+                                        ref_path = str(rec or "").strip()
+                                    if not ref_path and profile_id:
+                                        prof = self.store.get_voice_profile(profile_id)
+                                        if isinstance(prof, dict):
+                                            meta = prof.get("metadata_json")
+                                            if isinstance(meta, dict):
+                                                ref_path = str(meta.get("ref_path") or "").strip()
+                                    if ref_path:
+                                        voice_profile_map[str(sid)] = {
+                                            "ref_path": ref_path,
+                                            "profile_id": profile_id,
+                                        }
+                        except Exception:
+                            voice_profile_map = {}
                         return tts.run(
                             out_dir=work_dir,
                             translated_json=translated_json if translated_json.exists() else None,
@@ -2823,6 +2906,7 @@ class JobQueue:
                             two_pass_phase=str(two_pass_phase or ""),
                             series_slug=str(getattr(job, "series_slug", "") or ""),
                             speaker_character_map=speaker_character_map,
+                            voice_profile_map=voice_profile_map,
                             voice_ref_dir=voice_ref_dir_eff,
                             voice_store_dir=settings.voice_store_dir,
                             tts_provider=str(settings.tts_provider),
