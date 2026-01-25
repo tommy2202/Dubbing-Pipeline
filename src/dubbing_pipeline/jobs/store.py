@@ -41,6 +41,18 @@ class JobStore:
         # Schema for library reports (moderation).
         with suppress(Exception):
             self._init_reports_schema()
+        # Schema for QA review annotations (per-segment).
+        with suppress(Exception):
+            self._init_qa_schema()
+        # Schema for persistent voice profiles + aliases.
+        with suppress(Exception):
+            self._init_voice_profile_schema()
+        # Schema for series glossaries (deterministic rules).
+        with suppress(Exception):
+            self._init_glossary_schema()
+        # Schema for pronunciation dictionary (per-language).
+        with suppress(Exception):
+            self._init_pronunciation_schema()
 
     def _jobs(self) -> SqliteDict:
         # Open/close per operation (safe + avoids cross-thread SQLite handle issues)
@@ -320,6 +332,284 @@ class JobStore:
                 con.execute(
                     "CREATE INDEX IF NOT EXISTS idx_library_reports_reporter_id ON library_reports(reporter_id);"
                 )
+                con.commit()
+            finally:
+                con.close()
+
+    def _init_qa_schema(self) -> None:
+        """
+        Create/migrate tables for per-segment QA reviews.
+        """
+        with self._write_lock():
+            pk_col = self._jobs_pk_col()
+            con = self._conn()
+            try:
+                con.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS qa_reviews (
+                      id TEXT PRIMARY KEY,
+                      job_id TEXT NOT NULL,
+                      segment_id INTEGER NOT NULL,
+                      status TEXT DEFAULT 'pending',
+                      notes TEXT,
+                      edited_text TEXT,
+                      pronunciation_overrides TEXT,
+                      glossary_used TEXT,
+                      created_by TEXT,
+                      created_at REAL,
+                      updated_at REAL,
+                      FOREIGN KEY(job_id) REFERENCES jobs({pk_col}) ON DELETE CASCADE
+                    );
+                    """
+                )
+                cols = []
+                with suppress(Exception):
+                    cols = [
+                        str(r["name"])
+                        for r in con.execute("PRAGMA table_info(qa_reviews);").fetchall()
+                    ]
+                want: dict[str, str] = {
+                    "id": "TEXT",
+                    "job_id": "TEXT",
+                    "segment_id": "INTEGER",
+                    "status": "TEXT DEFAULT 'pending'",
+                    "notes": "TEXT",
+                    "edited_text": "TEXT",
+                    "pronunciation_overrides": "TEXT",
+                    "glossary_used": "TEXT",
+                    "created_by": "TEXT",
+                    "created_at": "REAL",
+                    "updated_at": "REAL",
+                }
+                for name, typ in want.items():
+                    if name in cols:
+                        continue
+                    with suppress(Exception):
+                        con.execute(f"ALTER TABLE qa_reviews ADD COLUMN {name} {typ};")
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_qa_reviews_job_id ON qa_reviews(job_id);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_qa_reviews_job_segment ON qa_reviews(job_id, segment_id);"
+                )
+                con.commit()
+            finally:
+                con.close()
+
+    def _init_voice_profile_schema(self) -> None:
+        """
+        Create/migrate tables for voice profiles and alias mappings.
+        """
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS voice_profiles (
+                      id TEXT PRIMARY KEY,
+                      display_name TEXT,
+                      created_by TEXT,
+                      created_at REAL,
+                      scope TEXT DEFAULT 'private',
+                      series_lock TEXT,
+                      source_type TEXT DEFAULT 'unknown',
+                      export_allowed INTEGER DEFAULT 0,
+                      share_allowed INTEGER DEFAULT 0,
+                      reuse_allowed INTEGER,
+                      expires_at REAL,
+                      embedding_vector BLOB,
+                      embedding_model_id TEXT,
+                      metadata_json TEXT
+                    );
+                    """
+                )
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS voice_profile_aliases (
+                      id TEXT PRIMARY KEY,
+                      voice_profile_id TEXT NOT NULL,
+                      alias_of_voice_profile_id TEXT NOT NULL,
+                      confidence REAL NOT NULL DEFAULT 0.0,
+                      approved_by_admin INTEGER NOT NULL DEFAULT 0,
+                      approved_at REAL,
+                      FOREIGN KEY(voice_profile_id) REFERENCES voice_profiles(id) ON DELETE CASCADE,
+                      FOREIGN KEY(alias_of_voice_profile_id) REFERENCES voice_profiles(id) ON DELETE CASCADE
+                    );
+                    """
+                )
+                cols = []
+                with suppress(Exception):
+                    cols = [
+                        str(r["name"])
+                        for r in con.execute("PRAGMA table_info(voice_profiles);").fetchall()
+                    ]
+                want_profiles: dict[str, str] = {
+                    "id": "TEXT",
+                    "display_name": "TEXT",
+                    "created_by": "TEXT",
+                    "created_at": "REAL",
+                    "scope": "TEXT DEFAULT 'private'",
+                    "series_lock": "TEXT",
+                    "source_type": "TEXT DEFAULT 'unknown'",
+                    "export_allowed": "INTEGER DEFAULT 0",
+                    "share_allowed": "INTEGER DEFAULT 0",
+                    "reuse_allowed": "INTEGER",
+                    "expires_at": "REAL",
+                    "embedding_vector": "BLOB",
+                    "embedding_model_id": "TEXT",
+                    "metadata_json": "TEXT",
+                }
+                for name, typ in want_profiles.items():
+                    if name in cols:
+                        continue
+                    with suppress(Exception):
+                        con.execute(f"ALTER TABLE voice_profiles ADD COLUMN {name} {typ};")
+
+                cols_alias = []
+                with suppress(Exception):
+                    cols_alias = [
+                        str(r["name"])
+                        for r in con.execute("PRAGMA table_info(voice_profile_aliases);").fetchall()
+                    ]
+                want_alias: dict[str, str] = {
+                    "id": "TEXT",
+                    "voice_profile_id": "TEXT",
+                    "alias_of_voice_profile_id": "TEXT",
+                    "confidence": "REAL DEFAULT 0.0",
+                    "approved_by_admin": "INTEGER DEFAULT 0",
+                    "approved_at": "REAL",
+                }
+                for name, typ in want_alias.items():
+                    if name in cols_alias:
+                        continue
+                    with suppress(Exception):
+                        con.execute(
+                            f"ALTER TABLE voice_profile_aliases ADD COLUMN {name} {typ};"
+                        )
+
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_voice_profiles_series_lock ON voice_profiles(series_lock);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_voice_profiles_embedding_model ON voice_profiles(embedding_model_id);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_voice_profile_aliases_voice_id ON voice_profile_aliases(voice_profile_id);"
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_voice_profile_aliases_alias_id ON voice_profile_aliases(alias_of_voice_profile_id);"
+                )
+
+                # Default policies (best-effort; only apply when reuse_allowed is NULL).
+                con.execute(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS trg_voice_profiles_reuse_default
+                    AFTER INSERT ON voice_profiles
+                    FOR EACH ROW
+                    WHEN NEW.reuse_allowed IS NULL
+                    BEGIN
+                      UPDATE voice_profiles
+                      SET reuse_allowed = CASE
+                        WHEN NEW.source_type = 'user_upload' THEN 1
+                        WHEN NEW.source_type = 'extracted_from_media' THEN 0
+                        ELSE 0
+                      END
+                      WHERE id = NEW.id;
+                    END;
+                    """
+                )
+                con.commit()
+            finally:
+                con.close()
+
+    def _init_glossary_schema(self) -> None:
+        """
+        Create/migrate table for deterministic glossaries.
+        """
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS glossaries (
+                      id TEXT PRIMARY KEY,
+                      name TEXT NOT NULL,
+                      language_pair TEXT NOT NULL,
+                      priority INTEGER DEFAULT 0,
+                      enabled INTEGER DEFAULT 1,
+                      rules_json TEXT NOT NULL,
+                      created_at REAL,
+                      updated_at REAL
+                    );
+                    """
+                )
+                cols = []
+                with suppress(Exception):
+                    cols = [
+                        str(r["name"])
+                        for r in con.execute("PRAGMA table_info(glossaries);").fetchall()
+                    ]
+                want: dict[str, str] = {
+                    "id": "TEXT",
+                    "name": "TEXT",
+                    "language_pair": "TEXT",
+                    "priority": "INTEGER DEFAULT 0",
+                    "enabled": "INTEGER DEFAULT 1",
+                    "rules_json": "TEXT",
+                    "created_at": "REAL",
+                    "updated_at": "REAL",
+                }
+                for name, typ in want.items():
+                    if name in cols:
+                        continue
+                    with suppress(Exception):
+                        con.execute(f"ALTER TABLE glossaries ADD COLUMN {name} {typ};")
+                con.commit()
+            finally:
+                con.close()
+
+    def _init_pronunciation_schema(self) -> None:
+        """
+        Create/migrate table for pronunciation dictionary entries.
+        """
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS pronunciation_dict (
+                      id TEXT PRIMARY KEY,
+                      lang TEXT NOT NULL,
+                      term TEXT NOT NULL,
+                      ipa_or_phoneme TEXT NOT NULL,
+                      example TEXT,
+                      created_by TEXT,
+                      created_at REAL
+                    );
+                    """
+                )
+                cols = []
+                with suppress(Exception):
+                    cols = [
+                        str(r["name"])
+                        for r in con.execute("PRAGMA table_info(pronunciation_dict);").fetchall()
+                    ]
+                want: dict[str, str] = {
+                    "id": "TEXT",
+                    "lang": "TEXT",
+                    "term": "TEXT",
+                    "ipa_or_phoneme": "TEXT",
+                    "example": "TEXT",
+                    "created_by": "TEXT",
+                    "created_at": "REAL",
+                }
+                for name, typ in want.items():
+                    if name in cols:
+                        continue
+                    with suppress(Exception):
+                        con.execute(
+                            f"ALTER TABLE pronunciation_dict ADD COLUMN {name} {typ};"
+                        )
                 con.commit()
             finally:
                 con.close()
