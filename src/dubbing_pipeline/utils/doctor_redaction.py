@@ -16,6 +16,10 @@ _SLACK_TOKEN_RE = re.compile(r"\bxox[aboprs]-\d+-\d+-\d+-[A-Za-z0-9-]+\b")
 _OPENAI_RE = re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")
 _GOOGLE_API_KEY_RE = re.compile(r"\bAIza[0-9A-Za-z\-_]{35}\b")
 
+_SUSPICIOUS_WORD_RE = re.compile(
+    r"(?i)\b[A-Za-z0-9_\-]{0,64}(token|secret|password|apikey|api_key)[A-Za-z0-9_\-]{0,64}\b"
+)
+
 _KV_RE = re.compile(
     r"(?i)\b([A-Z0-9_]*?(?:token|secret|password|key|auth|apikey|api_key))\b(\s*[:=]\s*)([^\s,;]+)"
 )
@@ -40,6 +44,7 @@ def redact(text: str) -> str:
     s = _SLACK_TOKEN_RE.sub(REDACTED, s)
     s = _OPENAI_RE.sub(REDACTED, s)
     s = _GOOGLE_API_KEY_RE.sub(REDACTED, s)
+    s = _SUSPICIOUS_WORD_RE.sub(lambda m: REDACTED if len(m.group(0)) >= 12 else m.group(0), s)
     s = _KV_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", s)
     s = _HEADER_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", s)
     s = _URL_PARAM_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}={REDACTED}", s)
