@@ -8,17 +8,12 @@ from typing import Any
 from fastapi import HTTPException, status
 
 from dubbing_pipeline.api.deps import Identity
-from dubbing_pipeline.api.models import Role
-from dubbing_pipeline.jobs.models import Job, normalize_visibility
+from dubbing_pipeline.jobs.models import Job
+from dubbing_pipeline.security import visibility
 from dubbing_pipeline.jobs.store import JobStore
 from dubbing_pipeline.library.paths import get_job_output_root
 
 _JOB_SEGMENT_RE = re.compile(r"^job-(.+)$")
-
-
-def _is_admin(ident: Identity) -> bool:
-    role = getattr(ident.user.role, "value", ident.user.role)
-    return str(role) == str(Role.admin.value)
 
 
 def require_job_access(
@@ -35,17 +30,8 @@ def require_job_access(
         job = store.get(str(job_id))
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    owner_id = str(getattr(job, "owner_id", "") or "")
-    if _is_admin(ident) or owner_id == str(ident.user.id):
-        return job
-    if allow_shared_read:
-        try:
-            vis = normalize_visibility(str(getattr(job, "visibility", None))).value
-            if vis == "shared":
-                return job
-        except Exception:
-            pass
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    visibility.require_can_view_job(user=ident.user, job=job, allow_shared_read=allow_shared_read)
+    return job
 
 
 def require_upload_access(
@@ -62,7 +48,7 @@ def require_upload_access(
     if upload is None:
         raise HTTPException(status_code=404, detail="Upload not found")
     owner_id = str(upload.get("owner_id") or "")
-    if _is_admin(ident) or owner_id == str(ident.user.id):
+    if visibility.is_admin(ident.user) or owner_id == str(ident.user.id):
         return dict(upload)
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
@@ -119,17 +105,10 @@ def require_library_access(
         finally:
             con.close()
 
-    owner_id = str(item.get("owner_user_id") or "")
-    if _is_admin(ident) or owner_id == str(ident.user.id):
-        return dict(item)
-    if allow_shared_read:
-        try:
-            vis = normalize_visibility(str(item.get("visibility") or "")).value
-            if vis == "shared":
-                return dict(item)
-        except Exception:
-            pass
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    visibility.require_can_view_library_item(
+        user=ident.user, item=item, allow_shared_read=allow_shared_read
+    )
+    return dict(item)
 
 
 def _job_for_path(*, store: JobStore, path: Path) -> Job | None:
@@ -160,4 +139,7 @@ def require_file_access(
     job = _job_for_path(store=store, path=path)
     if job is None:
         raise HTTPException(status_code=404, detail="File not found")
-    return require_job_access(store=store, ident=ident, job=job, allow_shared_read=allow_shared_read)
+    visibility.require_can_view_artifact(
+        user=ident.user, artifact=path, job=job, allow_shared_read=allow_shared_read
+    )
+    return job

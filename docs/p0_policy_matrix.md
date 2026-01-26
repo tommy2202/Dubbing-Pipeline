@@ -14,6 +14,12 @@ Notes:
 - Removed register/signup from the public endpoint allowlist to avoid accidental exposure.
 - Added tests to assert no public signup and invalid invite redemption fails; invite creation stays admin-only.
 
+## Prompt 3 updates (visibility enforcement)
+
+- Centralized visibility checks in `src/dubbing_pipeline/security/visibility.py`.
+- `require_job_access`, `require_library_access`, and `require_file_access` now delegate to the centralized guard.
+- Added regression tests for private artifact leakage and guard invocation coverage.
+
 ## Required middleware/dependencies
 
 - `remote_access_middleware` (`api/remote_access.py`), applied as HTTP middleware in `server.py`.
