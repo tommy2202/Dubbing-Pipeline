@@ -149,7 +149,7 @@ class PublicConfig(BaseSettings):
     # --- Security/Privacy vNext: privacy mode (optional) ---
     # OFF by default. When enabled, minimizes stored intermediates and triggers minimal retention.
     privacy_mode: str = Field(default="off", alias="PRIVACY_MODE")  # off|on
-    no_store_transcript: bool = Field(default=False, alias="NO_STORE_TRANSCRIPT")
+    no_store_transcript: bool = Field(default=True, alias="NO_STORE_TRANSCRIPT")
     no_store_source_audio: bool = Field(default=False, alias="NO_STORE_SOURCE_AUDIO")
     minimal_artifacts: bool = Field(default=False, alias="MINIMAL_ARTIFACTS")
 

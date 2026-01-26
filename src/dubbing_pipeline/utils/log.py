@@ -31,6 +31,8 @@ def _log_path() -> Path:
     return Path(s.log_dir) / "app.log"
 
 
+REDACTED = "***REDACTED***"
+
 _JWT_RE = re.compile(r"\beyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\b")
 _API_KEY_RE = re.compile(r"\bdp_[a-z0-9]{6,}_[A-Za-z0-9_\-]{10,}\b", re.IGNORECASE)
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9_\-\.=]+)")
@@ -39,14 +41,17 @@ _COOKIE_RE = re.compile(
     r"(?i)\b(session|refresh|csrf|access_token|refresh_token|token|auth)=([^;,\s]+)"
 )
 _HEADER_RE = re.compile(
-    r"(?i)\b(authorization|cookie|set-cookie|x-api-key|x-csrf-token)\b\s*[:=]\s*([^\n]+)"
+    r"(?i)\b(authorization|cookie|set-cookie|x-api-key|x-auth-token|x-csrf-token|cf-access-jwt-assertion|api-key)\b\s*[:=]\s*([^\n]+)"
 )
 _INVITE_PATH_RE = re.compile(r"(/invite/)([A-Za-z0-9_\-]{10,})")
 _TEXT_INLINE_RE = re.compile(
-    r"(?i)\b(transcript|subtitle|subtitles|content|prompt)\b\s*[:=]\s*([^\n]{20,})"
+    r"(?i)\b(transcript|subtitle|subtitles|content|prompt)\b\s*[:=]\s*([^\n]+)"
 )
 _KV_RE = re.compile(
-    r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|token|secret|password|api_key|authorization|cookie)\b\s*=\s*([^\s,;]+)"
+    r"(?i)\b(jwt_secret|csrf_secret|session_secret|huggingface_token|hf_token|access_token|refresh_token|token|secret|password|api_key|apikey|authorization|cookie)\b\s*=\s*([^\s,;]+)"
+)
+_URL_PARAM_RE = re.compile(
+    r"(?i)([?&])(token|access_token|refresh_token|api_key|apikey|secret|password|auth|authorization|jwt|session|cookie)=([^&\s]+)"
 )
 
 _SENSITIVE_KEYS = {
@@ -54,7 +59,10 @@ _SENSITIVE_KEYS = {
     "cookie",
     "set-cookie",
     "x-api-key",
+    "x-auth-token",
     "x-csrf-token",
+    "cf-access-jwt-assertion",
+    "api-key",
     "csrf",
     "csrf_token",
     "session",
@@ -63,6 +71,8 @@ _SENSITIVE_KEYS = {
     "access_token",
     "refresh_token",
     "api_key",
+    "payload",
+    "body",
     "password",
     "secret",
     "jwt",
@@ -123,17 +133,18 @@ def _redact_str(s: str) -> str:
     with suppress(Exception):
         for lit in _secret_literals():
             if lit and lit in s:
-                s = s.replace(lit, "***REDACTED***")
-    s = _JWT_RE.sub("***REDACTED***", s)
-    s = _API_KEY_RE.sub("***REDACTED***", s)
-    s = _BEARER_RE.sub("Bearer ***REDACTED***", s)
-    s = _BASIC_RE.sub("Basic ***REDACTED***", s)
-    s = _COOKIE_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
-    s = _HEADER_RE.sub(lambda m: f"{m.group(1)}: ***REDACTED***", s)
-    s = _INVITE_PATH_RE.sub(r"\1***REDACTED***", s)
+                s = s.replace(lit, REDACTED)
+    s = _JWT_RE.sub(REDACTED, s)
+    s = _API_KEY_RE.sub(REDACTED, s)
+    s = _BEARER_RE.sub(f"Bearer {REDACTED}", s)
+    s = _BASIC_RE.sub(f"Basic {REDACTED}", s)
+    s = _COOKIE_RE.sub(lambda m: f"{m.group(1)}={REDACTED}", s)
+    s = _HEADER_RE.sub(lambda m: f"{m.group(1)}: {REDACTED}", s)
+    s = _INVITE_PATH_RE.sub(rf"\1{REDACTED}", s)
     if not _allow_transcripts():
-        s = _TEXT_INLINE_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
-    s = _KV_RE.sub(lambda m: f"{m.group(1)}=***REDACTED***", s)
+        s = _TEXT_INLINE_RE.sub(lambda m: f"{m.group(1)}={REDACTED}", s)
+    s = _KV_RE.sub(lambda m: f"{m.group(1)}={REDACTED}", s)
+    s = _URL_PARAM_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}={REDACTED}", s)
     return s
 
 
@@ -148,7 +159,7 @@ def _is_sensitive_key(key: str | None) -> bool:
 
 def _scrub_obj(obj: Any, *, key: str | None = None) -> Any:
     if _is_sensitive_key(key):
-        return "***REDACTED***"
+        return REDACTED
     if isinstance(obj, str):
         if key and str(key).strip().lower() in _TEXT_KEYS:
             if _allow_transcripts():
