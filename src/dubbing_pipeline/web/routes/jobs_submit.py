@@ -11,14 +11,14 @@ from dubbing_pipeline.api.access import require_job_access, require_upload_acces
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
-from dubbing_pipeline.jobs.limits import get_limits, resolve_user_quotas, used_minutes_today
+from dubbing_pipeline.jobs.limits import get_limits
 from dubbing_pipeline.jobs.models import Job, JobState, normalize_visibility, new_id, now_utc
-from dubbing_pipeline.jobs.policy import evaluate_submission
 from dubbing_pipeline.ops.metrics import jobs_queued, pipeline_job_total
 from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
 from dubbing_pipeline.ops.storage import ensure_free_space
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.security.crypto import is_encrypted_path, materialize_decrypted
+from dubbing_pipeline.security import quotas
 from dubbing_pipeline.utils.ffmpeg_safe import FFmpegError
 from dubbing_pipeline.utils.log import request_id_var
 from dubbing_pipeline.utils.ratelimit import RateLimiter
@@ -111,8 +111,7 @@ async def create_job(
         except Exception:
             parsed_form = None
     store = _get_store(request)
-    user_quota = store.get_user_quota(str(ident.user.id)) if store is not None else {}
-    quotas = resolve_user_quotas(overrides=user_quota)
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
     if idem_key:
         # basic bounds to avoid abuse
         if len(idem_key) > 200:
@@ -356,7 +355,6 @@ async def create_job(
             if ext not in _ALLOWED_UPLOAD_EXTS:
                 raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
             dest = up_dir / f"{jid}{ext}"
-            max_bytes = int(quotas.max_upload_bytes or 0)
             written = 0
             try:
                 with dest.open("wb") as f:
@@ -365,11 +363,9 @@ async def create_job(
                         if not chunk:
                             break
                         written += len(chunk)
-                        if max_bytes > 0 and written > max_bytes:
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Upload too large (limit={max_bytes} bytes)",
-                            )
+                        await enforcer.require_upload_progress(
+                            written_bytes=int(written), action="jobs.upload"
+                        )
                         f.write(chunk)
             except HTTPException:
                 with suppress(Exception):
@@ -379,176 +375,144 @@ async def create_job(
 
     assert video_path is not None
     jid = new_id()
-    max_upload_bytes = int(quotas.max_upload_bytes or 0)
-    max_storage = int(quotas.max_storage_bytes_per_user or 0)
     if store is not None:
         try:
             file_size = int(video_path.stat().st_size)
         except Exception:
             file_size = 0
-        if max_upload_bytes > 0 and file_size > max_upload_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Upload too large (limit={max_upload_bytes} bytes)",
-            )
-        if max_storage > 0:
-            used = int(store.get_user_storage_bytes(str(ident.user.id)) or 0)
-            if (used + file_size) > max_storage:
-                raise HTTPException(
-                    status_code=429,
-                    detail=(
-                        "Storage quota exceeded "
-                        f"(limit={max_storage} bytes, used={used} bytes, requested={file_size} bytes)"
-                    ),
-                )
+        await enforcer.require_upload_bytes(total_bytes=int(file_size), action="jobs.submit")
+    await enforcer.require_concurrent_jobs(action="jobs.submit")
     # Extension allowlist (defense-in-depth). Encrypted-at-rest inputs are allowed (validated via ffprobe after decrypt).
     if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
         raise HTTPException(status_code=400, detail="Unsupported file type")
 
-    # Per-user quotas/policy (authoritative, server-side) before heavy validation.
-    all_jobs = store.list(limit=1000)
-    # Policy check (canonical module). Prefer Redis counters/quotas when queue backend is active.
-    qb = getattr(request.app.state, "queue_backend", None)
-    counts_override = None
-    merged_quota = dict(user_quota or {})
-    if qb is not None:
-        with suppress(Exception):
-            counts_override = await qb.user_counts(user_id=str(ident.user.id))
-        with suppress(Exception):
-            qb_quota = await qb.user_quota(user_id=str(ident.user.id))
-            if isinstance(qb_quota, dict):
-                merged_quota.update(qb_quota)
-    pol = evaluate_submission(
-        jobs=all_jobs,
-        user_id=str(ident.user.id),
-        user_role=ident.user.role,
+    reservation = await enforcer.reserve_submit_jobs(
+        count=1,
         requested_mode=mode,
         requested_device=device,
         job_id=jid,
-        counts_override=counts_override,
-        user_quota=merged_quota,
+        action="jobs.submit",
     )
-    if not pol.ok:
-        raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
     # Apply policy adjustments (GPU downgrade / mode downgrade).
-    mode = str(pol.effective_mode or mode)
-    device = str(pol.effective_device or device)
+    mode = str(reservation.effective_mode or mode)
+    device = str(reservation.effective_device or device)
     # Validate using ffprobe (no user-controlled args).
+    job_created = False
     try:
         with materialize_decrypted(video_path, kind="uploads", job_id=None, suffix=".input") as mat:
             duration_s = float(_validate_media_or_400(mat.path, limits=limits))
+        await enforcer.require_processing_minutes(duration_s=duration_s, action="jobs.submit")
     except HTTPException:
+        await reservation.release()
         raise
     except FFmpegError as ex:
+        await reservation.release()
         raise HTTPException(
             status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
         ) from ex
-
     created = now_utc()
-    used_min = used_minutes_today(all_jobs, user_id=ident.user.id, now_iso=created)
-    req_min = duration_s / 60.0
-    if (used_min + req_min) > float(limits.daily_processing_minutes):
-        raise HTTPException(
-            status_code=429,
-            detail=f"Daily quota exceeded (limit={limits.daily_processing_minutes} min, used={used_min:.1f} min, requested={req_min:.1f} min)",
+
+    try:
+        job = Job(
+            id=jid,
+            owner_id=ident.user.id,
+            video_path=str(video_path),
+            duration_s=float(duration_s),
+            request_id=(request_id_var.get() or ""),
+            mode=mode,
+            device=device,
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+            created_at=created,
+            updated_at=created,
+            state=JobState.QUEUED,
+            progress=0.0,
+            message="Queued",
+            output_mkv="",
+            output_srt="",
+            work_dir="",
+            log_path="",
+            error=None,
+            series_title=str(series_title),
+            series_slug=str(series_slug),
+            season_number=int(season_number),
+            episode_number=int(episode_number),
+            visibility=normalize_visibility(visibility),
         )
+        # Per-job (session) flags; NOT persisted as global defaults.
+        rt = dict(job.runtime or {})
+        pg_norm = str(pg or "off").strip().lower()
+        if pg_norm in {"pg13", "pg"}:
+            rt["pg"] = pg_norm
+            if pg_policy_path.strip():
+                rt["pg_policy_path"] = pg_policy_path.strip()
+        if bool(qa):
+            rt["qa"] = True
+        if project_name.strip():
+            rt["project_name"] = project_name.strip()
+        if style_guide_path.strip():
+            rt["style_guide_path"] = style_guide_path.strip()
+        if bool(speaker_smoothing):
+            rt["speaker_smoothing"] = True
+            rt["scene_detect"] = str(scene_detect or "audio").strip().lower()
+        if bool(director):
+            rt["director"] = True
+            rt["director_strength"] = float(director_strength)
 
-    job = Job(
-        id=jid,
-        owner_id=ident.user.id,
-        video_path=str(video_path),
-        duration_s=float(duration_s),
-        request_id=(request_id_var.get() or ""),
-        mode=mode,
-        device=device,
-        src_lang=src_lang,
-        tgt_lang=tgt_lang,
-        created_at=created,
-        updated_at=created,
-        state=JobState.QUEUED,
-        progress=0.0,
-        message="Queued",
-        output_mkv="",
-        output_srt="",
-        work_dir="",
-        log_path="",
-        error=None,
-        series_title=str(series_title),
-        series_slug=str(series_slug),
-        season_number=int(season_number),
-        episode_number=int(episode_number),
-        visibility=normalize_visibility(visibility),
-    )
-    # Per-job (session) flags; NOT persisted as global defaults.
-    rt = dict(job.runtime or {})
-    pg_norm = str(pg or "off").strip().lower()
-    if pg_norm in {"pg13", "pg"}:
-        rt["pg"] = pg_norm
-        if pg_policy_path.strip():
-            rt["pg_policy_path"] = pg_policy_path.strip()
-    if bool(qa):
-        rt["qa"] = True
-    if project_name.strip():
-        rt["project_name"] = project_name.strip()
-    if style_guide_path.strip():
-        rt["style_guide_path"] = style_guide_path.strip()
-    if bool(speaker_smoothing):
-        rt["speaker_smoothing"] = True
-        rt["scene_detect"] = str(scene_detect or "audio").strip().lower()
-    if bool(director):
-        rt["director"] = True
-        rt["director_strength"] = float(director_strength)
+        # retention policy (per-job)
+        cp = str(cache_policy or "").strip().lower()
+        if cp in {"full", "balanced", "minimal"}:
+            rt["cache_policy"] = cp
 
-    # retention policy (per-job)
-    cp = str(cache_policy or "").strip().lower()
-    if cp in {"full", "balanced", "minimal"}:
-        rt["cache_policy"] = cp
+        # privacy mode + data minimization (per-job)
+        if privacy_mode:
+            rt["privacy_mode"] = str(privacy_mode).strip().lower()
+        if bool(no_store_transcript):
+            rt["no_store_transcript"] = True
+        if bool(no_store_source_audio):
+            rt["no_store_source_audio"] = True
+        if bool(minimal_artifacts):
+            rt["minimal_artifacts"] = True
 
-    # privacy mode + data minimization (per-job)
-    if privacy_mode:
-        rt["privacy_mode"] = str(privacy_mode).strip().lower()
-    if bool(no_store_transcript):
-        rt["no_store_transcript"] = True
-    if bool(no_store_source_audio):
-        rt["no_store_source_audio"] = True
-    if bool(minimal_artifacts):
-        rt["minimal_artifacts"] = True
+        # Remember upload metadata (if resumable upload flow was used).
+        if upload_id:
+            rt["upload_id"] = str(upload_id)
+            if upload_stem:
+                rt["upload_stem"] = str(upload_stem)
 
-    # Remember upload metadata (if resumable upload flow was used).
-    if upload_id:
-        rt["upload_id"] = str(upload_id)
-        if upload_stem:
-            rt["upload_stem"] = str(upload_stem)
+        # Optional imports (best-effort; store small text files under INPUT_DIR/imports/<job_id>/)
+        if import_src_srt_text or import_tgt_srt_text or import_transcript_json_text:
+            imp_dir = (_input_imports_dir() / jid).resolve()
+            with suppress(Exception):
+                imp_dir.mkdir(parents=True, exist_ok=True)
+            if import_src_srt_text:
+                if len(import_src_srt_text.encode("utf-8", errors="ignore")) > _MAX_IMPORT_TEXT_BYTES:
+                    raise HTTPException(status_code=400, detail="src_srt_text too large")
+                sp = (imp_dir / "src.srt").resolve()
+                sp.write_text(import_src_srt_text, encoding="utf-8")
+                rt["import_src_srt_path"] = str(sp)
+            if import_tgt_srt_text:
+                if len(import_tgt_srt_text.encode("utf-8", errors="ignore")) > _MAX_IMPORT_TEXT_BYTES:
+                    raise HTTPException(status_code=400, detail="tgt_srt_text too large")
+                tp = (imp_dir / "tgt.srt").resolve()
+                tp.write_text(import_tgt_srt_text, encoding="utf-8")
+                rt["import_tgt_srt_path"] = str(tp)
+            if import_transcript_json_text:
+                if (
+                    len(import_transcript_json_text.encode("utf-8", errors="ignore"))
+                    > _MAX_IMPORT_TEXT_BYTES
+                ):
+                    raise HTTPException(status_code=400, detail="transcript_json_text too large")
+                jp = (imp_dir / "transcript.json").resolve()
+                jp.write_text(import_transcript_json_text, encoding="utf-8")
+                rt["import_transcript_json_path"] = str(jp)
 
-    # Optional imports (best-effort; store small text files under INPUT_DIR/imports/<job_id>/)
-    if import_src_srt_text or import_tgt_srt_text or import_transcript_json_text:
-        imp_dir = (_input_imports_dir() / jid).resolve()
-        with suppress(Exception):
-            imp_dir.mkdir(parents=True, exist_ok=True)
-        if import_src_srt_text:
-            if len(import_src_srt_text.encode("utf-8", errors="ignore")) > _MAX_IMPORT_TEXT_BYTES:
-                raise HTTPException(status_code=400, detail="src_srt_text too large")
-            sp = (imp_dir / "src.srt").resolve()
-            sp.write_text(import_src_srt_text, encoding="utf-8")
-            rt["import_src_srt_path"] = str(sp)
-        if import_tgt_srt_text:
-            if len(import_tgt_srt_text.encode("utf-8", errors="ignore")) > _MAX_IMPORT_TEXT_BYTES:
-                raise HTTPException(status_code=400, detail="tgt_srt_text too large")
-            tp = (imp_dir / "tgt.srt").resolve()
-            tp.write_text(import_tgt_srt_text, encoding="utf-8")
-            rt["import_tgt_srt_path"] = str(tp)
-        if import_transcript_json_text:
-            if (
-                len(import_transcript_json_text.encode("utf-8", errors="ignore"))
-                > _MAX_IMPORT_TEXT_BYTES
-            ):
-                raise HTTPException(status_code=400, detail="transcript_json_text too large")
-            jp = (imp_dir / "transcript.json").resolve()
-            jp.write_text(import_transcript_json_text, encoding="utf-8")
-            rt["import_transcript_json_path"] = str(jp)
-
-    job.runtime = rt
-    store.put(job)
+        job.runtime = rt
+        store.put(job)
+        job_created = True
+    except Exception:
+        await reservation.release()
+        raise
     audit_event(
         "job.submit",
         request=request,
@@ -565,20 +529,25 @@ async def create_job(
     if idem_key:
         store.put_idempotency(idem_key, jid)
     # Enqueue via the canonical queue backend (Redis L2 with fallback to local L1).
-    await submit_job_or_503(
-        request,
-        job_id=jid,
-        user_id=str(ident.user.id),
-        mode=str(mode),
-        device=str(device),
-        priority=100,
-        meta={
-            "series_slug": series_slug,
-            "season_number": int(season_number),
-            "episode_number": int(episode_number),
-            "user_role": str(getattr(ident.user.role, "value", "") or ""),
-        },
-    )
+    try:
+        await submit_job_or_503(
+            request,
+            job_id=jid,
+            user_id=str(ident.user.id),
+            mode=str(mode),
+            device=str(device),
+            priority=100,
+            meta={
+                "series_slug": series_slug,
+                "season_number": int(season_number),
+                "episode_number": int(episode_number),
+                "user_role": str(getattr(ident.user.role, "value", "") or ""),
+            },
+        )
+    except Exception:
+        if not job_created:
+            await reservation.release()
+        raise
     jobs_queued.inc()
     pipeline_job_total.inc()
     return {"id": jid}
@@ -600,10 +569,9 @@ async def create_jobs_batch(
     """
     store = _get_store(request)
     limits = get_limits()
-    user_quota = store.get_user_quota(str(ident.user.id)) if store is not None else {}
-    quotas = resolve_user_quotas(overrides=user_quota)
-    used_storage = int(store.get_user_storage_bytes(str(ident.user.id)) or 0) if store else 0
-    pending_storage = 0
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
+    storage_reservations: list[quotas.StorageReservation] = []
+    daily_reservation: quotas.JobReservation | None = None
     # Batch submit is expensive; keep it tighter.
     _enforce_rate_limit(
         request,
@@ -646,27 +614,15 @@ async def create_jobs_batch(
         project_name: str = "",
         style_guide_path: str = "",
     ) -> str:
-        nonlocal pending_storage
-        max_upload_bytes = int(quotas.max_upload_bytes or 0)
-        max_storage = int(quotas.max_storage_bytes_per_user or 0)
         try:
             file_size = int(video_path.stat().st_size)
         except Exception:
             file_size = 0
-        if max_upload_bytes > 0 and file_size > max_upload_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Upload too large (limit={max_upload_bytes} bytes)",
-            )
-        if max_storage > 0 and (used_storage + pending_storage + file_size) > max_storage:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    "Storage quota exceeded "
-                    f"(limit={max_storage} bytes, used={used_storage} bytes, requested={file_size} bytes)"
-                ),
-            )
-        pending_storage += file_size
+        await enforcer.require_upload_bytes(total_bytes=int(file_size), action="jobs.batch")
+        storage_res = await enforcer.reserve_storage_bytes(
+            bytes_count=int(file_size), action="jobs.batch"
+        )
+        storage_reservations.append(storage_res)
         # ffprobe validation
         try:
             duration_s = float(_validate_media_or_400(video_path, limits=limits))
@@ -753,255 +709,232 @@ async def create_jobs_batch(
         return jid
 
     ctype = (request.headers.get("content-type") or "").lower()
+    await enforcer.require_concurrent_jobs(action="jobs.batch")
     if "application/json" in ctype:
         body = await request.json()
         if not isinstance(body, dict) or not isinstance(body.get("items"), list):
             raise HTTPException(status_code=400, detail="Invalid JSON body")
+        total_items = len(body.get("items") or [])
+        daily_reservation = await enforcer.reserve_daily_jobs(
+            count=total_items,
+            action="jobs.batch",
+        )
         base_series_title, base_series_slug, base_season, base_episode = _parse_library_metadata_or_422(
             body
         )
-        # Policy check once for batch admission (counts inflight jobs prior to this batch).
-        all_jobs = store.list(limit=1000)
-        qb = getattr(request.app.state, "queue_backend", None)
-        counts_override = None
-        merged_quota = dict(user_quota or {})
-        if qb is not None:
-            with suppress(Exception):
-                counts_override = await qb.user_counts(user_id=str(ident.user.id))
-            with suppress(Exception):
-                qb_quota = await qb.user_quota(user_id=str(ident.user.id))
-                if isinstance(qb_quota, dict):
-                    merged_quota.update(qb_quota)
-        pol = evaluate_submission(
-            jobs=all_jobs,
-            user_id=str(ident.user.id),
-            user_role=ident.user.role,
-            requested_mode=str(body.get("mode") or "medium"),
-            requested_device=str(body.get("device") or "auto"),
-            job_id=None,
-            counts_override=counts_override,
-            user_quota=merged_quota,
+        try:
+            pol = await enforcer.apply_submission_policy(
+                requested_mode=str(body.get("mode") or "medium"),
+                requested_device=str(body.get("device") or "auto"),
+                job_id=None,
+            )
+            if pol is not None and not pol.ok:
+                raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
+            for it in body["items"]:
+                if not isinstance(it, dict):
+                    continue
+                preset_id = str(it.get("preset_id") or "").strip()
+                project_id = str(it.get("project_id") or "").strip()
+                preset = store.get_preset(preset_id) if preset_id else None
+                project = store.get_project(project_id) if project_id else None
+                # Allow `filename` as relative under APP_ROOT/Input/...
+                vp = it.get("video_path") or it.get("filename")
+                if not isinstance(vp, str):
+                    raise HTTPException(status_code=400, detail="Missing video_path/filename")
+                if vp.startswith("/"):
+                    video_path = _sanitize_video_path(vp)
+                else:
+                    # Treat filenames as relative to INPUT_DIR for safety/consistency.
+                    root = _app_root()
+                    try:
+                        rel_input = _input_dir().resolve().relative_to(root)
+                        video_path = _sanitize_video_path(str(Path(rel_input) / vp))
+                    except Exception:
+                        video_path = _sanitize_video_path(str(Path("Input") / vp))
+                if not video_path.exists() or not video_path.is_file():
+                    raise HTTPException(status_code=400, detail=f"video_path does not exist: {vp}")
+                mode = str(it.get("mode") or (preset.get("mode") if preset else "medium"))
+                device = str(it.get("device") or (preset.get("device") if preset else "auto"))
+                # Apply policy adjustments (GPU/mode downgrade) per item.
+                pol2 = await enforcer.apply_submission_policy(
+                    requested_mode=mode,
+                    requested_device=device,
+                    job_id=None,
+                )
+                if pol2 is not None and not pol2.ok:
+                    raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
+                mode = str(getattr(pol2, "effective_mode", None) or mode)
+                device = str(getattr(pol2, "effective_device", None) or device)
+                src_lang = str(it.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
+                tgt_lang = str(it.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
+                pg = str(it.get("pg") or "off")
+                pg_policy_path = str(it.get("pg_policy_path") or "")
+                qa = bool(it.get("qa") or False)
+                cache_policy = str(it.get("cache_policy") or "full")
+                project_name = str(it.get("project") or it.get("project_name") or "")
+                style_guide_path = str(it.get("style_guide_path") or "")
+                # project output folder stored in runtime; validated here
+                if project and project.get("output_subdir"):
+                    project["output_subdir"] = _sanitize_output_subdir(
+                        str(project.get("output_subdir") or "")
+                    )
+                # Batch default: episode auto-increments by item order unless explicitly set.
+                idx = int(len(created_ids))
+                meta_payload = {
+                    "series_title": base_series_title,
+                    "series_slug": base_series_slug,
+                    "season_number": base_season,
+                    "episode_number": base_episode + idx,
+                }
+                # Allow per-item override (still validated).
+                for k in [
+                    "series_title",
+                    "series_slug",
+                    "season_number",
+                    "season_text",
+                    "episode_number",
+                    "episode_text",
+                ]:
+                    if k in it:
+                        meta_payload[k] = it.get(k)
+                series_title, series_slug, season_number, episode_number = _parse_library_metadata_or_422(
+                    meta_payload
+                )
+                created_ids.append(
+                    await _submit_one(
+                        video_path=video_path,
+                        series_title=series_title,
+                        series_slug=series_slug,
+                        season_number=season_number,
+                        episode_number=episode_number,
+                        mode=mode,
+                        device=device,
+                        src_lang=src_lang,
+                        tgt_lang=tgt_lang,
+                        preset=preset,
+                        project=project,
+                        pg=pg,
+                        pg_policy_path=pg_policy_path,
+                        qa=qa,
+                        cache_policy=cache_policy,
+                        project_name=project_name,
+                        style_guide_path=style_guide_path,
+                    )
+                )
+        except Exception:
+            if daily_reservation is not None:
+                await daily_reservation.release(count=max(0, total_items - len(created_ids)))
+            raise
+        finally:
+            for res in storage_reservations:
+                await res.release()
+    else:
+        form = await request.form()
+        files = form.getlist("files") if hasattr(form, "getlist") else []
+        if not files:
+            raise HTTPException(status_code=400, detail="Provide files")
+        total_items = len(files)
+        daily_reservation = await enforcer.reserve_daily_jobs(
+            count=total_items,
+            action="jobs.batch",
         )
-        if not pol.ok:
-            raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
-        for it in body["items"]:
-            if not isinstance(it, dict):
-                continue
-            preset_id = str(it.get("preset_id") or "").strip()
-            project_id = str(it.get("project_id") or "").strip()
+        base_series_title, base_series_slug, base_season, base_episode = _parse_library_metadata_or_422(
+            dict(form)
+        )
+        try:
+            pol = await enforcer.apply_submission_policy(
+                requested_mode=str(form.get("mode") or "medium"),
+                requested_device=str(form.get("device") or "auto"),
+                job_id=None,
+            )
+            if pol is not None and not pol.ok:
+                raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
+            preset_id = str(form.get("preset_id") or "").strip()
+            project_id = str(form.get("project_id") or "").strip()
             preset = store.get_preset(preset_id) if preset_id else None
             project = store.get_project(project_id) if project_id else None
-            # Allow `filename` as relative under APP_ROOT/Input/...
-            vp = it.get("video_path") or it.get("filename")
-            if not isinstance(vp, str):
-                raise HTTPException(status_code=400, detail="Missing video_path/filename")
-            if vp.startswith("/"):
-                video_path = _sanitize_video_path(vp)
-            else:
-                # Treat filenames as relative to INPUT_DIR for safety/consistency.
-                root = _app_root()
-                try:
-                    rel_input = _input_dir().resolve().relative_to(root)
-                    video_path = _sanitize_video_path(str(Path(rel_input) / vp))
-                except Exception:
-                    video_path = _sanitize_video_path(str(Path("Input") / vp))
-            if not video_path.exists() or not video_path.is_file():
-                raise HTTPException(status_code=400, detail=f"video_path does not exist: {vp}")
-            mode = str(it.get("mode") or (preset.get("mode") if preset else "medium"))
-            device = str(it.get("device") or (preset.get("device") if preset else "auto"))
-            # Apply policy adjustments (GPU/mode downgrade) per item.
-            pol2 = evaluate_submission(
-                jobs=all_jobs,
-                user_id=str(ident.user.id),
-                user_role=ident.user.role,
-                requested_mode=mode,
-                requested_device=device,
-                job_id=None,
-                counts_override=counts_override,
-                user_quota=merged_quota,
-            )
-            if not pol2.ok:
-                raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
-            mode = str(pol2.effective_mode or mode)
-            device = str(pol2.effective_device or device)
-            src_lang = str(it.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
-            tgt_lang = str(it.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
-            pg = str(it.get("pg") or "off")
-            pg_policy_path = str(it.get("pg_policy_path") or "")
-            qa = bool(it.get("qa") or False)
-            cache_policy = str(it.get("cache_policy") or "full")
-            project_name = str(it.get("project") or it.get("project_name") or "")
-            style_guide_path = str(it.get("style_guide_path") or "")
-            # project output folder stored in runtime; validated here
             if project and project.get("output_subdir"):
                 project["output_subdir"] = _sanitize_output_subdir(
                     str(project.get("output_subdir") or "")
                 )
-            # Batch default: episode auto-increments by item order unless explicitly set.
-            idx = int(len(created_ids))
-            meta_payload = {
-                "series_title": base_series_title,
-                "series_slug": base_series_slug,
-                "season_number": base_season,
-                "episode_number": base_episode + idx,
-            }
-            # Allow per-item override (still validated).
-            for k in [
-                "series_title",
-                "series_slug",
-                "season_number",
-                "season_text",
-                "episode_number",
-                "episode_text",
-            ]:
-                if k in it:
-                    meta_payload[k] = it.get(k)
-            series_title, series_slug, season_number, episode_number = _parse_library_metadata_or_422(
-                meta_payload
+            mode = str(form.get("mode") or (preset.get("mode") if preset else "medium"))
+            device = str(form.get("device") or (preset.get("device") if preset else "auto"))
+            pol2 = await enforcer.apply_submission_policy(
+                requested_mode=mode,
+                requested_device=device,
+                job_id=None,
             )
-            created_ids.append(
-                await _submit_one(
-                    video_path=video_path,
-                    series_title=series_title,
-                    series_slug=series_slug,
-                    season_number=season_number,
-                    episode_number=episode_number,
-                    mode=mode,
-                    device=device,
-                    src_lang=src_lang,
-                    tgt_lang=tgt_lang,
-                    preset=preset,
-                    project=project,
-                    pg=pg,
-                    pg_policy_path=pg_policy_path,
-                    qa=qa,
-                    cache_policy=cache_policy,
-                    project_name=project_name,
-                    style_guide_path=style_guide_path,
-                )
-            )
-    else:
-        form = await request.form()
-        base_series_title, base_series_slug, base_season, base_episode = _parse_library_metadata_or_422(
-            dict(form)
-        )
-        all_jobs = store.list(limit=1000)
-        qb = getattr(request.app.state, "queue_backend", None)
-        counts_override = None
-        merged_quota = dict(user_quota or {})
-        if qb is not None:
-            with suppress(Exception):
-                counts_override = await qb.user_counts(user_id=str(ident.user.id))
-            with suppress(Exception):
-                qb_quota = await qb.user_quota(user_id=str(ident.user.id))
-                if isinstance(qb_quota, dict):
-                    merged_quota.update(qb_quota)
-        pol = evaluate_submission(
-            jobs=all_jobs,
-            user_id=str(ident.user.id),
-            user_role=ident.user.role,
-            requested_mode=str(form.get("mode") or "medium"),
-            requested_device=str(form.get("device") or "auto"),
-            job_id=None,
-            counts_override=counts_override,
-            user_quota=merged_quota,
-        )
-        if not pol.ok:
-            raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
-        preset_id = str(form.get("preset_id") or "").strip()
-        project_id = str(form.get("project_id") or "").strip()
-        preset = store.get_preset(preset_id) if preset_id else None
-        project = store.get_project(project_id) if project_id else None
-        if project and project.get("output_subdir"):
-            project["output_subdir"] = _sanitize_output_subdir(
-                str(project.get("output_subdir") or "")
-            )
-        mode = str(form.get("mode") or (preset.get("mode") if preset else "medium"))
-        device = str(form.get("device") or (preset.get("device") if preset else "auto"))
-        pol2 = evaluate_submission(
-            jobs=all_jobs,
-            user_id=str(ident.user.id),
-            user_role=ident.user.role,
-            requested_mode=mode,
-            requested_device=device,
-            job_id=None,
-            counts_override=counts_override,
-            user_quota=merged_quota,
-        )
-        if not pol2.ok:
-            raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
-        mode = str(pol2.effective_mode or mode)
-        device = str(pol2.effective_device or device)
-        src_lang = str(form.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
-        tgt_lang = str(form.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
-        pg = str(form.get("pg") or "off")
-        pg_policy_path = str(form.get("pg_policy_path") or "")
-        qa = str(form.get("qa") or "").strip() not in {"", "0", "false", "off"}
-        cache_policy = str(form.get("cache_policy") or "full")
+            if pol2 is not None and not pol2.ok:
+                raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
+            mode = str(getattr(pol2, "effective_mode", None) or mode)
+            device = str(getattr(pol2, "effective_device", None) or device)
+            src_lang = str(form.get("src_lang") or (preset.get("src_lang") if preset else "ja"))
+            tgt_lang = str(form.get("tgt_lang") or (preset.get("tgt_lang") if preset else "en"))
+            pg = str(form.get("pg") or "off")
+            pg_policy_path = str(form.get("pg_policy_path") or "")
+            qa = str(form.get("qa") or "").strip() not in {"", "0", "false", "off"}
+            cache_policy = str(form.get("cache_policy") or "full")
 
-        files = form.getlist("files") if hasattr(form, "getlist") else []
-        if not files:
-            raise HTTPException(status_code=400, detail="Provide files")
-
-        up_dir = _input_uploads_dir()
-        up_dir.mkdir(parents=True, exist_ok=True)
-        max_upload_bytes = int(quotas.max_upload_bytes or 0)
-        max_storage = int(quotas.max_storage_bytes_per_user or 0)
-        for upload in files:
-            ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()
-            if ctype_u and ctype_u not in _ALLOWED_UPLOAD_MIME:
-                raise HTTPException(
-                    status_code=400, detail=f"Unsupported upload content-type: {ctype_u}"
+            up_dir = _input_uploads_dir()
+            up_dir.mkdir(parents=True, exist_ok=True)
+            for upload in files:
+                ctype_u = (getattr(upload, "content_type", None) or "").lower().strip()
+                if ctype_u and ctype_u not in _ALLOWED_UPLOAD_MIME:
+                    raise HTTPException(
+                        status_code=400, detail=f"Unsupported upload content-type: {ctype_u}"
+                    )
+                name = getattr(upload, "filename", "") or ""
+                ext = (("." + name.rsplit(".", 1)[-1]) if "." in name else ".mp4").lower()[:8]
+                if ext not in _ALLOWED_UPLOAD_EXTS:
+                    raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
+                tmp_id = new_id()
+                dest = up_dir / f"{tmp_id}{ext}"
+                written = 0
+                try:
+                    with dest.open("wb") as f:
+                        while True:
+                            chunk = await upload.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            written += len(chunk)
+                            await enforcer.require_upload_progress(
+                                written_bytes=int(written), action="jobs.batch.upload"
+                            )
+                            f.write(chunk)
+                    storage_res = await enforcer.reserve_storage_bytes(
+                        bytes_count=int(written), action="jobs.batch"
+                    )
+                    storage_reservations.append(storage_res)
+                except Exception:
+                    with suppress(Exception):
+                        dest.unlink(missing_ok=True)
+                    raise
+                idx = int(len(created_ids))
+                created_ids.append(
+                    await _submit_one(
+                        video_path=dest,
+                        series_title=base_series_title,
+                        series_slug=base_series_slug,
+                        season_number=base_season,
+                        episode_number=(base_episode + idx),
+                        mode=mode,
+                        device=device,
+                        src_lang=src_lang,
+                        tgt_lang=tgt_lang,
+                        preset=preset,
+                        project=project,
+                        pg=pg,
+                        pg_policy_path=pg_policy_path,
+                        qa=qa,
+                        cache_policy=cache_policy,
+                    )
                 )
-            name = getattr(upload, "filename", "") or ""
-            ext = (("." + name.rsplit(".", 1)[-1]) if "." in name else ".mp4").lower()[:8]
-            if ext not in _ALLOWED_UPLOAD_EXTS:
-                raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
-            tmp_id = new_id()
-            dest = up_dir / f"{tmp_id}{ext}"
-            written = 0
-            with dest.open("wb") as f:
-                while True:
-                    chunk = await upload.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    written += len(chunk)
-                    if max_upload_bytes > 0 and written > max_upload_bytes:
-                        with suppress(Exception):
-                            dest.unlink(missing_ok=True)
-                        raise HTTPException(
-                            status_code=400, detail=f"Upload too large (limit={max_upload_bytes} bytes)"
-                        )
-                    if max_storage > 0 and (used_storage + pending_storage + written) > max_storage:
-                        with suppress(Exception):
-                            dest.unlink(missing_ok=True)
-                        raise HTTPException(
-                            status_code=429,
-                            detail=(
-                                "Storage quota exceeded "
-                                f"(limit={max_storage} bytes, used={used_storage} bytes, requested={written} bytes)"
-                            ),
-                        )
-                    f.write(chunk)
-            idx = int(len(created_ids))
-            created_ids.append(
-                await _submit_one(
-                    video_path=dest,
-                    series_title=base_series_title,
-                    series_slug=base_series_slug,
-                    season_number=base_season,
-                    episode_number=(base_episode + idx),
-                    mode=mode,
-                    device=device,
-                    src_lang=src_lang,
-                    tgt_lang=tgt_lang,
-                    preset=preset,
-                    project=project,
-                    pg=pg,
-                    pg_policy_path=pg_policy_path,
-                    qa=qa,
-                    cache_policy=cache_policy,
-                )
-            )
+        except Exception:
+            if daily_reservation is not None:
+                await daily_reservation.release(count=max(0, total_items - len(created_ids)))
+            raise
+        finally:
+            for res in storage_reservations:
+                await res.release()
 
     return {"ids": created_ids}

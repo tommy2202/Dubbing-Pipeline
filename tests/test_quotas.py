@@ -119,7 +119,7 @@ def test_upload_quota_limits(tmp_path: Path) -> None:
             headers=headers,
             json={"filename": "clip.mp4", "total_bytes": 2048},
         )
-        assert r2.status_code == 400, r2.text
+        assert r2.status_code == 429, r2.text
 
 
 def test_jobs_per_day_cap(tmp_path: Path) -> None:

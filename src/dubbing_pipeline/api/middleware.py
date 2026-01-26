@@ -39,7 +39,15 @@ async def request_context_middleware(
 
 
 def audit_event(
-    event: str, *, request: Request, user_id: str | None, meta: dict | None = None
+    event: str,
+    *,
+    request: Request,
+    user_id: str | None = None,
+    actor_id: str | None = None,
+    target_id: str | None = None,
+    outcome: str | None = None,
+    meta: dict | None = None,
+    meta_safe: dict | None = None,
 ) -> None:
     rid = (
         request_id_var.get()
@@ -47,16 +55,18 @@ def audit_event(
         or request.headers.get("x-request-id")
         or None
     )
-    resource_id = None
-    if isinstance(meta, dict):
+    resource_id = target_id
+    safe_meta = meta_safe if meta_safe is not None else meta
+    if resource_id is None and isinstance(safe_meta, dict):
         for cand in ("resource_id", "job_id"):
-            if meta.get(cand):
-                resource_id = str(meta.get(cand))
+            if safe_meta.get(cand):
+                resource_id = str(safe_meta.get(cand))
                 break
-    audit.event(
+    audit.audit_event(
         event,
         request_id=rid,
-        actor_id=user_id,
-        resource_id=resource_id,
-        meta_safe=meta or None,
+        actor_id=actor_id or user_id,
+        target_id=resource_id,
+        outcome=outcome,
+        metadata_safe=safe_meta,
     )

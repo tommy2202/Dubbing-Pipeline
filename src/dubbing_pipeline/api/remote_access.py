@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
+from starlette.requests import HTTPConnection
 
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.utils.log import logger
@@ -92,16 +93,11 @@ def resolve_access_posture(*, settings=None) -> dict[str, Any]:
 def _default_allowed_subnets_for_mode(mode: str) -> list[ipaddress._BaseNetwork]:
     mode = (mode or "off").strip().lower()
     if mode == "tailscale":
-        # Allow LAN + Tailscale CGNAT by default. This prevents accidental public exposure
-        # while still allowing phone-on-cellular via Tailscale.
+        # Allow only Tailscale CGNAT + localhost by default.
         return [
             ipaddress.ip_network("127.0.0.0/8"),
-            ipaddress.ip_network("10.0.0.0/8"),
-            ipaddress.ip_network("172.16.0.0/12"),
-            ipaddress.ip_network("192.168.0.0/16"),
             ipaddress.ip_network("100.64.0.0/10"),  # Tailscale CGNAT
             ipaddress.ip_network("::1/128"),
-            ipaddress.ip_network("fc00::/7"),  # IPv6 ULA (includes tailscale's ULA on some setups)
         ]
     if mode == "cloudflare":
         # In Cloudflare Tunnel mode, the origin should typically receive traffic only from a local proxy
@@ -284,7 +280,7 @@ def _verify_cf_access_jwt(token: str, *, team_domain: str, aud: str) -> dict[str
     raise RuntimeError("invalid_access_jwt") from last_err
 
 
-def decide_remote_access(request: Request) -> RemoteDecision:
+def decide_remote_access(request: HTTPConnection) -> RemoteDecision:
     s = get_settings()
     posture = resolve_access_posture(settings=s)
     mode = str(posture.get("mode") or "off").strip().lower()
@@ -344,48 +340,46 @@ def decide_remote_access(request: Request) -> RemoteDecision:
             reason="tailscale_allowlist_ok",
         )
 
-    # cloudflare mode: if Access config is provided, require/verify Access JWT.
+    # cloudflare mode: require/verify Access JWT.
     team = getattr(s, "cloudflare_access_team_domain", None)
     aud = getattr(s, "cloudflare_access_aud", None)
-    if team and aud:
-        tok = (request.headers.get("cf-access-jwt-assertion") or "").strip()
-        if not tok:
-            return RemoteDecision(
-                allowed=False,
-                mode=mode,
-                client_ip=str(eff_ip),
-                raw_peer_ip=str(raw_peer or ""),
-                via_proxy=via_proxy,
-                reason="missing_cf_access_jwt",
-            )
-        try:
-            _verify_cf_access_jwt(tok, team_domain=str(team), aud=str(aud))
-        except Exception as ex:
-            return RemoteDecision(
-                allowed=False,
-                mode=mode,
-                client_ip=str(eff_ip),
-                raw_peer_ip=str(raw_peer or ""),
-                via_proxy=via_proxy,
-                reason=f"invalid_cf_access_jwt:{type(ex).__name__}",
-            )
+    if not team or not aud:
         return RemoteDecision(
-            allowed=True,
+            allowed=False,
             mode=mode,
             client_ip=str(eff_ip),
             raw_peer_ip=str(raw_peer or ""),
             via_proxy=via_proxy,
-            reason="cloudflare_access_ok",
+            reason="cloudflare_access_not_configured",
         )
-
-    # Otherwise: rely on app auth (RBAC/API keys) at the route layer, but keep IP allowlist.
+    tok = (request.headers.get("cf-access-jwt-assertion") or "").strip()
+    if not tok:
+        return RemoteDecision(
+            allowed=False,
+            mode=mode,
+            client_ip=str(eff_ip),
+            raw_peer_ip=str(raw_peer or ""),
+            via_proxy=via_proxy,
+            reason="missing_cf_access_jwt",
+        )
+    try:
+        _verify_cf_access_jwt(tok, team_domain=str(team), aud=str(aud))
+    except Exception as ex:
+        return RemoteDecision(
+            allowed=False,
+            mode=mode,
+            client_ip=str(eff_ip),
+            raw_peer_ip=str(raw_peer or ""),
+            via_proxy=via_proxy,
+            reason=f"invalid_cf_access_jwt:{type(ex).__name__}",
+        )
     return RemoteDecision(
         allowed=True,
         mode=mode,
         client_ip=str(eff_ip),
         raw_peer_ip=str(raw_peer or ""),
         via_proxy=via_proxy,
-        reason="cloudflare_no_access_config_ip_allowlist_only",
+        reason="cloudflare_access_ok",
     )
 
 
@@ -394,8 +388,8 @@ async def remote_access_middleware(request: Request, call_next) -> Response:
     Remote access enforcement for mobile-friendly deployments.
 
     - off: allow all (default)
-    - tailscale: allow only LAN/private + tailscale CGNAT (or ALLOWED_SUBNETS)
-    - cloudflare: allow only local/private proxies + optional Access JWT verification
+    - tailscale: allow only tailscale CGNAT + localhost (or ALLOWED_SUBNETS)
+    - cloudflare: require Cloudflare Access JWT + allow only trusted proxy subnets
     """
     d = decide_remote_access(request)
     if not d.allowed:
@@ -418,6 +412,57 @@ async def remote_access_middleware(request: Request, call_next) -> Response:
     # Useful for debugging tunnels without exposing secrets.
     resp.headers.setdefault("x-remote-access-mode", d.mode)
     return resp
+
+
+class RemoteAccessASGIMiddleware:
+    """
+    ASGI-level remote access enforcement (HTTP + WebSocket).
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+
+        conn = HTTPConnection(scope)
+        d = decide_remote_access(conn)
+        if not d.allowed:
+            logger.warning(
+                "remote_access_denied",
+                mode=d.mode,
+                peer_ip=d.raw_peer_ip,
+                client_ip=d.client_ip,
+                via_proxy=bool(d.via_proxy),
+                reason=d.reason,
+                path=scope.get("path") or "",
+                method=(scope.get("method") or "WEBSOCKET"),
+            )
+            if scope.get("type") == "http":
+                resp = JSONResponse(
+                    status_code=403,
+                    content={"detail": "Forbidden", "reason": d.reason, "mode": d.mode},
+                )
+                await resp(scope, receive, send)
+                return
+            await send({"type": "websocket.close", "code": 1008, "reason": "Forbidden"})
+            return
+
+        if scope.get("type") == "http":
+            async def _send(message):
+                if message.get("type") == "http.response.start":
+                    headers = list(message.get("headers") or [])
+                    if not any(k.lower() == b"x-remote-access-mode" for k, _ in headers):
+                        headers.append((b"x-remote-access-mode", str(d.mode).encode("utf-8")))
+                    message["headers"] = headers
+                await send(message)
+
+            await self.app(scope, receive, _send)
+            return
+
+        await self.app(scope, receive, send)
 
 
 def log_remote_access_boot_summary() -> None:

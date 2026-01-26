@@ -170,3 +170,27 @@ def emit(
         meta_safe=meta or None,
         job_id=job_id,
     )
+
+
+def audit_event(
+    event_type: str,
+    *,
+    actor_id: str | None,
+    target_id: str | None = None,
+    outcome: str | None = None,
+    metadata_safe: dict[str, Any] | None = None,
+    request_id: str | None = None,
+    job_id: str | None = None,
+) -> None:
+    """
+    Coarse audit event helper: metadata must be non-content (IDs, sizes, counts).
+    """
+    event(
+        event_type,
+        actor_id=actor_id,
+        resource_id=target_id,
+        request_id=request_id,
+        outcome=outcome,
+        meta_safe=metadata_safe or None,
+        job_id=job_id,
+    )
