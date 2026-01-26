@@ -4,7 +4,7 @@ Generated from repo scan of the FastAPI app in `src/dubbing_pipeline/server.py`.
 
 Notes:
 - `auth_router` is mounted at both `/auth/*` and `/api/auth/*` (same handlers).
-- `remote_access_middleware` is HTTP-only; WebSocket routes are **not** covered.
+- `RemoteAccessASGIMiddleware` enforces remote access for HTTP + WebSocket routes.
 - Static mount: `/static` (StaticFiles).
 - Test-only FastAPI apps under `scripts/*` are excluded (not mounted in server).
 
@@ -31,9 +31,15 @@ Notes:
 - Added tests: `tests/test_quotas_upload_size.py`, `tests/test_quotas_jobs_per_day.py`,
   `tests/test_quotas_concurrent_jobs.py`.
 
+## Prompt 5 updates (remote access posture)
+
+- Remote access enforcement moved to ASGI middleware (`RemoteAccessASGIMiddleware`) to cover HTTP + WebSockets.
+- `ACCESS_MODE=tailscale` now defaults to Tailscale CGNAT + localhost only.
+- `ACCESS_MODE=cloudflare` now requires valid Cloudflare Access JWT; missing or invalid tokens are denied.
+
 ## Required middleware/dependencies
 
-- `remote_access_middleware` (`api/remote_access.py`), applied as HTTP middleware in `server.py`.
+- `RemoteAccessASGIMiddleware` (`api/remote_access.py`), applied as ASGI middleware in `server.py`.
 - `request_context_middleware` (`api/middleware.py`) for request_id context.
 - `security_headers` + `log_requests` middleware (`server.py`).
 - CORS middleware (configured origins + credential cookies).
@@ -178,7 +184,7 @@ Auth column legend:
 | GET | /api/jobs/{id}/logs/stream | `web/routes/jobs_logs.py:stream_logs` | session/bearer/api-key + scope: read:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | GET | /api/jobs/events | `web/routes/jobs_events.py:jobs_events` | session/bearer/api-key + scope: read:job | N/A | `require_job_access` per job (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | GET | /events/jobs/{id} | `web/routes/jobs_events.py:sse_job` | session/bearer/api-key + scope: read:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
-| WS | /ws/jobs/{id} | `web/routes/jobs_events.py:ws_job` | Bearer JWT / API key / session cookie (manual auth); optional legacy token | N/A | `require_job_access` (owner/admin) | None | **None (WebSocket; HTTP middleware not applied)** |
+| WS | /ws/jobs/{id} | `web/routes/jobs_events.py:ws_job` | Bearer JWT / API key / session cookie (manual auth); optional legacy token | N/A | `require_job_access` (owner/admin) | None | `RemoteAccessASGIMiddleware` (WS) |
 
 ### Jobs: review / overrides
 
@@ -315,5 +321,4 @@ Auth column legend:
   `/api/uploads/*`, and requeue endpoints.
 
 ### Remote access
-- **WebSocket `/ws/jobs/{id}` is not covered by `remote_access_middleware` (HTTP-only).**
-  - P0 fix: add remote-access enforcement for WebSocket connections (e.g., ASGI middleware or explicit check in `ws_job`).
+- Enforced at ASGI layer for HTTP + WebSocket via `RemoteAccessASGIMiddleware`.

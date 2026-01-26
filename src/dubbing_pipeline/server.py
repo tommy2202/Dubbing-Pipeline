@@ -19,7 +19,10 @@ from dubbing_pipeline.api.access import require_file_access
 from dubbing_pipeline.api.deps import Identity, require_role, require_scope
 from dubbing_pipeline.api.middleware import request_context_middleware
 from dubbing_pipeline.api.models import AuthStore, Role, User, now_ts
-from dubbing_pipeline.api.remote_access import log_remote_access_boot_summary, remote_access_middleware
+from dubbing_pipeline.api.remote_access import (
+    RemoteAccessASGIMiddleware,
+    log_remote_access_boot_summary,
+)
 from dubbing_pipeline.api.routes_audit import router as audit_router
 from dubbing_pipeline.api.routes_auth import router as auth_router
 from dubbing_pipeline.api.routes_admin import router as admin_router
@@ -202,6 +205,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="dubbing_pipeline server", lifespan=lifespan)
+app.add_middleware(RemoteAccessASGIMiddleware)
 app.state.templates = TEMPLATES
 with suppress(Exception):
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -354,8 +358,6 @@ async def log_requests(request: Request, call_next):
 
 
 # Must be outermost so request_id is present for all logs (including log_requests).
-# Remote access enforcement should run *inside* request_context so denied requests still have request_id.
-app.middleware("http")(remote_access_middleware)
 app.middleware("http")(request_context_middleware)
 
 
