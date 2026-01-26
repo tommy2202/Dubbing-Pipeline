@@ -15,6 +15,7 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState, now_utc
 from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
+from dubbing_pipeline.security import quotas
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.web.routes.jobs_common import (
     _enforce_rate_limit,
@@ -591,6 +592,8 @@ async def post_job_segments_rerun(
         message="Segment resynth requested",
         runtime=rt,
     )
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
+    await enforcer.require_concurrent_jobs(action="jobs.rerun")
     await submit_job_or_503(
         request,
         job_id=str(id),
@@ -805,6 +808,8 @@ async def synthesize_from_approved(
         message="Resynth requested (approved only)",
         runtime=rt,
     )
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
+    await enforcer.require_concurrent_jobs(action="jobs.resynth")
     await submit_job_or_503(
         request,
         job_id=str(id),

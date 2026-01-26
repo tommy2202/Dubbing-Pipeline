@@ -11,6 +11,7 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.jobs.models import JobState
 from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
+from dubbing_pipeline.security import quotas
 from dubbing_pipeline.web.routes.jobs_common import (
     _get_queue,
     _get_store,
@@ -127,6 +128,8 @@ async def rerun_two_pass_admin(
         message="Queued (pass 2 rerun)",
     )
 
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
+    await enforcer.require_concurrent_jobs(action="jobs.rerun_admin")
     await submit_job_or_503(
         request,
         job_id=str(id),

@@ -20,6 +20,17 @@ Notes:
 - `require_job_access`, `require_library_access`, and `require_file_access` now delegate to the centralized guard.
 - Added regression tests for private artifact leakage and guard invocation coverage.
 
+## Prompt 4 updates (quota/throttle enforcement)
+
+- Centralized quota enforcement in `src/dubbing_pipeline/security/quotas.py`.
+- Upload ingress now enforces size/storage limits at init + chunk + complete.
+- Job submission ingress (`/api/jobs`, `/api/jobs/batch`) enforces upload size, jobs/day,
+  concurrent jobs, and daily processing minutes with Redis-backed counters when available.
+- Requeue/resume endpoints (`/api/jobs/{id}/resume`, `/api/jobs/{id}/segments/rerun`,
+  `/api/jobs/{id}/transcript/synthesize`, `/api/jobs/{id}/two_pass/rerun`) enforce concurrent-job caps.
+- Added tests: `tests/test_quotas_upload_size.py`, `tests/test_quotas_jobs_per_day.py`,
+  `tests/test_quotas_concurrent_jobs.py`.
+
 ## Required middleware/dependencies
 
 - `remote_access_middleware` (`api/remote_access.py`), applied as HTTP middleware in `server.py`.
@@ -30,8 +41,8 @@ Notes:
   - `current_identity` accepts **session cookie**, **Bearer JWT**, or **X-Api-Key**.
 - Visibility/access helpers: `require_job_access`, `require_library_access`,
   `require_file_access`, `require_upload_access` (`api/access.py`).
-- Quota/policy helpers: `resolve_user_quotas` + `get_limits` + `used_minutes_today`
-  (`jobs/limits.py`), `evaluate_submission` (`jobs/policy.py`).
+- Quota/policy helpers: centralized in `security/quotas.py` (wraps `jobs/limits.py`,
+  `jobs/policy.py`, Redis/local counters).
 
 Auth column legend:
 - **public** = no auth
@@ -141,14 +152,14 @@ Auth column legend:
 | POST | /api/jobs/{id}/visibility | `web/routes/jobs_actions.py:set_job_visibility` | session/bearer/api-key + scope: read:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | POST | /api/jobs/{id}/cancel | `web/routes/jobs_actions.py:cancel_job` | session/bearer/api-key + scope: submit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | POST | /api/jobs/{id}/pause | `web/routes/jobs_actions.py:pause_job` | session/bearer/api-key + scope: submit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
-| POST | /api/jobs/{id}/resume | `web/routes/jobs_actions.py:resume_job` | session/bearer/api-key + scope: submit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
+| POST | /api/jobs/{id}/resume | `web/routes/jobs_actions.py:resume_job` | session/bearer/api-key + scope: submit:job | N/A | `require_job_access` (owner/admin) | concurrent jobs cap (`security/quotas.py`) | `remote_access_middleware` (HTTP) |
 
 ### Jobs: submission
 
 | Method | Path | Source | Auth requirement | Invite-only gating | Visibility/ownership enforcement | Quota enforcement | Remote access gating |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| POST | /api/jobs | `web/routes/jobs_submit.py:create_job` | session/bearer/api-key + scope: submit:job | N/A | upload ownership enforced via `require_upload_access` when upload_id used | max_upload_bytes, max_storage_bytes, daily_processing_minutes, jobs/day cap, queued cap (policy) | `remote_access_middleware` (HTTP) |
-| POST | /api/jobs/batch | `web/routes/jobs_submit.py:create_jobs_batch` | session/bearer/api-key + scope: submit:job | N/A | N/A (new jobs) | max_upload_bytes, max_storage_bytes, jobs/day cap, queued cap (policy) | `remote_access_middleware` (HTTP) |
+| POST | /api/jobs | `web/routes/jobs_submit.py:create_job` | session/bearer/api-key + scope: submit:job | N/A | upload ownership enforced via `require_upload_access` when upload_id used | quotas via `security/quotas.py`: upload bytes, storage, daily minutes, jobs/day, concurrent jobs, queued cap (policy) | `remote_access_middleware` (HTTP) |
+| POST | /api/jobs/batch | `web/routes/jobs_submit.py:create_jobs_batch` | session/bearer/api-key + scope: submit:job | N/A | N/A (new jobs) | quotas via `security/quotas.py`: upload bytes, storage, jobs/day, concurrent jobs, queued cap (policy) | `remote_access_middleware` (HTTP) |
 
 ### Jobs: files/preview/logs/events
 
@@ -183,11 +194,11 @@ Auth column legend:
 | PATCH | /api/jobs/{id}/segments/{segment_id} | `web/routes/jobs_review.py:patch_job_segment` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | POST | /api/jobs/{id}/segments/{segment_id}/approve | `web/routes/jobs_review.py:post_job_segment_approve` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | POST | /api/jobs/{id}/segments/{segment_id}/reject | `web/routes/jobs_review.py:post_job_segment_reject` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
-| POST | /api/jobs/{id}/segments/rerun | `web/routes/jobs_review.py:post_job_segments_rerun` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
+| POST | /api/jobs/{id}/segments/rerun | `web/routes/jobs_review.py:post_job_segments_rerun` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | concurrent jobs cap (`security/quotas.py`) | `remote_access_middleware` (HTTP) |
 | GET | /api/jobs/{id}/transcript | `web/routes/jobs_review.py:get_job_transcript` | session/bearer/api-key + scope: read:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | PUT | /api/jobs/{id}/transcript | `web/routes/jobs_review.py:put_job_transcript` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | POST | /api/jobs/{id}/overrides/speaker | `web/routes/jobs_review.py:set_speaker_overrides_from_ui` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
-| POST | /api/jobs/{id}/transcript/synthesize | `web/routes/jobs_review.py:synthesize_from_approved` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
+| POST | /api/jobs/{id}/transcript/synthesize | `web/routes/jobs_review.py:synthesize_from_approved` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | concurrent jobs cap (`security/quotas.py`) | `remote_access_middleware` (HTTP) |
 | GET | /api/jobs/{id}/review/segments | `web/routes/jobs_review.py:get_job_review_segments` | session/bearer/api-key + scope: read:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | POST | /api/jobs/{id}/review/segments/{segment_id}/helper | `web/routes/jobs_review.py:post_job_review_helper` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | POST | /api/jobs/{id}/review/segments/{segment_id}/edit | `web/routes/jobs_review.py:post_job_review_edit` | session/bearer/api-key + scope: edit:job | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
@@ -212,11 +223,11 @@ Auth column legend:
 
 | Method | Path | Source | Auth requirement | Invite-only gating | Visibility/ownership enforcement | Quota enforcement | Remote access gating |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| POST | /api/uploads/init | `web/routes/uploads.py:uploads_init` | session/bearer/api-key + scope: submit:job | N/A | N/A | max_upload_bytes, max_storage_bytes | `remote_access_middleware` (HTTP) |
+| POST | /api/uploads/init | `web/routes/uploads.py:uploads_init` | session/bearer/api-key + scope: submit:job | N/A | N/A | upload bytes/storage via `security/quotas.py` | `remote_access_middleware` (HTTP) |
 | GET | /api/uploads/{upload_id} | `web/routes/uploads.py:uploads_status` | session/bearer/api-key + scope: read:job | N/A | `require_upload_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | GET | /api/uploads/{upload_id}/status | `web/routes/uploads.py:uploads_status_minimal` | session/bearer/api-key + scope: read:job | N/A | `require_upload_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
-| POST | /api/uploads/{upload_id}/chunk | `web/routes/uploads.py:uploads_chunk` | session/bearer/api-key + scope: submit:job | N/A | `require_upload_access` (owner/admin) | upload total/size enforced via init; chunk size cap | `remote_access_middleware` (HTTP) |
-| POST | /api/uploads/{upload_id}/complete | `web/routes/uploads.py:uploads_complete` | session/bearer/api-key + scope: submit:job | N/A | `require_upload_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
+| POST | /api/uploads/{upload_id}/chunk | `web/routes/uploads.py:uploads_chunk` | session/bearer/api-key + scope: submit:job | N/A | `require_upload_access` (owner/admin) | upload total/size enforced via `security/quotas.py`; chunk size cap | `remote_access_middleware` (HTTP) |
+| POST | /api/uploads/{upload_id}/complete | `web/routes/uploads.py:uploads_complete` | session/bearer/api-key + scope: submit:job | N/A | `require_upload_access` (owner/admin) | upload total/size enforced via `security/quotas.py` | `remote_access_middleware` (HTTP) |
 | GET | /api/files | `web/routes/uploads.py:list_server_files` | session/bearer/api-key + scope: read:job | N/A | N/A (server-local Input dir listing) | None | `remote_access_middleware` (HTTP) |
 
 ### Admin/operator job utilities + presets/projects
@@ -227,7 +238,7 @@ Auth column legend:
 | POST | /api/jobs/{id}/archive | `web/routes/admin.py:archive_job` | session/bearer/api-key + role: operator | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | POST | /api/jobs/{id}/unarchive | `web/routes/admin.py:unarchive_job` | session/bearer/api-key + role: operator | N/A | `require_job_access` (owner/admin) | None | `remote_access_middleware` (HTTP) |
 | POST | /api/jobs/{id}/kill | `web/routes/admin.py:kill_job_admin` | session/bearer/api-key + role: admin | N/A | admin-only | None | `remote_access_middleware` (HTTP) |
-| POST | /api/jobs/{id}/two_pass/rerun | `web/routes/admin.py:rerun_two_pass_admin` | session/bearer/api-key + role: admin | N/A | admin-only | None | `remote_access_middleware` (HTTP) |
+| POST | /api/jobs/{id}/two_pass/rerun | `web/routes/admin.py:rerun_two_pass_admin` | session/bearer/api-key + role: admin | N/A | admin-only | concurrent jobs cap (`security/quotas.py`) | `remote_access_middleware` (HTTP) |
 | GET | /api/presets | `web/routes/admin.py:list_presets` | session/bearer/api-key + scope: read:job | N/A | owner-scoped (admin sees all) | None | `remote_access_middleware` (HTTP) |
 | POST | /api/presets | `web/routes/admin.py:create_preset` | session/bearer/api-key + role: admin | N/A | admin-only | None | `remote_access_middleware` (HTTP) |
 | DELETE | /api/presets/{id} | `web/routes/admin.py:delete_preset` | session/bearer/api-key + role: admin | N/A | admin-only | None | `remote_access_middleware` (HTTP) |
@@ -299,7 +310,9 @@ Auth column legend:
 - None observed. Artifact/library endpoints consistently use `require_job_access`, `require_library_access`, or `require_file_access`.
 
 ### Quotas
-- None observed. Job submissions (`/api/jobs`, `/api/jobs/batch`) and uploads (`/api/uploads/init`) enforce upload size/storage and policy caps.
+- Centralized quota enforcement in `security/quotas.py` covers upload size/storage, jobs/day,
+  concurrent jobs, and daily processing minutes across `/api/jobs`, `/api/jobs/batch`,
+  `/api/uploads/*`, and requeue endpoints.
 
 ### Remote access
 - **WebSocket `/ws/jobs/{id}` is not covered by `remote_access_middleware` (HTTP-only).**
