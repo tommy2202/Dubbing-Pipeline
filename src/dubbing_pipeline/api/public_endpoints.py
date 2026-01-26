@@ -6,8 +6,6 @@ PUBLIC_API_ALLOWLIST = {
     "/api/auth/login",
     "/api/auth/refresh",
     "/api/auth/logout",
-    "/api/auth/register",
-    "/api/auth/signup",
     "/api/auth/qr/redeem",
     "/api/auth/totp/setup",
     "/api/auth/totp/verify",

@@ -8,6 +8,12 @@ Notes:
 - Static mount: `/static` (StaticFiles).
 - Test-only FastAPI apps under `scripts/*` are excluded (not mounted in server).
 
+## Prompt 2 updates (invite-only enforcement)
+
+- `/auth/register` and `/auth/signup` remain hard-disabled (404) under both `/auth/*` and `/api/auth/*`.
+- Removed register/signup from the public endpoint allowlist to avoid accidental exposure.
+- Added tests to assert no public signup and invalid invite redemption fails; invite creation stays admin-only.
+
 ## Required middleware/dependencies
 
 - `remote_access_middleware` (`api/remote_access.py`), applied as HTTP middleware in `server.py`.
