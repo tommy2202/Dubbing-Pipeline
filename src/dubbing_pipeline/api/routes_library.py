@@ -15,11 +15,19 @@ from dubbing_pipeline.library import queries
 from dubbing_pipeline.library.manifest import update_manifest_visibility
 from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
 from dubbing_pipeline.notify import ntfy
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.utils.crypto import random_id
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 
-router = APIRouter(prefix="/api/library", tags=["library"])
+router = APIRouter(
+    prefix="/api/library",
+    tags=["library"],
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_authenticated_user),
+    ],
+)
 
 _REPORT_REASON_MAX = 200
 
