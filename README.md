@@ -209,6 +209,21 @@ python3 -m pip install -e .
 
 ---
 
+## Local dev (non-Docker) install
+
+Use the same pins as Docker via `constraints.txt`:
+
+```bash
+bash scripts/dev_install.sh
+# or:
+python3 -m pip install -r requirements.txt -c constraints.txt
+python3 -m pip install -r requirements-dev.txt -c constraints.txt
+```
+
+`constraints.txt` forwards to `docker/constraints.txt` (single source of pins).
+
+---
+
 ## Developer quickstart
 
 ```bash

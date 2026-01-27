@@ -1,0 +1,2 @@
+# Canonical pins live in docker/constraints.txt.
+-r docker/constraints.txt
