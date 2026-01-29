@@ -162,3 +162,32 @@ def test_visibility_guard_invoked_for_routes(tmp_path: Path, monkeypatch) -> Non
         assert calls["job"] >= 2
         assert calls["artifact"] >= 1
         assert calls["library"] >= 1
+
+
+def test_share_blocked_when_library_sharing_disabled(tmp_path: Path, monkeypatch) -> None:
+    in_dir, out_dir = _setup_env(tmp_path)
+    monkeypatch.setenv("ALLOW_SHARED_LIBRARY", "0")
+    get_settings.cache_clear()
+    with TestClient(app) as c:
+        store = c.app.state.job_store
+        owner, other = _create_users(c)
+        headers_owner = login_user(
+            c, username=owner.username, password="pass_owner", clear_cookies=True
+        )
+        headers_other = login_user(
+            c, username=other.username, password="pass_other", clear_cookies=True
+        )
+        job_id, output_mp4 = _create_job(store, out_dir=out_dir, in_dir=in_dir, owner=owner)
+        rel = output_mp4.relative_to(out_dir).as_posix()
+
+        # Sharing is disabled for non-admins.
+        shared = c.post(
+            f"/api/jobs/{job_id}/visibility",
+            headers=headers_owner,
+            json={"visibility": "shared"},
+        )
+        assert shared.status_code == 403
+
+        # Job remains private; non-owner cannot access.
+        assert c.get(f"/api/jobs/{job_id}", headers=headers_other).status_code == 403
+        assert c.get(f"/files/{rel}", headers=headers_other).status_code == 403
