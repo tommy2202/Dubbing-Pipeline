@@ -12,6 +12,7 @@ from dubbing_pipeline.api.deps import Identity, require_role, require_scope
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.web.routes.jobs_common import (
     _enforce_rate_limit,
     _file_range_response,
@@ -25,7 +26,12 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _voice_refs_manifest_path,
 )
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ]
+)
 
 
 def _normalize_voice_strategy(value: Any) -> str:

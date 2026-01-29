@@ -25,7 +25,7 @@ router = APIRouter(
     tags=["library"],
     dependencies=[
         Depends(policy.require_request_allowed),
-        Depends(policy.require_authenticated_user),
+        Depends(policy.require_invite_member),
     ],
 )
 

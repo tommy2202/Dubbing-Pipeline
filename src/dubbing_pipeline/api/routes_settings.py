@@ -14,6 +14,7 @@ from dubbing_pipeline.api.deps import Identity, current_identity, require_role
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.api.security import verify_csrf
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.security import policy
 
 
 def _settings_path() -> Path:
@@ -200,7 +201,13 @@ class UserSettingsStore:
         return self.get_user(uid)
 
 
-router = APIRouter(tags=["settings"])
+router = APIRouter(
+    tags=["settings"],
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ],
+)
 
 
 def _get_user_settings_store(request: Request) -> UserSettingsStore:

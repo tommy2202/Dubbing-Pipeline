@@ -9,10 +9,18 @@ from dubbing_pipeline.api.deps import Identity, require_role
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.ops.storage import ensure_free_space
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.runtime.model_manager import ModelManager
 from dubbing_pipeline.runtime.scheduler import Scheduler
 
-router = APIRouter(prefix="/api/runtime", tags=["runtime"])
+router = APIRouter(
+    prefix="/api/runtime",
+    tags=["runtime"],
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ],
+)
 
 
 @router.get("/state")

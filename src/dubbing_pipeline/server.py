@@ -42,6 +42,7 @@ from dubbing_pipeline.ops.metrics import REGISTRY
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.security.runtime_db import UnsafeRuntimeDbPath, assert_safe_runtime_db_path
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.utils.crypto import PasswordHasher, random_id
 from dubbing_pipeline.utils.log import logger, safe_log
 from dubbing_pipeline.utils.net import get_client_ip, install_egress_policy, is_trusted_proxy
@@ -500,7 +501,13 @@ async def login_redirect() -> Response:
 
 
 @app.get("/video/{job}")
-async def video(request: Request, job: str, ident: Identity = Depends(require_scope("read:job"))):
+async def video(
+    request: Request,
+    job: str,
+    ident: Identity = Depends(require_scope("read:job")),
+    _: policy.PolicyContext = Depends(policy.require_invite_member),
+    __: policy.PolicyContext = Depends(policy.require_request_allowed),
+):
     p = _resolve_job(job)
     store = getattr(request.app.state, "job_store", None)
     if store is None:
@@ -524,7 +531,13 @@ async def video(request: Request, job: str, ident: Identity = Depends(require_sc
 
 
 @app.get("/files/{path:path}")
-async def files(request: Request, path: str, ident: Identity = Depends(require_scope("read:job"))):
+async def files(
+    request: Request,
+    path: str,
+    ident: Identity = Depends(require_scope("read:job")),
+    _: policy.PolicyContext = Depends(policy.require_invite_member),
+    __: policy.PolicyContext = Depends(policy.require_request_allowed),
+):
     p = _safe_output_path(path)
     store = getattr(request.app.state, "job_store", None)
     if store is None:

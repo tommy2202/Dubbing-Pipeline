@@ -29,7 +29,7 @@ from dubbing_pipeline.web.routes.jobs_common import (
 router = APIRouter(
     dependencies=[
         Depends(policy.require_request_allowed),
-        Depends(policy.require_authenticated_user),
+        Depends(policy.require_invite_member),
     ]
 )
 

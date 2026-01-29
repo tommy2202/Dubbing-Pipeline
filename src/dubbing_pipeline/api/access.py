@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 
 from dubbing_pipeline.api.deps import Identity
 from dubbing_pipeline.jobs.models import Job
-from dubbing_pipeline.security import visibility
+from dubbing_pipeline.security import policy, visibility
 from dubbing_pipeline.jobs.store import JobStore
 from dubbing_pipeline.library.paths import get_job_output_root
 
@@ -30,7 +30,7 @@ def require_job_access(
         job = store.get(str(job_id))
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    visibility.require_can_view_job(user=ident.user, job=job, allow_shared_read=allow_shared_read)
+    policy.require_can_view_job(user=ident.user, job=job, allow_shared_read=allow_shared_read)
     return job
 
 
@@ -105,7 +105,7 @@ def require_library_access(
         finally:
             con.close()
 
-    visibility.require_can_view_library_item(
+    policy.require_can_view_library_item(
         user=ident.user, item=item, allow_shared_read=allow_shared_read
     )
     return dict(item)
@@ -139,7 +139,7 @@ def require_file_access(
     job = _job_for_path(store=store, path=path)
     if job is None:
         raise HTTPException(status_code=404, detail="File not found")
-    visibility.require_can_view_artifact(
+    policy.require_can_view_artifact(
         user=ident.user, artifact=path, job=job, allow_shared_read=allow_shared_read
     )
     return job

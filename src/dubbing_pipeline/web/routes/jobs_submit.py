@@ -18,7 +18,7 @@ from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
 from dubbing_pipeline.ops.storage import ensure_free_space
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.security.crypto import is_encrypted_path, materialize_decrypted
-from dubbing_pipeline.security import quotas
+from dubbing_pipeline.security import policy, quotas
 from dubbing_pipeline.utils.ffmpeg_safe import FFmpegError
 from dubbing_pipeline.utils.log import request_id_var
 from dubbing_pipeline.utils.ratelimit import RateLimiter
@@ -37,7 +37,12 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _validate_media_or_400,
 )
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ]
+)
 
 _MAX_IMPORT_TEXT_BYTES = 2 * 1024 * 1024  # 2MB per imported text file (SRT/JSON)
 
@@ -380,13 +385,17 @@ async def create_job(
             file_size = int(video_path.stat().st_size)
         except Exception:
             file_size = 0
-        await enforcer.require_upload_bytes(total_bytes=int(file_size), action="jobs.submit")
-    await enforcer.require_concurrent_jobs(action="jobs.submit")
+        await policy.require_quota(
+            request=request, user=ident.user, action="jobs.submit", bytes=int(file_size)
+        )
+    await policy.require_concurrent_jobs(request=request, user=ident.user, action="jobs.submit")
     # Extension allowlist (defense-in-depth). Encrypted-at-rest inputs are allowed (validated via ffprobe after decrypt).
     if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
         raise HTTPException(status_code=400, detail="Unsupported file type")
 
-    reservation = await enforcer.reserve_submit_jobs(
+    reservation = await policy.reserve_submit_jobs(
+        request=request,
+        user=ident.user,
         count=1,
         requested_mode=mode,
         requested_device=device,
@@ -401,7 +410,9 @@ async def create_job(
     try:
         with materialize_decrypted(video_path, kind="uploads", job_id=None, suffix=".input") as mat:
             duration_s = float(_validate_media_or_400(mat.path, limits=limits))
-        await enforcer.require_processing_minutes(duration_s=duration_s, action="jobs.submit")
+        await policy.require_processing_minutes(
+            request=request, user=ident.user, duration_s=duration_s, action="jobs.submit"
+        )
     except HTTPException:
         await reservation.release()
         raise
@@ -411,6 +422,8 @@ async def create_job(
             status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
         ) from ex
     created = now_utc()
+    vis_norm = normalize_visibility(visibility)
+    policy.require_share_allowed(user=ident.user, visibility_value=vis_norm.value)
 
     try:
         job = Job(
@@ -437,7 +450,7 @@ async def create_job(
             series_slug=str(series_slug),
             season_number=int(season_number),
             episode_number=int(episode_number),
-            visibility=normalize_visibility(visibility),
+            visibility=vis_norm,
         )
         # Per-job (session) flags; NOT persisted as global defaults.
         rt = dict(job.runtime or {})
@@ -618,7 +631,9 @@ async def create_jobs_batch(
             file_size = int(video_path.stat().st_size)
         except Exception:
             file_size = 0
-        await enforcer.require_upload_bytes(total_bytes=int(file_size), action="jobs.batch")
+        await policy.require_quota(
+            request=request, user=ident.user, action="jobs.batch", bytes=int(file_size)
+        )
         storage_res = await enforcer.reserve_storage_bytes(
             bytes_count=int(file_size), action="jobs.batch"
         )
@@ -709,7 +724,7 @@ async def create_jobs_batch(
         return jid
 
     ctype = (request.headers.get("content-type") or "").lower()
-    await enforcer.require_concurrent_jobs(action="jobs.batch")
+    await policy.require_concurrent_jobs(request=request, user=ident.user, action="jobs.batch")
     if "application/json" in ctype:
         body = await request.json()
         if not isinstance(body, dict) or not isinstance(body.get("items"), list):

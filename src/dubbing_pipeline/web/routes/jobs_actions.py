@@ -12,10 +12,15 @@ from dubbing_pipeline.jobs.models import JobState, normalize_visibility
 from dubbing_pipeline.library.manifest import update_manifest_visibility
 from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
 from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
-from dubbing_pipeline.security import quotas
+from dubbing_pipeline.security import policy, quotas
 from dubbing_pipeline.web.routes.jobs_common import _get_queue, _get_store, _output_root
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ]
+)
 
 
 @router.delete("/api/jobs/{id}")
@@ -70,6 +75,7 @@ async def set_job_visibility(
     vis = normalize_visibility(vis_raw).value
     if vis not in {"private", "shared"}:
         raise HTTPException(status_code=400, detail="visibility must be shared|private")
+    policy.require_share_allowed(user=ident.user, visibility_value=vis)
     store.update(str(id), visibility=vis)
     # Best-effort manifest updates (both library and job root).
     with suppress(Exception):

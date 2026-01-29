@@ -8,7 +8,8 @@ from fastapi import Depends, HTTPException, Request, status
 from dubbing_pipeline.api import remote_access
 from dubbing_pipeline.api.deps import Identity, current_identity, get_store
 from dubbing_pipeline.api.middleware import audit_event
-from dubbing_pipeline.api.models import AuthStore, User
+from dubbing_pipeline.api.models import AuthStore, Role, User
+from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.security import quotas, visibility
 from dubbing_pipeline.utils.net import get_client_ip
 
@@ -139,6 +140,35 @@ def require_can_view_job(*, user: User, job, allow_shared_read: bool = False) ->
     visibility.require_can_view_job(user=user, job=job, allow_shared_read=allow_shared_read)
 
 
+def require_can_view_artifact(
+    *, user: User, artifact, job, allow_shared_read: bool = False
+) -> None:
+    visibility.require_can_view_artifact(
+        user=user, artifact=artifact, job=job, allow_shared_read=allow_shared_read
+    )
+
+
+def require_can_view_library_item(
+    *, user: User, item: dict[str, Any], allow_shared_read: bool = False
+) -> None:
+    visibility.require_can_view_library_item(
+        user=user, item=item, allow_shared_read=allow_shared_read
+    )
+
+
+def _share_allowed(user: User) -> bool:
+    if user.role == Role.admin:
+        return True
+    s = get_settings()
+    return bool(getattr(s, "allow_shared_library", True))
+
+
+def require_share_allowed(*, user: User, visibility_value: str) -> None:
+    vis = str(visibility_value or "").strip().lower()
+    if vis in {"shared", "public"} and not _share_allowed(user):
+        raise PolicyError.forbidden("Sharing is disabled")
+
+
 async def require_quota(
     *, request: Request | None, user: User, action: str, bytes: int = 0
 ) -> None:
@@ -146,6 +176,38 @@ async def require_quota(
         return
     enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
     await enforcer.require_upload_bytes(total_bytes=int(bytes), action=str(action))
+
+
+async def require_concurrent_jobs(*, request: Request, user: User, action: str) -> None:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    await enforcer.require_concurrent_jobs(action=str(action))
+
+
+async def reserve_submit_jobs(
+    *,
+    request: Request,
+    user: User,
+    count: int,
+    requested_mode: str,
+    requested_device: str,
+    job_id: str | None,
+    action: str,
+) -> quotas.JobReservation:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    return await enforcer.reserve_submit_jobs(
+        count=int(count),
+        requested_mode=str(requested_mode),
+        requested_device=str(requested_device),
+        job_id=str(job_id) if job_id else None,
+        action=str(action),
+    )
+
+
+async def require_processing_minutes(
+    *, request: Request, user: User, duration_s: float, action: str
+) -> None:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    await enforcer.require_processing_minutes(duration_s=float(duration_s), action=str(action))
 
 
 def _resolve_identity(request: Request, store: AuthStore) -> Identity:
