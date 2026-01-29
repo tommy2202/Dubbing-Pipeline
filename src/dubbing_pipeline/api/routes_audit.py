@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request
 
 from dubbing_pipeline.api.deps import Identity, current_identity
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.security import policy
 
 
 def _audit_dir() -> Path:
@@ -47,7 +48,13 @@ def _tail_lines(path: Path, *, max_lines: int = 500, max_bytes: int = 512 * 1024
     return lines[-int(max_lines) :]
 
 
-router = APIRouter(tags=["audit"])
+router = APIRouter(
+    tags=["audit"],
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ],
+)
 
 
 @router.get("/api/audit/recent")

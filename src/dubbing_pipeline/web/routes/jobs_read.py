@@ -9,9 +9,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from dubbing_pipeline.api.access import require_job_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.jobs.models import Job
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.web.routes.jobs_common import _get_store, _player_job_for_path
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ]
+)
 
 
 @router.get("/api/jobs")

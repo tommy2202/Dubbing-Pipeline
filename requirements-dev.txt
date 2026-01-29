@@ -1,0 +1,6 @@
+# Dev tooling (unpinned; versions in constraints.txt).
+black
+ruff
+mypy
+pytest
+types-requests

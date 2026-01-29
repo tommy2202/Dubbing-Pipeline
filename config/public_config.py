@@ -153,6 +153,10 @@ class PublicConfig(BaseSettings):
     no_store_source_audio: bool = Field(default=False, alias="NO_STORE_SOURCE_AUDIO")
     minimal_artifacts: bool = Field(default=False, alias="MINIMAL_ARTIFACTS")
 
+    # --- shared library policy ---
+    # Default on for backwards compatibility; set ALLOW_SHARED_LIBRARY=0 to disable sharing.
+    allow_shared_library: bool = Field(default=True, alias="ALLOW_SHARED_LIBRARY")
+
     # --- web server ---
     # Default to localhost to avoid accidental public exposure.
     host: str = Field(default="127.0.0.1", alias="HOST")

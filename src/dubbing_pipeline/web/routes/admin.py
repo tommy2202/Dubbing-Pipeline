@@ -11,7 +11,7 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.jobs.models import JobState
 from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
-from dubbing_pipeline.security import quotas
+from dubbing_pipeline.security import policy, quotas
 from dubbing_pipeline.web.routes.jobs_common import (
     _get_queue,
     _get_store,
@@ -19,7 +19,12 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _now_iso,
 )
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ]
+)
 
 
 @router.put("/api/jobs/{id}/tags")

@@ -41,6 +41,9 @@ def get_limiter(request: Request) -> RateLimiter:
 
 
 def current_identity(request: Request, store: AuthStore = Depends(get_store)) -> Identity:
+    cached = getattr(getattr(request, "state", None), "identity", None)
+    if isinstance(cached, Identity):
+        return cached
     s = get_settings()
 
     # 1) API key auth (automation): bypass CSRF but still RBAC/scopes
@@ -58,7 +61,12 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
                 if user is None:
                     break
                 set_user_id(user.id)
-                return Identity(kind="api_key", user=user, scopes=k.scopes, api_key_prefix=prefix)
+                ident = Identity(kind="api_key", user=user, scopes=k.scopes, api_key_prefix=prefix)
+                try:
+                    request.state.identity = ident
+                except Exception:
+                    pass
+                return ident
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     # 2) Bearer access token (header); legacy `?token=...` is gated (unsafe on public networks).
@@ -86,7 +94,12 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
         set_user_id(user.id)
         scopes = data.get("scopes") if isinstance(data.get("scopes"), list) else []
         scopes = [str(s) for s in scopes]
-        return Identity(kind="user", user=user, scopes=scopes)
+        ident = Identity(kind="user", user=user, scopes=scopes)
+        try:
+            request.state.identity = ident
+        except Exception:
+            pass
+        return ident
 
     # 3) Optional signed session cookie (web UI mode)
     sess = request.cookies.get("session")
@@ -105,7 +118,12 @@ def current_identity(request: Request, store: AuthStore = Depends(get_store)) ->
             scopes = data.get("scopes") if isinstance(data.get("scopes"), list) else []
             scopes = [str(x) for x in scopes]
             # CSRF is enforced for cookie sessions on state-changing requests by require_role/require_scope.
-            return Identity(kind="user", user=user, scopes=scopes)
+            ident = Identity(kind="user", user=user, scopes=scopes)
+            try:
+                request.state.identity = ident
+            except Exception:
+                pass
+            return ident
         except BadSignature:
             raise HTTPException(status_code=401, detail="Invalid session") from None
 

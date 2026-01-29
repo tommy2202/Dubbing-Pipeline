@@ -14,6 +14,7 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import now_utc
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.web.routes.jobs_common import (
     _file_range_response,
     _get_store,
@@ -25,7 +26,12 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _voice_refs_manifest_path,
 )
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ]
+)
 
 
 def _require_voice_profile_access(profile: dict[str, Any], ident: Identity) -> None:
