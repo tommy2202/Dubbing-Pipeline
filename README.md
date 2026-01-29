@@ -75,6 +75,10 @@ PY
 docker build -f docker/Dockerfile.cuda -t dubbing-pipeline:gpu .
 ```
 
+Notes:
+- The Docker build pre-downloads Whisper + XTTS models into image layers.
+- Ensure outbound access is allowed during the build (or pre-seed model caches).
+
 5) **Run container doctor (quick)**
 
 ```bash
@@ -114,6 +118,33 @@ docker run -d --name dubbing-web --gpus all -p 8000:8000 \
 docker exec -it dubbing-web dubbing-pipeline Input/Test.mp4 --mode high --device auto
 ```
 
+## Golden path (Tailscale-first hosting)
+
+For remote/mobile access without exposing the host publicly:
+
+1) **Install + authenticate Tailscale**
+
+```bash
+sudo tailscale up
+tailscale ip -4
+```
+
+2) **Start the web server in Tailscale mode**
+
+```bash
+export ACCESS_MODE=tailscale
+export HOST=100.x.y.z   # your Tailscale IP from `tailscale ip -4`
+export PORT=8000
+dubbing-web
+```
+
+3) **Open the UI**
+
+- Visit: `http://<tailscale-ip>:8000/ui/login`
+- Or use the helper: `python3 scripts/remote/tailscale_check.py`
+
+Full guide: `docs/GOLDEN_PATH_TAILSCALE.md`.
+
 ## Sharing model (Private vs Shared)
 - **Private**: only the owner (and admins) can access.
 - **Shared**: visible to other authenticated users in the library.
@@ -128,8 +159,15 @@ docker exec -it dubbing-web dubbing-pipeline Input/Test.mp4 --mode high --device
 
 ## Remote access
 - **Recommended**: Tailscale (`ACCESS_MODE=tailscale`)
-- **Tunnel mode**: requires Cloudflare Access allowlist (**Policy A**).
-  - Set `ACCESS_MODE=tunnel`, `TRUST_PROXY_HEADERS=1`, and `TRUSTED_PROXIES=...`.
+- **Cloudflare Tunnel (optional)**: only behind **Cloudflare Access**.
+  - Cloudflare Access is an identity-aware proxy that injects a signed JWT to the origin.
+  - **Do not** expose the server directly to the public Internet.
+  - Set:
+    - `ACCESS_MODE=cloudflare`
+    - `TRUST_PROXY_HEADERS=1`
+    - `TRUSTED_PROXY_SUBNETS=<cloudflared IPs>`
+    - `CLOUDFLARE_ACCESS_TEAM_DOMAIN=<team>`
+    - `CLOUDFLARE_ACCESS_AUD=<audience>`
   - See: `docs/remote_access.md`
 
 ### What’s New (current feature-complete stack)
@@ -206,6 +244,21 @@ This starts the server in **Tailscale mode** (IP allowlist enforced) and prints 
 ```bash
 python3 -m pip install -e .
 ```
+
+---
+
+## Local dev (non-Docker) install
+
+Use the same pins as Docker via `constraints.txt`:
+
+```bash
+bash scripts/dev_install.sh
+# or:
+python3 -m pip install -r requirements.txt -c constraints.txt
+python3 -m pip install -r requirements-dev.txt -c constraints.txt
+```
+
+`constraints.txt` forwards to `docker/constraints.txt` (single source of pins).
 
 ---
 

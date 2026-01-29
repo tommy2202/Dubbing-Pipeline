@@ -9,6 +9,7 @@ from dubbing_pipeline.api.deps import Identity, get_limiter, require_role
 from dubbing_pipeline.api.invites import invite_token_hash
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.ops import audit
 from dubbing_pipeline.ops.metrics import job_errors
 from dubbing_pipeline.jobs.models import JobState
@@ -16,7 +17,14 @@ from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.net import get_client_ip
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/api/admin",
+    tags=["admin"],
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ],
+)
 
 _INVITE_TTL_DEFAULT_HOURS = 24
 _INVITE_TTL_MAX_HOURS = 168
@@ -373,6 +381,7 @@ async def admin_job_visibility(
         vis = "shared"
     if vis not in {"shared", "private"}:
         raise HTTPException(status_code=400, detail="visibility must be shared|private")
+    policy.require_share_allowed(user=ident.user, visibility_value=vis)
     store = _store(request)
     job = store.get(str(id))
     if job is None:

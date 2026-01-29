@@ -13,7 +13,7 @@ from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.limits import get_limits
-from dubbing_pipeline.security import quotas
+from dubbing_pipeline.security import policy, quotas
 from dubbing_pipeline.security.crypto import CryptoConfigError, encrypt_file, encryption_enabled_for
 from dubbing_pipeline.web.routes.jobs_common import (
     _ALLOWED_UPLOAD_EXTS,
@@ -32,7 +32,12 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _validate_media_or_400,
 )
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ]
+)
 
 
 @router.post("/api/uploads/init")
@@ -78,7 +83,9 @@ async def uploads_init(
         total = 0
     if total <= 0:
         raise HTTPException(status_code=400, detail="total_bytes required")
-    await enforcer.require_upload_bytes(total_bytes=int(total), action="upload:init")
+    await policy.require_quota(
+        request=request, user=ident.user, action="upload:init", bytes=int(total)
+    )
     mime = str(body.get("mime") or "").lower().strip()
     if mime and mime not in _ALLOWED_UPLOAD_MIME:
         raise HTTPException(status_code=400, detail=f"Unsupported upload content-type: {mime}")
@@ -134,7 +141,6 @@ async def uploads_status(
     request: Request, upload_id: str, ident: Identity = Depends(require_scope("read:job"))
 ) -> dict[str, Any]:
     store = _get_store(request)
-    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
     rec = require_upload_access(store=store, ident=ident, upload_id=upload_id)
     return {
         "upload_id": str(rec.get("id") or upload_id),
@@ -231,7 +237,9 @@ async def uploads_chunk(
 
     total = int(rec.get("total_bytes") or 0)
     if total > 0:
-        await enforcer.require_upload_bytes(total_bytes=int(total), action="upload:chunk")
+        await policy.require_quota(
+            request=request, user=ident.user, action="upload:chunk", bytes=int(total)
+        )
     part_path = Path(str(rec.get("part_path") or "")).resolve()
     if total <= 0 or not str(part_path):
         raise HTTPException(status_code=400, detail="Invalid upload session")
@@ -347,7 +355,9 @@ async def uploads_complete(
             return {"ok": True, "video_path": str(rec2.get("final_path") or "")}
         total = int(rec2.get("total_bytes") or 0)
         if total > 0:
-            await enforcer.require_upload_bytes(total_bytes=int(total), action="upload:complete")
+            await policy.require_quota(
+                request=request, user=ident.user, action="upload:complete", bytes=int(total)
+            )
         part_path = Path(str(rec2.get("part_path") or "")).resolve()
         final_path = Path(str(rec2.get("final_path") or "")).resolve()
         if total <= 0 or not part_path.exists():

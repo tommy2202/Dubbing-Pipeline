@@ -12,9 +12,17 @@ from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.api.remote_access import resolve_access_posture
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.modes import HardwareCaps, resolve_effective_settings
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.security.runtime_db import UnsafeRuntimeDbPath, assert_safe_runtime_db_path
 
-router = APIRouter(prefix="/api/system", tags=["system"])
+router = APIRouter(
+    prefix="/api/system",
+    tags=["system"],
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ],
+)
 
 
 def _can_import(module: str) -> bool:

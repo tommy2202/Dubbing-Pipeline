@@ -8,9 +8,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from dubbing_pipeline.api.deps import Identity, require_role
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import ApiKey, AuthStore, Role, now_ts
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.utils.crypto import hash_secret, random_id, random_prefix
 
-router = APIRouter(prefix="/keys", tags=["api_keys"])
+router = APIRouter(
+    prefix="/keys",
+    tags=["api_keys"],
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ],
+)
 
 _ALLOWED_SCOPES = {"read:job", "submit:job", "edit:job", "admin:*"}
 

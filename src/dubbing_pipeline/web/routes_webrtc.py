@@ -14,12 +14,18 @@ from fastapi.responses import HTMLResponse
 from dubbing_pipeline.api.access import require_file_access, require_job_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.jobs.models import JobState
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.net import get_client_ip
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ]
+)
 
 
 def _get_store(request: Request):

@@ -15,7 +15,7 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState, now_utc
 from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
-from dubbing_pipeline.security import quotas
+from dubbing_pipeline.security import policy, quotas
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.web.routes.jobs_common import (
     _enforce_rate_limit,
@@ -27,7 +27,12 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _apply_transcript_updates,
 )
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(policy.require_request_allowed),
+        Depends(policy.require_invite_member),
+    ]
+)
 
 
 def _parse_srt(path: Path) -> list[dict[str, Any]]:

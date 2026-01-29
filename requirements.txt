@@ -1,0 +1,73 @@
+# Runtime + optional feature dependencies (unpinned; versions in constraints.txt).
+-e .
+
+# Core ML/NLP
+click
+transformers
+accelerate
+datasets
+soundfile
+openai-whisper
+TTS
+phonemizer
+langdetect
+librosa
+resemblyzer
+pyannote.audio
+torchmetrics
+sentencepiece
+sacremoses
+
+# numpy pin (keep compatible with Python 3.10 + modern ML deps)
+numpy
+
+# extras
+fastapi
+uvicorn
+python-multipart
+jinja2
+aiofiles
+qrcode
+pillow
+
+# auth / security
+itsdangerous
+pyjwt
+argon2-cffi
+pyotp
+slowapi
+redis
+
+# centralized config
+pydantic
+pydantic-settings
+
+# ops / observability
+structlog
+opentelemetry-sdk
+opentelemetry-exporter-otlp
+opentelemetry-instrumentation-fastapi
+prometheus-client
+cryptography
+
+# jobs + realtime progress
+sqlitedict
+websockets
+# SSE stack compatibility (sse-starlette<3 to match starlette in FastAPI)
+sse-starlette
+
+# WebRTC preview
+aiortc
+av
+
+# diarization fallbacks
+speechbrain
+scikit-learn
+webrtcvad
+
+# alignment / retiming
+aeneas
+pyloudnorm
+
+# optional music/vocals separation
+demucs
