@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from fastapi import Depends, HTTPException, Request, status
 
 from dubbing_pipeline.api import remote_access
-from dubbing_pipeline.api.deps import Identity, current_identity, get_store
+from dubbing_pipeline.api.deps import Identity, current_identity, get_store, require_role
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import AuthStore, Role, User
 from dubbing_pipeline.config import get_settings
@@ -71,6 +71,26 @@ class PolicyContext:
             method=str(getattr(request, "method", "") or ""),
             path=str(getattr(getattr(request, "url", None), "path", "") or ""),
         )
+
+
+def _empty_policy_context() -> PolicyContext:
+    return PolicyContext(
+        user=None,
+        roles=[],
+        request_id=None,
+        client_ip=None,
+        access_mode=None,
+        method=None,
+        path=None,
+    )
+
+
+def _context_with_user(ctx: PolicyContext, user: User | None) -> PolicyContext:
+    role = None
+    if user is not None:
+        role = getattr(user.role, "value", user.role)
+    roles = [str(role)] if role is not None else []
+    return replace(ctx, user=user, roles=roles)
 
 
 class PolicyError(HTTPException):
@@ -178,6 +198,80 @@ async def require_quota(
     await enforcer.require_upload_bytes(total_bytes=int(bytes), action=str(action))
 
 
+async def quota_snapshot(*, request: Request, user: User) -> quotas.QuotaSnapshot:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    return await enforcer.snapshot()
+
+
+async def require_upload_progress(
+    *, request: Request, user: User, written_bytes: int, action: str
+) -> None:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    await enforcer.require_upload_progress(
+        written_bytes=int(written_bytes), action=str(action)
+    )
+
+
+async def reserve_storage_bytes(
+    *, request: Request, user: User, bytes_count: int, action: str
+) -> quotas.StorageReservation:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    return await enforcer.reserve_storage_bytes(
+        bytes_count=int(bytes_count), action=str(action)
+    )
+
+
+async def reserve_daily_jobs(
+    *, request: Request, user: User, count: int, action: str
+) -> quotas.JobReservation:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    return await enforcer.reserve_daily_jobs(count=int(count), action=str(action))
+
+
+async def apply_submission_policy(
+    *,
+    request: Request,
+    user: User,
+    requested_mode: str,
+    requested_device: str,
+    job_id: str | None = None,
+):
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    return await enforcer.apply_submission_policy(
+        requested_mode=str(requested_mode),
+        requested_device=str(requested_device),
+        job_id=str(job_id) if job_id else None,
+    )
+
+
+async def require_quota_for_upload(
+    *, request: Request | None, user: User, bytes: int, action: str = "upload"
+) -> None:
+    await require_quota(request=request, user=user, action=str(action), bytes=int(bytes))
+
+
+async def require_quota_for_submit(
+    *,
+    request: Request,
+    user: User,
+    count: int = 1,
+    requested_mode: str = "medium",
+    requested_device: str = "auto",
+    job_id: str | None = None,
+    action: str = "jobs.submit",
+) -> quotas.JobReservation:
+    await require_concurrent_jobs(request=request, user=user, action=str(action))
+    return await reserve_submit_jobs(
+        request=request,
+        user=user,
+        count=int(count),
+        requested_mode=str(requested_mode),
+        requested_device=str(requested_device),
+        job_id=str(job_id) if job_id else None,
+        action=str(action),
+    )
+
+
 async def require_concurrent_jobs(*, request: Request, user: User, action: str) -> None:
     enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
     await enforcer.require_concurrent_jobs(action=str(action))
@@ -219,6 +313,24 @@ def _resolve_identity(request: Request, store: AuthStore) -> Identity:
     return ident
 
 
+def _identity_from_request(request: Request, store: AuthStore | None) -> Identity | None:
+    ident = getattr(getattr(request, "state", None), "identity", None)
+    if isinstance(ident, Identity):
+        return ident
+    if isinstance(store, AuthStore):
+        return _resolve_identity(request, store)
+    return None
+
+
+def dep_user(request: Request, store: AuthStore = Depends(get_store)) -> User:
+    ident = _resolve_identity(request, store)
+    return ident.user
+
+
+def require_admin(ident: Identity = Depends(require_role(Role.admin))) -> Identity:
+    return ident
+
+
 def require_authenticated_user(
     request: Request, store: AuthStore = Depends(get_store)
 ) -> PolicyContext:
@@ -227,13 +339,30 @@ def require_authenticated_user(
 
 
 def require_invite_member(
-    request: Request, store: AuthStore = Depends(get_store)
+    request: Request | None = None,
+    user: User = Depends(dep_user),
+    store: AuthStore = Depends(get_store),
 ) -> PolicyContext:
-    ctx = require_authenticated_user(request, store)
-    require_invite_only(user=ctx.user)
-    return ctx
+    require_invite_only(user=user)
+    if request is None:
+        return _context_with_user(_empty_policy_context(), user)
+    ident = _identity_from_request(request, store)
+    if isinstance(ident, Identity):
+        return PolicyContext.from_request(request, identity=ident)
+    ctx = PolicyContext.from_request(request)
+    return _context_with_user(ctx, user)
+
+
+def dep_invite_only(user: User = Depends(dep_user)) -> User:
+    require_invite_member(user=user)
+    return user
+
+
+def dep_request_allowed(request: Request) -> Request:
+    require_remote_access(request=request)
+    return request
 
 
 def require_request_allowed(request: Request) -> PolicyContext:
-    require_remote_access(request=request)
+    dep_request_allowed(request)
     return PolicyContext.from_request(request)

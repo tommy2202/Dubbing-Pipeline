@@ -33,6 +33,8 @@ class QuotaDecision:
 @dataclass
 class JobReservation:
     count: int
+    user_id: str | None = None
+    backend: str | None = None
     effective_mode: str | None = None
     effective_device: str | None = None
     release_cb: Callable[[int], Awaitable[None]] | None = None
@@ -41,33 +43,49 @@ class JobReservation:
     async def release(self, *, count: int | None = None) -> None:
         if self.released:
             return
-        if self.release_cb is None:
+        release_count = self.count if count is None else max(0, int(count))
+        if self.release_cb is None or release_count <= 0:
             self.released = True
             return
+        try:
+            await self.release_cb(int(release_count))
+        except Exception as ex:
+            logger.warning(
+                "quota_job_reservation_release_failed",
+                user_id=str(self.user_id or ""),
+                count=int(release_count),
+                backend=str(self.backend or ""),
+                error=str(ex),
+            )
+        finally:
+            self.released = True
 
 
 @dataclass
 class StorageReservation:
     bytes_count: int
+    user_id: str | None = None
+    backend: str | None = None
     release_cb: Callable[[int], Awaitable[None]] | None = None
     released: bool = False
 
-    async def release(self) -> None:
+    async def release(self, *, bytes_count: int | None = None) -> None:
         if self.released:
             return
-        if self.release_cb is None:
+        release_bytes = self.bytes_count if bytes_count is None else max(0, int(bytes_count))
+        if self.release_cb is None or release_bytes <= 0:
             self.released = True
             return
         try:
-            await self.release_cb(int(self.bytes_count))
-        finally:
-            self.released = True
-        release_count = self.count if count is None else max(0, int(count))
-        if release_count <= 0:
-            self.released = True
-            return
-        try:
-            await self.release_cb(release_count)
+            await self.release_cb(int(release_bytes))
+        except Exception as ex:
+            logger.warning(
+                "quota_storage_reservation_release_failed",
+                user_id=str(self.user_id or ""),
+                bytes=int(release_bytes),
+                backend=str(self.backend or ""),
+                error=str(ex),
+            )
         finally:
             self.released = True
 
@@ -420,7 +438,7 @@ class QuotaEnforcer:
         action: str,
     ) -> JobReservation:
         if self._store is None:
-            return JobReservation(count=0)
+            return JobReservation(count=0, user_id=str(self._user.id), backend="none")
         overrides = await self._load_overrides()
         reservation = await self.reserve_daily_jobs(count=count, action=action)
 
@@ -431,16 +449,20 @@ class QuotaEnforcer:
                 counts_override = await self._queue_backend.user_counts(user_id=str(self._user.id))
         user_quota = dict(overrides or {})
         user_quota["jobs_per_day"] = 0
-        pol = evaluate_submission(
-            jobs=self._store.list(limit=1000),
-            user_id=str(self._user.id),
-            user_role=self._user.role,
-            requested_mode=str(requested_mode or "medium"),
-            requested_device=str(requested_device or "auto"),
-            job_id=str(job_id) if job_id else None,
-            counts_override=counts_override,
-            user_quota=user_quota,
-        )
+        try:
+            pol = evaluate_submission(
+                jobs=self._store.list(limit=1000),
+                user_id=str(self._user.id),
+                user_role=self._user.role,
+                requested_mode=str(requested_mode or "medium"),
+                requested_device=str(requested_device or "auto"),
+                job_id=str(job_id) if job_id else None,
+                counts_override=counts_override,
+                user_quota=user_quota,
+            )
+        except Exception:
+            await reservation.release()
+            raise
         if not pol.ok:
             await reservation.release()
             if int(pol.status_code) == 429:
@@ -460,7 +482,7 @@ class QuotaEnforcer:
     async def reserve_daily_jobs(self, *, count: int, action: str) -> JobReservation:
         overrides = await self._load_overrides()
         snap = await self.snapshot()
-        reservation = JobReservation(count=0)
+        reservation = JobReservation(count=0, user_id=str(self._user.id), backend="none")
         if _admin_bypass(self._user, overrides) or snap.jobs_per_day <= 0:
             return reservation
         redis_res = await _reserve_daily_redis(
@@ -478,6 +500,8 @@ class QuotaEnforcer:
                 )
             return JobReservation(
                 count=int(count),
+                user_id=str(self._user.id),
+                backend="redis",
                 release_cb=lambda n: _release_daily_redis(user_id=str(self._user.id), count=int(n)),
             )
         ok, current = await _reserve_daily_local(
@@ -496,6 +520,8 @@ class QuotaEnforcer:
             )
         return JobReservation(
             count=int(count),
+            user_id=str(self._user.id),
+            backend="local",
             release_cb=lambda n: _release_daily_local(user_id=str(self._user.id), count=int(n)),
         )
 
@@ -544,7 +570,9 @@ class QuotaEnforcer:
 
     async def reserve_storage_bytes(self, *, bytes_count: int, action: str) -> StorageReservation:
         if bytes_count <= 0:
-            return StorageReservation(bytes_count=0)
+            return StorageReservation(
+                bytes_count=0, user_id=str(self._user.id), backend="none"
+            )
         await self.require_upload_bytes(total_bytes=int(bytes_count), action=action)
         async with _LOCAL_LOCK:
             _LOCAL_PENDING_STORAGE[str(self._user.id)] = int(
@@ -552,6 +580,8 @@ class QuotaEnforcer:
             )
         return StorageReservation(
             bytes_count=int(bytes_count),
+            user_id=str(self._user.id),
+            backend="local",
             release_cb=lambda n: self._release_storage_bytes(bytes_count=int(n)),
         )
 

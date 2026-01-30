@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from dubbing_pipeline.web.routes.admin import router as admin_router
 from dubbing_pipeline.web.routes.jobs_actions import router as jobs_actions_router
-from dubbing_pipeline.web.routes.jobs_events import router as jobs_events_router
+from dubbing_pipeline.web.routes.jobs_events import router as jobs_events_router, ws_router as jobs_ws_router
 from dubbing_pipeline.web.routes.jobs_files import router as jobs_files_router
 from dubbing_pipeline.web.routes.jobs_logs import router as jobs_logs_router
 from dubbing_pipeline.web.routes.jobs_read import router as jobs_read_router
@@ -46,5 +46,7 @@ router.include_router(library_router)
 # Job files + streaming + QR
 router.include_router(jobs_files_router)
 
-# SSE/WebSocket job events
+# SSE job events
 router.include_router(jobs_events_router)
+# WebSocket job events (custom auth flow)
+router.include_router(jobs_ws_router)

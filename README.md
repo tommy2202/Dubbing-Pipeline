@@ -273,6 +273,14 @@ python3 scripts/polish_gate.py  # v0 gate
 Notes:
 - Some tests are skipped when optional dependencies (e.g., whisper) are missing.
 
+### Security regression tests
+
+These guard against policy placeholders and missing security dependencies on sensitive routes.
+
+```bash
+pytest -q tests/test_no_policy_placeholders.py tests/test_router_security_dependencies.py
+```
+
 ### Runtime directories (important)
 
 - `Input/` and `Output/` are **runtime folders**. They are intentionally kept **empty in git** (only `.gitkeep`) and must **not** be committed.

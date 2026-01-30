@@ -3,9 +3,9 @@ from __future__ import annotations
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
 from dubbing_pipeline.api.access import require_job_access, require_upload_access
 from dubbing_pipeline.api.deps import Identity, require_scope
@@ -18,7 +18,8 @@ from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
 from dubbing_pipeline.ops.storage import ensure_free_space
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.security.crypto import is_encrypted_path, materialize_decrypted
-from dubbing_pipeline.security import policy, quotas
+from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.utils.ffmpeg_safe import FFmpegError
 from dubbing_pipeline.utils.log import request_id_var
 from dubbing_pipeline.utils.ratelimit import RateLimiter
@@ -37,12 +38,11 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _validate_media_or_400,
 )
 
-router = APIRouter(
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ]
-)
+if TYPE_CHECKING:
+    from dubbing_pipeline.security.quotas import JobReservation, StorageReservation
+
+
+router = secure_router()
 
 _MAX_IMPORT_TEXT_BYTES = 2 * 1024 * 1024  # 2MB per imported text file (SRT/JSON)
 
@@ -116,7 +116,6 @@ async def create_job(
         except Exception:
             parsed_form = None
     store = _get_store(request)
-    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
     if idem_key:
         # basic bounds to avoid abuse
         if len(idem_key) > 200:
@@ -368,8 +367,11 @@ async def create_job(
                         if not chunk:
                             break
                         written += len(chunk)
-                        await enforcer.require_upload_progress(
-                            written_bytes=int(written), action="jobs.upload"
+                        await policy.require_upload_progress(
+                            request=request,
+                            user=ident.user,
+                            written_bytes=int(written),
+                            action="jobs.upload",
                         )
                         f.write(chunk)
             except HTTPException:
@@ -385,15 +387,17 @@ async def create_job(
             file_size = int(video_path.stat().st_size)
         except Exception:
             file_size = 0
-        await policy.require_quota(
-            request=request, user=ident.user, action="jobs.submit", bytes=int(file_size)
+        await policy.require_quota_for_upload(
+            request=request,
+            user=ident.user,
+            bytes=int(file_size),
+            action="jobs.submit",
         )
-    await policy.require_concurrent_jobs(request=request, user=ident.user, action="jobs.submit")
     # Extension allowlist (defense-in-depth). Encrypted-at-rest inputs are allowed (validated via ffprobe after decrypt).
     if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
         raise HTTPException(status_code=400, detail="Unsupported file type")
 
-    reservation = await policy.reserve_submit_jobs(
+    reservation = await policy.require_quota_for_submit(
         request=request,
         user=ident.user,
         count=1,
@@ -582,9 +586,8 @@ async def create_jobs_batch(
     """
     store = _get_store(request)
     limits = get_limits()
-    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
-    storage_reservations: list[quotas.StorageReservation] = []
-    daily_reservation: quotas.JobReservation | None = None
+    storage_reservations: list[StorageReservation] = []
+    daily_reservation: JobReservation | None = None
     # Batch submit is expensive; keep it tighter.
     _enforce_rate_limit(
         request,
@@ -631,11 +634,17 @@ async def create_jobs_batch(
             file_size = int(video_path.stat().st_size)
         except Exception:
             file_size = 0
-        await policy.require_quota(
-            request=request, user=ident.user, action="jobs.batch", bytes=int(file_size)
+        await policy.require_quota_for_upload(
+            request=request,
+            user=ident.user,
+            bytes=int(file_size),
+            action="jobs.batch",
         )
-        storage_res = await enforcer.reserve_storage_bytes(
-            bytes_count=int(file_size), action="jobs.batch"
+        storage_res = await policy.reserve_storage_bytes(
+            request=request,
+            user=ident.user,
+            bytes_count=int(file_size),
+            action="jobs.batch",
         )
         storage_reservations.append(storage_res)
         # ffprobe validation
@@ -730,7 +739,9 @@ async def create_jobs_batch(
         if not isinstance(body, dict) or not isinstance(body.get("items"), list):
             raise HTTPException(status_code=400, detail="Invalid JSON body")
         total_items = len(body.get("items") or [])
-        daily_reservation = await enforcer.reserve_daily_jobs(
+        daily_reservation = await policy.reserve_daily_jobs(
+            request=request,
+            user=ident.user,
             count=total_items,
             action="jobs.batch",
         )
@@ -738,7 +749,9 @@ async def create_jobs_batch(
             body
         )
         try:
-            pol = await enforcer.apply_submission_policy(
+            pol = await policy.apply_submission_policy(
+                request=request,
+                user=ident.user,
                 requested_mode=str(body.get("mode") or "medium"),
                 requested_device=str(body.get("device") or "auto"),
                 job_id=None,
@@ -771,7 +784,9 @@ async def create_jobs_batch(
                 mode = str(it.get("mode") or (preset.get("mode") if preset else "medium"))
                 device = str(it.get("device") or (preset.get("device") if preset else "auto"))
                 # Apply policy adjustments (GPU/mode downgrade) per item.
-                pol2 = await enforcer.apply_submission_policy(
+                pol2 = await policy.apply_submission_policy(
+                    request=request,
+                    user=ident.user,
                     requested_mode=mode,
                     requested_device=device,
                     job_id=None,
@@ -849,7 +864,9 @@ async def create_jobs_batch(
         if not files:
             raise HTTPException(status_code=400, detail="Provide files")
         total_items = len(files)
-        daily_reservation = await enforcer.reserve_daily_jobs(
+        daily_reservation = await policy.reserve_daily_jobs(
+            request=request,
+            user=ident.user,
             count=total_items,
             action="jobs.batch",
         )
@@ -857,7 +874,9 @@ async def create_jobs_batch(
             dict(form)
         )
         try:
-            pol = await enforcer.apply_submission_policy(
+            pol = await policy.apply_submission_policy(
+                request=request,
+                user=ident.user,
                 requested_mode=str(form.get("mode") or "medium"),
                 requested_device=str(form.get("device") or "auto"),
                 job_id=None,
@@ -874,7 +893,9 @@ async def create_jobs_batch(
                 )
             mode = str(form.get("mode") or (preset.get("mode") if preset else "medium"))
             device = str(form.get("device") or (preset.get("device") if preset else "auto"))
-            pol2 = await enforcer.apply_submission_policy(
+            pol2 = await policy.apply_submission_policy(
+                request=request,
+                user=ident.user,
                 requested_mode=mode,
                 requested_device=device,
                 job_id=None,
@@ -912,12 +933,18 @@ async def create_jobs_batch(
                             if not chunk:
                                 break
                             written += len(chunk)
-                            await enforcer.require_upload_progress(
-                                written_bytes=int(written), action="jobs.batch.upload"
+                            await policy.require_upload_progress(
+                                request=request,
+                                user=ident.user,
+                                written_bytes=int(written),
+                                action="jobs.batch.upload",
                             )
                             f.write(chunk)
-                    storage_res = await enforcer.reserve_storage_bytes(
-                        bytes_count=int(written), action="jobs.batch"
+                    storage_res = await policy.reserve_storage_bytes(
+                        request=request,
+                        user=ident.user,
+                        bytes_count=int(written),
+                        action="jobs.batch",
                     )
                     storage_reservations.append(storage_res)
                 except Exception:

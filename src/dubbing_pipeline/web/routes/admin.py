@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
 from dubbing_pipeline.api.access import require_job_access
 from dubbing_pipeline.api.deps import Identity, require_role, require_scope
@@ -11,7 +11,8 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.jobs.models import JobState
 from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
-from dubbing_pipeline.security import policy, quotas
+from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.web.routes.jobs_common import (
     _get_queue,
     _get_store,
@@ -19,12 +20,7 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _now_iso,
 )
 
-router = APIRouter(
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ]
-)
+router = secure_router()
 
 
 @router.put("/api/jobs/{id}/tags")
@@ -84,7 +80,7 @@ async def unarchive_job(
 
 @router.post("/api/jobs/{id}/kill")
 async def kill_job_admin(
-    request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, id: str, ident: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     """
     Admin-only force-stop.
@@ -100,7 +96,7 @@ async def kill_job_admin(
 
 @router.post("/api/jobs/{id}/two_pass/rerun")
 async def rerun_two_pass_admin(
-    request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, id: str, ident: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     """
     Admin-only: request a pass-2 rerun (TTS + mix only) using extracted/overridden voice refs.
@@ -133,8 +129,9 @@ async def rerun_two_pass_admin(
         message="Queued (pass 2 rerun)",
     )
 
-    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
-    await enforcer.require_concurrent_jobs(action="jobs.rerun_admin")
+    await policy.require_concurrent_jobs(
+        request=request, user=ident.user, action="jobs.rerun_admin"
+    )
     await submit_job_or_503(
         request,
         job_id=str(id),
@@ -164,7 +161,7 @@ async def list_presets(
 
 @router.post("/api/presets")
 async def create_preset(
-    request: Request, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, ident: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     store = _get_store(request)
     body = await request.json()
@@ -191,7 +188,7 @@ async def create_preset(
 
 @router.delete("/api/presets/{id}")
 async def delete_preset(
-    request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, id: str, ident: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     store = _get_store(request)
     p = store.get_preset(id)
@@ -213,7 +210,7 @@ async def list_projects(
 
 @router.post("/api/projects")
 async def create_project(
-    request: Request, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, ident: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     store = _get_store(request)
     body = await request.json()
@@ -237,7 +234,7 @@ async def create_project(
 
 @router.delete("/api/projects/{id}")
 async def delete_project(
-    request: Request, id: str, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, id: str, ident: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     store = _get_store(request)
     p = store.get_project(id)

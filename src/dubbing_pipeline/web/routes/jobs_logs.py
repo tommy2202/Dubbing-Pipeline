@@ -5,23 +5,18 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from sse_starlette.sse import EventSourceResponse  # type: ignore
 
 from dubbing_pipeline.api.access import require_job_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.jobs.models import JobState
-from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.web.routes.jobs_common import _get_store, _job_base_dir, _parse_iso_ts
 
-router = APIRouter(
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ]
-)
+router = secure_router()
 
 
 @router.get("/api/jobs/{id}/timeline")

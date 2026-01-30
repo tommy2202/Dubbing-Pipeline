@@ -281,7 +281,7 @@ async def put_settings_me(
 
 @router.get("/api/admin/users/{user_id}/settings")
 async def admin_get_user_settings(
-    request: Request, user_id: str, _: Identity = Depends(require_role(Role.admin))
+    request: Request, user_id: str, _: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     store = _get_user_settings_store(request)
     cfg = store.get_user(str(user_id))
@@ -294,7 +294,7 @@ async def admin_get_user_settings(
 
 @router.put("/api/admin/users/{user_id}/settings")
 async def admin_put_user_settings(
-    request: Request, user_id: str, _: Identity = Depends(require_role(Role.admin))
+    request: Request, user_id: str, _: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     body = await request.json()
     store = _get_user_settings_store(request)

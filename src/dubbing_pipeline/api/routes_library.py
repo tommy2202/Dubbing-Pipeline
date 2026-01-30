@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import suppress
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
 from dubbing_pipeline.api.access import require_job_access, require_library_access
 from dubbing_pipeline.api.deps import Identity, require_scope
@@ -15,19 +15,12 @@ from dubbing_pipeline.library import queries
 from dubbing_pipeline.library.manifest import update_manifest_visibility
 from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
 from dubbing_pipeline.notify import ntfy
-from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.utils.crypto import random_id
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.ratelimit import RateLimiter
 
-router = APIRouter(
-    prefix="/api/library",
-    tags=["library"],
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ],
-)
+router = secure_router(prefix="/api/library", tags=["library"])
 
 _REPORT_REASON_MAX = 200
 

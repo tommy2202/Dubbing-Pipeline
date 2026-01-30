@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import suppress
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
 from dubbing_pipeline.api.access import require_job_access
 from dubbing_pipeline.api.deps import Identity, require_scope
@@ -12,15 +12,11 @@ from dubbing_pipeline.jobs.models import JobState, normalize_visibility
 from dubbing_pipeline.library.manifest import update_manifest_visibility
 from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
 from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
-from dubbing_pipeline.security import policy, quotas
+from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.web.routes.jobs_common import _get_queue, _get_store, _output_root
 
-router = APIRouter(
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ]
-)
+router = secure_router()
 
 
 @router.delete("/api/jobs/{id}")
@@ -137,8 +133,9 @@ async def resume_job(
     j2 = await queue.resume(id)
     if j2 is None:
         raise HTTPException(status_code=404, detail="Not found")
-    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
-    await enforcer.require_concurrent_jobs(action="jobs.resume")
+    await policy.require_concurrent_jobs(
+        request=request, user=ident.user, action="jobs.resume"
+    )
     await submit_job_or_503(
         request,
         job_id=str(id),

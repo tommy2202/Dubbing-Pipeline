@@ -3,22 +3,16 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
-from dubbing_pipeline.api.deps import Identity, require_role
+from dubbing_pipeline.api.deps import Identity
 from dubbing_pipeline.api.middleware import audit_event
-from dubbing_pipeline.api.models import ApiKey, AuthStore, Role, now_ts
+from dubbing_pipeline.api.models import ApiKey, AuthStore, now_ts
 from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.utils.crypto import hash_secret, random_id, random_prefix
 
-router = APIRouter(
-    prefix="/keys",
-    tags=["api_keys"],
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ],
-)
+router = secure_router(prefix="/keys", tags=["api_keys"])
 
 _ALLOWED_SCOPES = {"read:job", "submit:job", "edit:job", "admin:*"}
 
@@ -32,7 +26,7 @@ def _get_store(request: Request) -> AuthStore:
 
 @router.get("")
 async def list_keys(
-    request: Request, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, ident: Identity = Depends(policy.require_admin)
 ) -> list[dict[str, Any]]:
     store = _get_store(request)
     keys = store.list_api_keys(user_id=None)
@@ -53,7 +47,7 @@ async def list_keys(
 
 @router.post("")
 async def create_key(
-    request: Request, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, ident: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     store = _get_store(request)
     body = await request.json()
@@ -99,7 +93,7 @@ async def create_key(
 
 @router.post("/{key_id}/revoke")
 async def revoke_key(
-    request: Request, key_id: str, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, key_id: str, ident: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     store = _get_store(request)
     store.revoke_api_key(key_id)

@@ -3,13 +3,14 @@ from __future__ import annotations
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
-from dubbing_pipeline.api.deps import Identity, get_limiter, require_role
+from dubbing_pipeline.api.deps import Identity, get_limiter
 from dubbing_pipeline.api.invites import invite_token_hash
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.ops import audit
 from dubbing_pipeline.ops.metrics import job_errors
 from dubbing_pipeline.jobs.models import JobState
@@ -17,14 +18,7 @@ from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.utils.net import get_client_ip
 
-router = APIRouter(
-    prefix="/api/admin",
-    tags=["admin"],
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ],
-)
+router = secure_router(prefix="/api/admin", tags=["admin"])
 
 _INVITE_TTL_DEFAULT_HOURS = 24
 _INVITE_TTL_MAX_HOURS = 168
@@ -122,7 +116,7 @@ def _infer_failure_stage(log_tail: str, err: str | None) -> str:
 async def admin_queue(
     request: Request,
     limit: int = 200,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ):
     qb = _queue_backend(request)
     if qb is not None:
@@ -158,7 +152,7 @@ async def admin_queue(
 async def admin_job_priority(
     request: Request,
     id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     body = await request.json()
     if not isinstance(body, dict):
@@ -191,7 +185,7 @@ async def admin_job_priority(
 async def admin_job_cancel(
     request: Request,
     id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     qb = _queue_backend(request)
     sched = _scheduler(request)
@@ -219,7 +213,7 @@ async def admin_job_cancel(
 async def admin_user_quotas(
     request: Request,
     id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     """
     Set per-user queue quotas (Redis-backed when Redis queue is active).
@@ -260,7 +254,7 @@ async def admin_list_reports(
     status: str | None = "open",
     limit: int = 200,
     offset: int = 0,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     store = _store(request)
     items = store.list_library_reports(limit=int(limit), offset=int(offset), status=status)
@@ -270,7 +264,7 @@ async def admin_list_reports(
 @router.get("/reports/summary")
 async def admin_reports_summary(
     request: Request,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     store = _store(request)
     s = get_settings()
@@ -284,7 +278,7 @@ async def admin_reports_summary(
 async def admin_resolve_report(
     request: Request,
     id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     store = _store(request)
     store.update_report_status(str(id), status="resolved")
@@ -300,7 +294,7 @@ async def admin_resolve_report(
 async def admin_get_user_quota(
     request: Request,
     user_id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     store = _store(request)
     quotas = store.get_user_quota(str(user_id))
@@ -312,7 +306,7 @@ async def admin_get_user_quota(
 async def admin_set_user_quota(
     request: Request,
     user_id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     body = await request.json()
     if not isinstance(body, dict):
@@ -371,7 +365,7 @@ async def admin_set_user_quota(
 async def admin_job_visibility(
     request: Request,
     id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     body = await request.json()
     if not isinstance(body, dict):
@@ -402,7 +396,7 @@ async def admin_list_glossaries(
     request: Request,
     language_pair: str | None = None,
     series_slug: str | None = None,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     store = _store(request)
     items = store.list_glossaries(
@@ -416,7 +410,7 @@ async def admin_list_glossaries(
 @router.post("/glossaries")
 async def admin_create_glossary(
     request: Request,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     body = await request.json()
     if not isinstance(body, dict):
@@ -454,7 +448,7 @@ async def admin_create_glossary(
 async def admin_update_glossary(
     request: Request,
     id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     body = await request.json()
     if not isinstance(body, dict):
@@ -491,7 +485,7 @@ async def admin_update_glossary(
 async def admin_delete_glossary(
     request: Request,
     id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     store = _store(request)
     ok = bool(store.delete_glossary(str(id)))
@@ -507,7 +501,7 @@ async def admin_delete_glossary(
 async def admin_list_pronunciation(
     request: Request,
     lang: str | None = None,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     store = _store(request)
     items = store.list_pronunciations(lang=str(lang or "").strip().lower() or None)
@@ -517,7 +511,7 @@ async def admin_list_pronunciation(
 @router.post("/pronunciation")
 async def admin_create_pronunciation(
     request: Request,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     body = await request.json()
     if not isinstance(body, dict):
@@ -551,7 +545,7 @@ async def admin_create_pronunciation(
 async def admin_update_pronunciation(
     request: Request,
     id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     body = await request.json()
     if not isinstance(body, dict):
@@ -584,7 +578,7 @@ async def admin_update_pronunciation(
 async def admin_delete_pronunciation(
     request: Request,
     id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict:
     store = _store(request)
     ok = bool(store.delete_pronunciation(str(id)))
@@ -598,7 +592,7 @@ async def admin_delete_pronunciation(
 
 @router.get("/metrics")
 async def admin_metrics(
-    request: Request, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, ident: Identity = Depends(policy.require_admin)
 ) -> dict[str, Any]:
     store = _store(request)
     qb = _queue_backend(request)
@@ -692,7 +686,7 @@ async def admin_metrics(
 async def admin_job_failures(
     request: Request,
     limit: int = 200,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict[str, Any]:
     store = _store(request)
     lim = max(1, min(1000, int(limit)))
@@ -729,7 +723,7 @@ async def admin_list_voice_profile_suggestions(
     status: str | None = "pending",
     limit: int = 200,
     offset: int = 0,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict[str, Any]:
     store = _store(request)
     status_eff = None if not status or status == "all" else str(status)
@@ -774,7 +768,7 @@ async def admin_list_voice_profile_suggestions(
 @router.post("/voices/approve_merge")
 async def admin_approve_voice_profile_merge(
     request: Request,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict[str, Any]:
     store = _store(request)
     body = await request.json()
@@ -815,7 +809,7 @@ async def admin_list_invites(
     request: Request,
     limit: int = 200,
     offset: int = 0,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict[str, object]:
     store = _auth_store(request)
     items = store.list_invites(limit=int(limit), offset=int(offset))
@@ -847,7 +841,7 @@ async def admin_list_invites(
 
 @router.post("/invites")
 async def admin_create_invite(
-    request: Request, ident: Identity = Depends(require_role(Role.admin))
+    request: Request, ident: Identity = Depends(policy.require_admin)
 ) -> dict[str, object]:
     body = await request.json()
     if not isinstance(body, dict):

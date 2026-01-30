@@ -4,12 +4,12 @@ import io
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
 
 from dubbing_pipeline.api.access import require_job_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.config import get_settings
-from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.web.routes.jobs_common import (
     _file_range_response,
     _get_store,
@@ -19,12 +19,7 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _stream_manifest_path,
 )
 
-router = APIRouter(
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ]
-)
+router = secure_router()
 
 
 def _audio_preview_path(base_dir: Path) -> tuple[Path, str] | None:

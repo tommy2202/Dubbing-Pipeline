@@ -6,7 +6,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
 
 from dubbing_pipeline.api.access import require_job_access, require_library_access
 from dubbing_pipeline.api.deps import Identity, require_scope
@@ -14,7 +14,7 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import now_utc
-from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.web.routes.jobs_common import (
     _file_range_response,
     _get_store,
@@ -26,12 +26,7 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _voice_refs_manifest_path,
 )
 
-router = APIRouter(
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ]
-)
+router = secure_router()
 
 
 def _require_voice_profile_access(profile: dict[str, Any], ident: Identity) -> None:
