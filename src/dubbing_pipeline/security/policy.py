@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request, status
 
 from dubbing_pipeline.api import remote_access
-from dubbing_pipeline.api.deps import Identity, current_identity, get_store
+from dubbing_pipeline.api.deps import Identity, current_identity, get_store, require_role
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.api.models import AuthStore, Role, User
 from dubbing_pipeline.config import get_settings
@@ -198,6 +198,52 @@ async def require_quota(
     await enforcer.require_upload_bytes(total_bytes=int(bytes), action=str(action))
 
 
+async def quota_snapshot(*, request: Request, user: User) -> quotas.QuotaSnapshot:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    return await enforcer.snapshot()
+
+
+async def require_upload_progress(
+    *, request: Request, user: User, written_bytes: int, action: str
+) -> None:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    await enforcer.require_upload_progress(
+        written_bytes=int(written_bytes), action=str(action)
+    )
+
+
+async def reserve_storage_bytes(
+    *, request: Request, user: User, bytes_count: int, action: str
+) -> quotas.StorageReservation:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    return await enforcer.reserve_storage_bytes(
+        bytes_count=int(bytes_count), action=str(action)
+    )
+
+
+async def reserve_daily_jobs(
+    *, request: Request, user: User, count: int, action: str
+) -> quotas.JobReservation:
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    return await enforcer.reserve_daily_jobs(count=int(count), action=str(action))
+
+
+async def apply_submission_policy(
+    *,
+    request: Request,
+    user: User,
+    requested_mode: str,
+    requested_device: str,
+    job_id: str | None = None,
+):
+    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=user)
+    return await enforcer.apply_submission_policy(
+        requested_mode=str(requested_mode),
+        requested_device=str(requested_device),
+        job_id=str(job_id) if job_id else None,
+    )
+
+
 async def require_quota_for_upload(
     *, request: Request | None, user: User, bytes: int, action: str = "upload"
 ) -> None:
@@ -279,6 +325,10 @@ def _identity_from_request(request: Request, store: AuthStore | None) -> Identit
 def dep_user(request: Request, store: AuthStore = Depends(get_store)) -> User:
     ident = _resolve_identity(request, store)
     return ident.user
+
+
+def require_admin(ident: Identity = Depends(require_role(Role.admin))) -> Identity:
+    return ident
 
 
 def require_authenticated_user(

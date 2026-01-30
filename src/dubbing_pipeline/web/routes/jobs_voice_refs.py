@@ -5,14 +5,14 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
 
 from dubbing_pipeline.api.access import require_job_access, require_library_access
-from dubbing_pipeline.api.deps import Identity, require_role, require_scope
+from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
-from dubbing_pipeline.api.models import Role
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.web.routes.jobs_common import (
     _enforce_rate_limit,
     _file_range_response,
@@ -26,12 +26,7 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _voice_refs_manifest_path,
 )
 
-router = APIRouter(
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ]
-)
+router = secure_router()
 
 
 def _normalize_voice_strategy(value: Any) -> str:
@@ -322,7 +317,7 @@ async def post_job_voice_ref_override(
     request: Request,
     id: str,
     speaker_id: str,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict[str, Any]:
     """
     Admin-only: upload a per-job speaker ref WAV override.

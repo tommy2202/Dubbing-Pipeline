@@ -15,19 +15,19 @@ from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.utils.crypto import verify_secret
 from dubbing_pipeline.utils.net import get_client_ip_from_headers
 from dubbing_pipeline.web.routes.jobs_common import _get_store
 
-router = APIRouter()
+router = secure_router()
+ws_router = APIRouter()
 
 
 @router.get("/api/jobs/events")
 async def jobs_events(
     request: Request,
     ident: Identity = Depends(require_scope("read:job")),
-    _: policy.PolicyContext = Depends(policy.require_invite_member),
-    __: policy.PolicyContext = Depends(policy.require_request_allowed),
 ):
     store = _get_store(request)
 
@@ -73,7 +73,7 @@ async def jobs_events(
     return EventSourceResponse(gen())
 
 
-@router.websocket("/ws/jobs/{id}")
+@ws_router.websocket("/ws/jobs/{id}")
 async def ws_job(websocket: WebSocket, id: str):
     await websocket.accept()
     s = get_settings()

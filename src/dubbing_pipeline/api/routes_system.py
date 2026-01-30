@@ -7,8 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from dubbing_pipeline.api.deps import Identity, require_role
-from dubbing_pipeline.api.models import Role
+from dubbing_pipeline.api.deps import Identity
 from dubbing_pipeline.api.remote_access import resolve_access_posture
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.modes import HardwareCaps, resolve_effective_settings
@@ -90,7 +89,7 @@ def _hf_model_cached(model_id: str, s) -> bool:
 
 
 @router.get("/readiness")
-async def system_readiness(_: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
+async def system_readiness(_: Identity = Depends(policy.require_admin)) -> dict[str, Any]:
     s = get_settings()
     items: list[dict[str, Any]] = []
 
@@ -528,7 +527,7 @@ async def system_readiness(_: Identity = Depends(require_role(Role.admin))) -> d
 
 
 @router.get("/security-posture")
-async def system_security_posture(_: Identity = Depends(require_role(Role.admin))) -> dict[str, Any]:
+async def system_security_posture(_: Identity = Depends(policy.require_admin)) -> dict[str, Any]:
     s = get_settings()
     posture = resolve_access_posture(settings=s)
     base_url = str(getattr(s, "public_base_url", "") or "").strip().rstrip("/")

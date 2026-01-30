@@ -52,7 +52,7 @@ async def runtime_queue_status(request: Request, _: Identity = Depends(require_r
 
 
 @router.get("/models")
-async def runtime_models(_: Identity = Depends(require_role(Role.admin))):
+async def runtime_models(_: Identity = Depends(policy.require_admin)):
     s = get_settings()
     mm = ModelManager.instance()
     # Disk usage (best-effort)
@@ -106,7 +106,7 @@ async def runtime_models(_: Identity = Depends(require_role(Role.admin))):
 
 @router.post("/models/prewarm")
 async def runtime_models_prewarm(
-    request: Request, preset: str = "medium", _: Identity = Depends(require_role(Role.admin))
+    request: Request, preset: str = "medium", _: Identity = Depends(policy.require_admin)
 ):
     s = get_settings()
     if not bool(getattr(s, "enable_model_downloads", False)):

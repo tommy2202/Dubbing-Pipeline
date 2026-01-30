@@ -26,7 +26,8 @@ from dubbing_pipeline.utils.ratelimit import RateLimiter
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # Safe import: deps only depends on models/security; no circular back to routes_auth.
-from dubbing_pipeline.api.deps import Identity, require_role  # noqa: E402
+from dubbing_pipeline.api.deps import Identity  # noqa: E402
+from dubbing_pipeline.security import policy  # noqa: E402
 
 
 def _client_ip(request: Request) -> str:
@@ -467,7 +468,7 @@ async def totp_verify(request: Request) -> dict[str, Any]:
 @router.post("/qr/init")
 async def qr_init(
     request: Request,
-    ident: Identity = Depends(require_role(Role.admin)),
+    ident: Identity = Depends(policy.require_admin),
 ) -> dict[str, Any]:
     """
     Admin-only: mint a short-lived, single-use QR login code.

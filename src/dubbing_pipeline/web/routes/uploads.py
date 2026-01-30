@@ -6,14 +6,15 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
 from dubbing_pipeline.api.access import require_upload_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.limits import get_limits
-from dubbing_pipeline.security import policy, quotas
+from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.security.crypto import CryptoConfigError, encrypt_file, encryption_enabled_for
 from dubbing_pipeline.web.routes.jobs_common import (
     _ALLOWED_UPLOAD_EXTS,
@@ -32,12 +33,7 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _validate_media_or_400,
 )
 
-router = APIRouter(
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ]
-)
+router = secure_router()
 
 
 @router.post("/api/uploads/init")
@@ -54,7 +50,6 @@ async def uploads_init(
     """
     store = _get_store(request)
     limits = get_limits()
-    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
     # Moderate: init is lightweight but should not be spammed
     _enforce_rate_limit(
         request,
@@ -83,8 +78,11 @@ async def uploads_init(
         total = 0
     if total <= 0:
         raise HTTPException(status_code=400, detail="total_bytes required")
-    await policy.require_quota(
-        request=request, user=ident.user, action="upload:init", bytes=int(total)
+    await policy.require_quota_for_upload(
+        request=request,
+        user=ident.user,
+        bytes=int(total),
+        action="upload:init",
     )
     mime = str(body.get("mime") or "").lower().strip()
     if mime and mime not in _ALLOWED_UPLOAD_MIME:
@@ -128,11 +126,12 @@ async def uploads_init(
         user_id=ident.user.id,
         meta={"upload_id": upload_id, "total_bytes": int(total), "filename": filename},
     )
+    snapshot = await policy.quota_snapshot(request=request, user=ident.user)
     return {
         "upload_id": upload_id,
         "chunk_bytes": int(chunk_bytes),
         "max_upload_mb": int(limits.max_upload_mb),
-        "max_upload_bytes": int((await enforcer.snapshot()).max_upload_bytes or 0),
+        "max_upload_bytes": int(snapshot.max_upload_bytes or 0),
     }
 
 
@@ -237,8 +236,11 @@ async def uploads_chunk(
 
     total = int(rec.get("total_bytes") or 0)
     if total > 0:
-        await policy.require_quota(
-            request=request, user=ident.user, action="upload:chunk", bytes=int(total)
+        await policy.require_quota_for_upload(
+            request=request,
+            user=ident.user,
+            bytes=int(total),
+            action="upload:chunk",
         )
     part_path = Path(str(rec.get("part_path") or "")).resolve()
     if total <= 0 or not str(part_path):
@@ -326,7 +328,6 @@ async def uploads_complete(
       - final_sha256: str (optional)
     """
     store = _get_store(request)
-    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
     _enforce_rate_limit(
         request,
         key=f"upload:complete:user:{ident.user.id}",
@@ -355,8 +356,11 @@ async def uploads_complete(
             return {"ok": True, "video_path": str(rec2.get("final_path") or "")}
         total = int(rec2.get("total_bytes") or 0)
         if total > 0:
-            await policy.require_quota(
-                request=request, user=ident.user, action="upload:complete", bytes=int(total)
+            await policy.require_quota_for_upload(
+                request=request,
+                user=ident.user,
+                bytes=int(total),
+                action="upload:complete",
             )
         part_path = Path(str(rec2.get("part_path") or "")).resolve()
         final_path = Path(str(rec2.get("final_path") or "")).resolve()

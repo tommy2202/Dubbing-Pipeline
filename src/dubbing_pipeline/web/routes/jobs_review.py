@@ -7,7 +7,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
 
 from dubbing_pipeline.api.access import require_job_access
 from dubbing_pipeline.api.deps import Identity, require_scope
@@ -15,7 +15,8 @@ from dubbing_pipeline.api.middleware import audit_event
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.models import JobState, now_utc
 from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
-from dubbing_pipeline.security import policy, quotas
+from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.web.routes.jobs_common import (
     _enforce_rate_limit,
@@ -27,12 +28,7 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _apply_transcript_updates,
 )
 
-router = APIRouter(
-    dependencies=[
-        Depends(policy.require_request_allowed),
-        Depends(policy.require_invite_member),
-    ]
-)
+router = secure_router()
 
 
 def _parse_srt(path: Path) -> list[dict[str, Any]]:
@@ -597,8 +593,9 @@ async def post_job_segments_rerun(
         message="Segment resynth requested",
         runtime=rt,
     )
-    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
-    await enforcer.require_concurrent_jobs(action="jobs.rerun")
+    await policy.require_concurrent_jobs(
+        request=request, user=ident.user, action="jobs.rerun"
+    )
     await submit_job_or_503(
         request,
         job_id=str(id),
@@ -813,8 +810,9 @@ async def synthesize_from_approved(
         message="Resynth requested (approved only)",
         runtime=rt,
     )
-    enforcer = quotas.QuotaEnforcer.from_request(request=request, user=ident.user)
-    await enforcer.require_concurrent_jobs(action="jobs.resynth")
+    await policy.require_concurrent_jobs(
+        request=request, user=ident.user, action="jobs.resynth"
+    )
     await submit_job_or_503(
         request,
         job_id=str(id),
