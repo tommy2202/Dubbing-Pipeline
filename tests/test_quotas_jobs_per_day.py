@@ -102,6 +102,6 @@ def test_jobs_per_day_limit(tmp_path, monkeypatch, redis_enabled: bool) -> None:
         payload["episode_number"] = 2
         r2 = c.post("/api/jobs", headers=headers, json=payload)
         assert r2.status_code == 429, r2.text
-        detail = r2.json().get("detail", {})
+        detail = r2.json()
         assert detail.get("error") == "quota_exceeded"
-        assert detail.get("reason") == "jobs_per_day_limit"
+        assert detail.get("code") == "jobs_per_day_limit"

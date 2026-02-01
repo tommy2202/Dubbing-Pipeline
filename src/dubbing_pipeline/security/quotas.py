@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Awaitable, Callable
 
-from fastapi import HTTPException, Request, status
+from fastapi import Request
 
 from dubbing_pipeline.api.models import Role, User
 from dubbing_pipeline.jobs.limits import get_limits, resolve_user_quotas, used_minutes_today
@@ -20,6 +20,16 @@ class QuotaStatus(str, Enum):
     PASS = "pass"
     WARN = "warn"
     FAIL = "fail"
+
+
+@dataclass(frozen=True, slots=True)
+class QuotaExceededError(Exception):
+    code: str
+    limit: int | None
+    remaining: int | None
+    reset_seconds: int
+    detail: str
+    status_code: int = 429
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,16 +126,6 @@ def _seconds_until_utc_day_rollover(ts: float | None = None) -> int:
     return max(60, int((next_day - now).total_seconds()))
 
 
-def _quota_payload(*, action: str, reason: str, limit: int | None, current: int | None) -> dict[str, Any]:
-    return {
-        "error": "quota_exceeded",
-        "action": str(action),
-        "reason": str(reason),
-        "limit": int(limit) if limit is not None else None,
-        "current": int(current) if current is not None else None,
-    }
-
-
 def _log_quota_denied(*, user: User, action: str, reason: str, limit: int | None, current: int | None):
     logger.warning(
         "quota_denied",
@@ -141,18 +141,58 @@ def _log_quota_denied(*, user: User, action: str, reason: str, limit: int | None
             user_id=str(user.id),
             meta={
                 "action": str(action),
-                "reason": str(reason),
-                "limit": int(limit) if limit is not None else None,
-                "current": int(current) if current is not None else None,
+                "code": str(reason),
             },
         )
 
 
-def _raise_quota(*, user: User, action: str, reason: str, limit: int | None, current: int | None) -> None:
+def _remaining(limit: int | None, current: int | None) -> int | None:
+    if limit is None or current is None:
+        return None
+    return max(0, int(limit) - int(current))
+
+
+def _quota_reset_seconds(reason: str) -> int:
+    if reason in {"jobs_per_day_limit", "daily_processing_minutes"}:
+        return int(_seconds_until_utc_day_rollover())
+    return 0
+
+
+def _raise_quota(
+    *,
+    user: User,
+    action: str,
+    reason: str,
+    limit: int | None,
+    current: int | None,
+    detail: str | None = None,
+) -> None:
     _log_quota_denied(user=user, action=action, reason=reason, limit=limit, current=current)
-    raise HTTPException(
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail=_quota_payload(action=action, reason=reason, limit=limit, current=current),
+    raise QuotaExceededError(
+        code=str(reason),
+        limit=int(limit) if limit is not None else None,
+        remaining=_remaining(limit, current),
+        reset_seconds=_quota_reset_seconds(str(reason)),
+        detail=str(detail or reason),
+    )
+
+
+def raise_quota_exceeded(
+    *,
+    user: User,
+    action: str,
+    code: str,
+    limit: int | None = None,
+    current: int | None = None,
+    detail: str | None = None,
+) -> None:
+    _raise_quota(
+        user=user,
+        action=action,
+        reason=code,
+        limit=limit,
+        current=current,
+        detail=detail,
     )
 
 
@@ -568,12 +608,37 @@ class QuotaEnforcer:
                 current=int(used_min + req_min),
             )
 
+    async def check_storage_bytes(self, *, bytes_count: int, action: str) -> QuotaDecision:
+        _ = action
+        snap = await self.snapshot()
+        if snap.max_storage_bytes <= 0 or self._store is None:
+            return QuotaDecision(status=QuotaStatus.PASS, reason="no_limit")
+        used = int(self._store.get_user_storage_bytes(str(self._user.id)) or 0)
+        pending = int(_LOCAL_PENDING_STORAGE.get(str(self._user.id), 0))
+        total = int(used + pending + int(bytes_count))
+        if total > int(snap.max_storage_bytes):
+            return QuotaDecision(
+                status=QuotaStatus.FAIL,
+                reason="storage_bytes_limit",
+                limit=int(snap.max_storage_bytes),
+                current=int(total),
+            )
+        return QuotaDecision(status=QuotaStatus.PASS, reason="ok")
+
     async def reserve_storage_bytes(self, *, bytes_count: int, action: str) -> StorageReservation:
         if bytes_count <= 0:
             return StorageReservation(
                 bytes_count=0, user_id=str(self._user.id), backend="none"
             )
-        await self.require_upload_bytes(total_bytes=int(bytes_count), action=action)
+        decision = await self.check_storage_bytes(bytes_count=int(bytes_count), action=action)
+        if decision.status == QuotaStatus.FAIL:
+            _raise_quota(
+                user=self._user,
+                action=action,
+                reason=decision.reason,
+                limit=decision.limit,
+                current=decision.current,
+            )
         async with _LOCAL_LOCK:
             _LOCAL_PENDING_STORAGE[str(self._user.id)] = int(
                 _LOCAL_PENDING_STORAGE.get(str(self._user.id), 0) + int(bytes_count)

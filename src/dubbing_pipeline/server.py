@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
@@ -43,6 +43,7 @@ from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.runtime.scheduler import Scheduler
 from dubbing_pipeline.security.runtime_db import UnsafeRuntimeDbPath, assert_safe_runtime_db_path
 from dubbing_pipeline.security import policy
+from dubbing_pipeline.security.quotas import QuotaExceededError
 from dubbing_pipeline.utils.crypto import PasswordHasher, random_id
 from dubbing_pipeline.utils.log import logger, safe_log
 from dubbing_pipeline.utils.net import get_client_ip, install_egress_policy, is_trusted_proxy
@@ -211,6 +212,21 @@ app.state.templates = TEMPLATES
 with suppress(Exception):
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.exception_handler(QuotaExceededError)
+async def quota_exceeded_handler(_request: Request, exc: QuotaExceededError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": "quota_exceeded",
+            "code": exc.code,
+            "limit": exc.limit,
+            "remaining": exc.remaining,
+            "reset_seconds": exc.reset_seconds,
+            "detail": exc.detail,
+        },
+    )
 
 # Signal handlers (best-effort, uvicorn will also trigger lifespan shutdown)
 try:

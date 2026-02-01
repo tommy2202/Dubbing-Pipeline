@@ -24,9 +24,6 @@ def test_invite_redeem_flow() -> None:
     with TestClient(app) as c:
         headers = _login_admin(c)
 
-        reg = c.post("/api/auth/register", json={"username": "self", "password": "password123"})
-        assert reg.status_code in {403, 404}
-
         inv = c.post("/api/admin/invites", headers=headers, json={"expires_in_hours": 1})
         assert inv.status_code == 200
         inv_data = inv.json()

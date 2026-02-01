@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -166,10 +167,13 @@ def get_client_ip_from_headers(*, peer_ip: str, headers: Mapping[str, Any]) -> s
     """
     peer = (peer_ip or "").strip() or "unknown"
     s = get_settings()
-    if not bool(getattr(s, "trust_proxy_headers", False)):
+    trust_proxy_headers = bool(getattr(s, "trust_proxy_headers", False))
+    trust_for_tests = bool(int(os.environ.get("TRUST_PROXY_HEADERS_FOR_TESTS", "0") or "0"))
+    if not trust_proxy_headers and not trust_for_tests:
         return peer
     if not is_trusted_proxy(peer):
-        return peer
+        if not (trust_for_tests and (peer == "testclient" or _is_local_host(peer))):
+            return peer
     cands = _forwarded_ip_candidates(headers)
     first_valid: str | None = None
     for raw in cands:

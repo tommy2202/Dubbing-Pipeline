@@ -4,24 +4,7 @@ from pathlib import Path
 
 import click
 
-from dubbing_pipeline.doctor.container import (
-    build_container_full_checks,
-    build_container_quick_checks,
-    default_report_path,
-)
-from dubbing_pipeline.utils.doctor_report import format_report_json, format_report_text
-from dubbing_pipeline.utils.doctor_runner import run_checks, write_report
-from dubbing_pipeline.utils.doctor_types import CheckResult
-
-
-def _full_not_implemented() -> CheckResult:
-    return CheckResult(
-        id="doctor_full",
-        name="Full mode (not implemented)",
-        status="WARN",
-        details="Full mode is not yet implemented. Use --mode quick for now.",
-        remediation=[],
-    )
+from dubbing_pipeline.doctor.wizard import run_doctor
 
 
 @click.command(name="doctor")
@@ -47,27 +30,28 @@ def _full_not_implemented() -> CheckResult:
 )
 def doctor(write_report_path: Path | None, mode: str, json_flag: bool, require_gpu: bool) -> None:
     """
-    Container doctor (quick mode).
+    Setup wizard / doctor.
     """
-    report_path = write_report_path or default_report_path()
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-
     mode = str(mode or "quick").strip().lower()
-    if mode == "full":
-        checks = build_container_full_checks(require_gpu=require_gpu)
-    else:
-        checks = build_container_quick_checks(require_gpu=require_gpu)
+    report_path = None
+    if write_report_path is not None:
+        report_path = Path(write_report_path)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
 
-    report = run_checks(checks)
-    text = format_report_text(report)
-    json_data = format_report_json(report) if json_flag else None
-    write_report(report_path, text=text, json_data=json_data)
+    report, txt_path, json_path = run_doctor(
+        require_gpu=require_gpu,
+        report_path=report_path,
+        include_smoke=True,
+    )
 
     summary = report.summary()
-    click.echo(f"Doctor ({mode}): PASS={summary['PASS']} WARN={summary['WARN']} FAIL={summary['FAIL']}")
-    click.echo(f"Report: {report_path}")
-    if json_flag:
-        click.echo(f"Report (json): {report_path}.json")
+    click.echo(
+        f"Doctor ({mode}): PASS={summary['PASS']} WARN={summary['WARN']} FAIL={summary['FAIL']}"
+    )
+    click.echo(f"Report: {txt_path}")
+    if not json_flag:
+        click.echo("Note: JSON report is always written.")
+    click.echo(f"Report (json): {json_path}")
 
     if summary["FAIL"] > 0:
         raise SystemExit(2)

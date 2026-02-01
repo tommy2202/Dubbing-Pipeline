@@ -245,6 +245,7 @@ class JobStore:
         Tables:
         - user_storage: user_id, bytes, updated_at
         - job_storage: job_id, user_id, bytes, updated_at
+        - upload_storage: upload_id, user_id, bytes, updated_at
         """
         with self._write_lock():
             con = self._conn()
@@ -270,6 +271,19 @@ class JobStore:
                 )
                 con.execute(
                     "CREATE INDEX IF NOT EXISTS idx_job_storage_user_id ON job_storage(user_id);"
+                )
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS upload_storage (
+                      upload_id TEXT PRIMARY KEY,
+                      user_id TEXT NOT NULL,
+                      bytes INTEGER NOT NULL DEFAULT 0,
+                      updated_at REAL
+                    );
+                    """
+                )
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_upload_storage_user_id ON upload_storage(user_id);"
                 )
                 con.commit()
             finally:
@@ -887,6 +901,165 @@ class JobStore:
             finally:
                 con.close()
         return removed
+
+    def set_upload_storage_bytes(self, upload_id: str, *, user_id: str, bytes_count: int) -> int:
+        upload_id = str(upload_id or "").strip()
+        uid = str(user_id or "").strip()
+        if not upload_id or not uid:
+            return 0
+        new_bytes = max(0, int(bytes_count))
+        now = float(time.time())
+        with self._write_lock():
+            con = self._conn()
+            try:
+                row = con.execute(
+                    "SELECT user_id, bytes FROM upload_storage WHERE upload_id = ?;",
+                    (upload_id,),
+                ).fetchone()
+                prev_bytes = 0
+                prev_user = uid
+                if row is not None:
+                    prev_user = str(row["user_id"] or "")
+                    prev_bytes = max(0, int(row["bytes"] or 0))
+
+                # If ownership changed (unexpected), subtract from prior user.
+                if prev_user and prev_user != uid:
+                    prow = con.execute(
+                        "SELECT bytes FROM user_storage WHERE user_id = ?;",
+                        (prev_user,),
+                    ).fetchone()
+                    pbytes = max(0, int(prow["bytes"] or 0)) if prow is not None else 0
+                    con.execute(
+                        "INSERT INTO user_storage (user_id, bytes, updated_at) VALUES (?, ?, ?) "
+                        "ON CONFLICT(user_id) DO UPDATE SET bytes=excluded.bytes, updated_at=excluded.updated_at;",
+                        (prev_user, max(0, pbytes - prev_bytes), now),
+                    )
+                    prev_bytes = 0
+
+                delta = new_bytes - prev_bytes
+                urow = con.execute(
+                    "SELECT bytes FROM user_storage WHERE user_id = ?;",
+                    (uid,),
+                ).fetchone()
+                ubytes = max(0, int(urow["bytes"] or 0)) if urow is not None else 0
+                con.execute(
+                    "INSERT INTO user_storage (user_id, bytes, updated_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET bytes=excluded.bytes, updated_at=excluded.updated_at;",
+                    (uid, max(0, ubytes + delta), now),
+                )
+                con.execute(
+                    """
+                    INSERT INTO upload_storage (upload_id, user_id, bytes, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(upload_id) DO UPDATE SET
+                      user_id=excluded.user_id,
+                      bytes=excluded.bytes,
+                      updated_at=excluded.updated_at;
+                    """,
+                    (upload_id, uid, new_bytes, now),
+                )
+                con.commit()
+            finally:
+                con.close()
+        return new_bytes
+
+    def delete_upload_storage(self, upload_id: str) -> int:
+        upload_id = str(upload_id or "").strip()
+        if not upload_id:
+            return 0
+        removed = 0
+        with self._write_lock():
+            con = self._conn()
+            try:
+                row = con.execute(
+                    "SELECT user_id, bytes FROM upload_storage WHERE upload_id = ?;",
+                    (upload_id,),
+                ).fetchone()
+                if row is None:
+                    return 0
+                uid = str(row["user_id"] or "")
+                removed = max(0, int(row["bytes"] or 0))
+                con.execute("DELETE FROM upload_storage WHERE upload_id = ?;", (upload_id,))
+                if uid:
+                    urow = con.execute(
+                        "SELECT bytes FROM user_storage WHERE user_id = ?;",
+                        (uid,),
+                    ).fetchone()
+                    ubytes = max(0, int(urow["bytes"] or 0)) if urow is not None else 0
+                    con.execute(
+                        "INSERT INTO user_storage (user_id, bytes, updated_at) VALUES (?, ?, ?) "
+                        "ON CONFLICT(user_id) DO UPDATE SET bytes=excluded.bytes, updated_at=excluded.updated_at;",
+                        (uid, max(0, ubytes - removed), float(time.time())),
+                    )
+                con.commit()
+            finally:
+                con.close()
+        return removed
+
+    def replace_storage_accounting(
+        self,
+        *,
+        job_entries: list[tuple[str, str, int]] | None = None,
+        upload_entries: list[tuple[str, str, int]] | None = None,
+    ) -> None:
+        jobs_in = job_entries or []
+        uploads_in = upload_entries or []
+        job_map: dict[str, tuple[str, int]] = {}
+        for job_id, user_id, bytes_count in jobs_in:
+            jid = str(job_id or "").strip()
+            uid = str(user_id or "").strip()
+            if not jid or not uid:
+                continue
+            job_map[jid] = (uid, max(0, int(bytes_count)))
+        upload_map: dict[str, tuple[str, int]] = {}
+        for upload_id, user_id, bytes_count in uploads_in:
+            uid = str(user_id or "").strip()
+            upid = str(upload_id or "").strip()
+            if not upid or not uid:
+                continue
+            upload_map[upid] = (uid, max(0, int(bytes_count)))
+        totals: dict[str, int] = {}
+        now = float(time.time())
+        with self._write_lock():
+            con = self._conn()
+            try:
+                con.execute("DELETE FROM user_storage;")
+                con.execute("DELETE FROM job_storage;")
+                con.execute("DELETE FROM upload_storage;")
+                for jid, (uid, bytes_count) in job_map.items():
+                    totals[uid] = int(totals.get(uid, 0)) + int(bytes_count)
+                    con.execute(
+                        """
+                        INSERT INTO job_storage (job_id, user_id, bytes, updated_at)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(job_id) DO UPDATE SET
+                          user_id=excluded.user_id,
+                          bytes=excluded.bytes,
+                          updated_at=excluded.updated_at;
+                        """,
+                        (jid, uid, int(bytes_count), now),
+                    )
+                for upid, (uid, bytes_count) in upload_map.items():
+                    totals[uid] = int(totals.get(uid, 0)) + int(bytes_count)
+                    con.execute(
+                        """
+                        INSERT INTO upload_storage (upload_id, user_id, bytes, updated_at)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(upload_id) DO UPDATE SET
+                          user_id=excluded.user_id,
+                          bytes=excluded.bytes,
+                          updated_at=excluded.updated_at;
+                        """,
+                        (upid, uid, int(bytes_count), now),
+                    )
+                for uid, bytes_count in totals.items():
+                    con.execute(
+                        "INSERT INTO user_storage (user_id, bytes, updated_at) VALUES (?, ?, ?);",
+                        (uid, max(0, int(bytes_count)), now),
+                    )
+                con.commit()
+            finally:
+                con.close()
 
     # --- per-user quota overrides ---
     def get_user_quota(self, user_id: str) -> dict[str, int | None]:
@@ -2516,3 +2689,5 @@ class JobStore:
     def delete_upload(self, upload_id: str) -> None:
         with self._write_lock(), self._lock, self._uploads() as db, suppress(Exception):
             del db[str(upload_id)]
+        with suppress(Exception):
+            self.delete_upload_storage(str(upload_id))

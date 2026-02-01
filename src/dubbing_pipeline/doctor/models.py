@@ -88,6 +88,7 @@ def _requirement_check(req: ModelRequirement, *, mode: str) -> CheckResult:
         remediation = list(req.remediation or [])
         if not req.required and req.optional_reason:
             details["fallback"] = str(req.optional_reason)
+            details["optional_reason"] = str(req.optional_reason)
     return CheckResult(
         id=req.id,
         name=req.name,
