@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from dubbing_pipeline.library.paths import get_job_output_root
+from dubbing_pipeline.library.paths import get_job_output_root, get_library_root_for_job
 from dubbing_pipeline.jobs.models import Job
 
 from dubbing_pipeline.config import get_settings
@@ -107,10 +107,11 @@ def _dir_size_bytes(path: Path, *, seen: set[tuple[int, int]] | None = None) -> 
 def job_storage_bytes(*, job: Job, output_root: Path | None = None) -> int:
     out_root = Path(output_root or get_settings().output_dir).resolve()
     base_dir = get_job_output_root(job).resolve()
+    library_dir = get_library_root_for_job(job).resolve()
     jobs_ptr = (out_root / "jobs" / str(job.id)).resolve()
     total = 0
     seen: set[tuple[int, int]] = set()
-    for p in (base_dir, jobs_ptr):
+    for p in (base_dir, library_dir, jobs_ptr):
         if not p.exists():
             continue
         if not _safe_under_root(p, out_root):

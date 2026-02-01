@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from dubbing_pipeline.api.models import Role, User, now_ts
@@ -28,7 +27,20 @@ def _make_user(*, username: str, password: str, role: Role) -> User:
     )
 
 
-def test_upload_too_big_rejected(tmp_path: Path, monkeypatch) -> None:
+def _assert_quota_response(resp, *, code: str, limit: int | None = None, reset_min: int = 0) -> None:
+    assert resp.status_code == 429, resp.text
+    payload = resp.json()
+    assert payload.get("error") == "quota_exceeded"
+    assert payload.get("code") == code
+    assert "detail" in payload
+    assert "reset_seconds" in payload
+    assert int(payload.get("reset_seconds") or 0) >= int(reset_min)
+    assert "remaining" in payload
+    if limit is not None:
+        assert payload.get("limit") == limit
+
+
+def test_quota_upload_ingress(tmp_path: Path, monkeypatch) -> None:
     configure_runtime_paths(tmp_path)
     monkeypatch.setenv("MAX_UPLOAD_BYTES", "64")
     monkeypatch.setenv("MAX_STORAGE_BYTES_PER_USER", "100000")
@@ -38,22 +50,19 @@ def test_upload_too_big_rejected(tmp_path: Path, monkeypatch) -> None:
 
     with TestClient(app) as c:
         auth = c.app.state.auth_store
-        user = _make_user(username="quota_upload", password="pass", role=Role.operator)
+        user = _make_user(username="quota_upload_ingress", password="pass", role=Role.operator)
         auth.upsert_user(user)
-        headers = login_user(c, username="quota_upload", password="pass", clear_cookies=True)
+        headers = login_user(c, username="quota_upload_ingress", password="pass", clear_cookies=True)
 
         resp = c.post(
             "/api/uploads/init",
             headers=headers,
             json={"filename": "clip.mp4", "total_bytes": 128},
         )
-        assert resp.status_code == 429, resp.text
-        detail = resp.json()
-        assert detail.get("error") == "quota_exceeded"
-        assert detail.get("code") == "upload_bytes_limit"
+        _assert_quota_response(resp, code="upload_bytes_limit", limit=64)
 
 
-def test_jobs_per_day_enforced(tmp_path: Path, monkeypatch) -> None:
+def test_quota_jobs_per_day_ingress(tmp_path: Path, monkeypatch) -> None:
     in_dir, _out_dir, _logs_dir = configure_runtime_paths(tmp_path)
     video_path = ensure_tiny_mp4(in_dir / "Test.mp4", skip_message="ffmpeg not available")
     monkeypatch.setenv("JOBS_PER_DAY_PER_USER", "1")
@@ -65,9 +74,9 @@ def test_jobs_per_day_enforced(tmp_path: Path, monkeypatch) -> None:
 
     with TestClient(app) as c:
         auth = c.app.state.auth_store
-        user = _make_user(username="quota_daily", password="pass", role=Role.operator)
+        user = _make_user(username="quota_daily_ingress", password="pass", role=Role.operator)
         auth.upsert_user(user)
-        headers = login_user(c, username="quota_daily", password="pass", clear_cookies=True)
+        headers = login_user(c, username="quota_daily_ingress", password="pass", clear_cookies=True)
 
         payload = {
             "video_path": str(video_path),
@@ -82,13 +91,10 @@ def test_jobs_per_day_enforced(tmp_path: Path, monkeypatch) -> None:
 
         payload["episode_number"] = 2
         r2 = c.post("/api/jobs", headers=headers, json=payload)
-        assert r2.status_code == 429, r2.text
-        detail = r2.json()
-        assert detail.get("error") == "quota_exceeded"
-        assert detail.get("code") == "jobs_per_day_limit"
+        _assert_quota_response(r2, code="jobs_per_day_limit", limit=1, reset_min=60)
 
 
-def test_concurrent_jobs_enforced(tmp_path: Path, monkeypatch) -> None:
+def test_quota_concurrent_jobs_ingress(tmp_path: Path, monkeypatch) -> None:
     in_dir, _out_dir, _logs_dir = configure_runtime_paths(tmp_path)
     video_path = ensure_tiny_mp4(in_dir / "Test.mp4", skip_message="ffmpeg not available")
     monkeypatch.setenv("MAX_CONCURRENT_JOBS_PER_USER", "1")
@@ -102,12 +108,12 @@ def test_concurrent_jobs_enforced(tmp_path: Path, monkeypatch) -> None:
     with TestClient(app) as c:
         store = c.app.state.job_store
         auth = c.app.state.auth_store
-        user = _make_user(username="quota_run", password="pass", role=Role.operator)
+        user = _make_user(username="quota_run_ingress", password="pass", role=Role.operator)
         auth.upsert_user(user)
-        headers = login_user(c, username="quota_run", password="pass", clear_cookies=True)
+        headers = login_user(c, username="quota_run_ingress", password="pass", clear_cookies=True)
 
         running = Job(
-            id="job_running_quota_enforced",
+            id="job_running_quota_ingress",
             owner_id=user.id,
             video_path=str(video_path),
             duration_s=1.0,
@@ -141,7 +147,4 @@ def test_concurrent_jobs_enforced(tmp_path: Path, monkeypatch) -> None:
             "episode_number": 2,
         }
         resp = c.post("/api/jobs", headers=headers, json=payload)
-        assert resp.status_code == 429, resp.text
-        detail = resp.json()
-        assert detail.get("error") == "quota_exceeded"
-        assert detail.get("code") == "concurrent_jobs_limit"
+        _assert_quota_response(resp, code="concurrent_jobs_limit", limit=1)

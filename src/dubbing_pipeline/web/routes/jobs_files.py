@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException, Request, Response
 from dubbing_pipeline.api.access import require_job_access
 from dubbing_pipeline.api.deps import Identity, require_scope
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.security import policy
 from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.web.routes.jobs_common import (
     _file_range_response,
@@ -324,6 +325,9 @@ async def job_stream_manifest(
     p = _stream_manifest_path(base_dir)
     if not p.exists():
         raise HTTPException(status_code=404, detail="stream manifest not found")
+    policy.require_can_view_manifest(
+        user=ident.user, manifest=p, job=job, allow_shared_read=True
+    )
     from dubbing_pipeline.utils.io import read_json
 
     data = read_json(p, default={})

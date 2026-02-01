@@ -81,16 +81,6 @@
   },
   {
     "method": "GET",
-    "name": "register_disabled",
-    "path": "/api/auth/register"
-  },
-  {
-    "method": "POST",
-    "name": "register_disabled",
-    "path": "/api/auth/register"
-  },
-  {
-    "method": "GET",
     "name": "list_sessions",
     "path": "/api/auth/sessions"
   },
@@ -103,16 +93,6 @@
     "method": "POST",
     "name": "revoke_session",
     "path": "/api/auth/sessions/{device_id}/revoke"
-  },
-  {
-    "method": "GET",
-    "name": "signup_disabled",
-    "path": "/api/auth/signup"
-  },
-  {
-    "method": "POST",
-    "name": "signup_disabled",
-    "path": "/api/auth/signup"
   },
   {
     "method": "POST",
@@ -581,16 +561,6 @@
   },
   {
     "method": "GET",
-    "name": "register_disabled",
-    "path": "/auth/register"
-  },
-  {
-    "method": "POST",
-    "name": "register_disabled",
-    "path": "/auth/register"
-  },
-  {
-    "method": "GET",
     "name": "list_sessions",
     "path": "/auth/sessions"
   },
@@ -603,16 +573,6 @@
     "method": "POST",
     "name": "revoke_session",
     "path": "/auth/sessions/{device_id}/revoke"
-  },
-  {
-    "method": "GET",
-    "name": "signup_disabled",
-    "path": "/auth/signup"
-  },
-  {
-    "method": "POST",
-    "name": "signup_disabled",
-    "path": "/auth/signup"
   },
   {
     "method": "POST",

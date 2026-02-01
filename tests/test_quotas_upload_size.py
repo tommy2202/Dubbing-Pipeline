@@ -55,6 +55,6 @@ def test_upload_size_limit(tmp_path, monkeypatch, redis_enabled: bool) -> None:
             json={"filename": "clip.mp4", "total_bytes": 128},
         )
         assert resp.status_code == 429, resp.text
-        detail = resp.json().get("detail", {})
+        detail = resp.json()
         assert detail.get("error") == "quota_exceeded"
-        assert detail.get("reason") == "upload_bytes_limit"
+        assert detail.get("code") == "upload_bytes_limit"

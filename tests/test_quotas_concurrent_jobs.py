@@ -134,6 +134,6 @@ def test_concurrent_jobs_limit(tmp_path, monkeypatch, redis_enabled: bool) -> No
         }
         resp = c.post("/api/jobs", headers=headers, json=payload)
         assert resp.status_code == 429, resp.text
-        detail = resp.json().get("detail", {})
+        detail = resp.json()
         assert detail.get("error") == "quota_exceeded"
-        assert detail.get("reason") == "concurrent_jobs_limit"
+        assert detail.get("code") == "concurrent_jobs_limit"

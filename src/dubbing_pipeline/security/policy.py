@@ -168,6 +168,22 @@ def require_can_view_artifact(
     )
 
 
+def require_can_view_manifest(
+    *, user: User, manifest, job, allow_shared_read: bool = False
+) -> None:
+    visibility.require_can_view_artifact(
+        user=user, artifact=manifest, job=job, allow_shared_read=allow_shared_read
+    )
+
+
+def filter_visible_jobs(*, user: User, jobs, allow_shared_read: bool = False) -> list:
+    return [
+        job
+        for job in (jobs or [])
+        if visibility.can_view_job(user=user, job=job, allow_shared_read=allow_shared_read)
+    ]
+
+
 def require_can_view_library_item(
     *, user: User, item: dict[str, Any], allow_shared_read: bool = False
 ) -> None:
