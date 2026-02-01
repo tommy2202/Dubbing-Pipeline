@@ -353,6 +353,13 @@ async def library_admin_remove(
 ) -> dict[str, Any]:
     if ident.user.role != Role.admin:
         raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    delete_artifacts = bool(body.get("delete") or False)
     store = _store(request)
     series_slug, season_number, episode_number = _parse_library_key(key)
     rows = _jobs_for_key(
@@ -360,7 +367,10 @@ async def library_admin_remove(
     )
     if not rows:
         raise HTTPException(status_code=404, detail="Library item not found")
+    q = getattr(request.app.state, "job_queue", None)
+    out_root = Path(getattr(request.app.state, "output_root", None) or get_settings().output_dir).resolve()
     removed_ids: list[str] = []
+    deleted_ids: list[str] = []
     for row in rows:
         job_id = str(row.get("job_id") or "")
         if not job_id:
@@ -380,6 +390,19 @@ async def library_admin_remove(
             finally:
                 con.close()
         removed_ids.append(job_id)
+        if delete_artifacts and job is not None:
+            if q is not None and job.state in {JobState.RUNNING, JobState.QUEUED, JobState.PAUSED}:
+                with suppress(Exception):
+                    await q.kill(job_id, reason="Admin quick remove")
+            from dubbing_pipeline.ops.retention import delete_job_artifacts
+
+            deleted_ok, _bytes, paths, unsafe = delete_job_artifacts(job=job, output_root=out_root)
+            if unsafe:
+                raise HTTPException(status_code=400, detail="Refusing to delete outside output dir")
+            if not deleted_ok:
+                raise HTTPException(status_code=500, detail="Failed to delete job artifacts")
+            store.delete_job(job_id)
+            deleted_ids.append(job_id)
     audit_event(
         "library.admin_remove",
         request=request,
@@ -389,9 +412,18 @@ async def library_admin_remove(
             "season_number": int(season_number),
             "episode_number": int(episode_number),
             "job_ids": removed_ids,
+            "deleted_job_ids": deleted_ids,
+            "deleted": bool(delete_artifacts),
+            "reason_code": "ADMIN_DELETED" if delete_artifacts else "ADMIN_UNSHARED",
         },
     )
-    return {"ok": True, "job_ids": removed_ids, "library_key": _library_key(series_slug, season_number, episode_number)}
+    return {
+        "ok": True,
+        "job_ids": removed_ids,
+        "deleted_job_ids": deleted_ids,
+        "library_key": _library_key(series_slug, season_number, episode_number),
+        "deleted": bool(delete_artifacts),
+    }
 
 
 @router.post("/{key}/unshare")
@@ -567,6 +599,8 @@ async def library_report(
             "season_number": int(season_number),
             "episode_number": int(episode_number),
             "job_id": job_id,
+            "report_id": report_id,
+            "reason_code": "REPORT_CREATED",
         },
     )
     return {

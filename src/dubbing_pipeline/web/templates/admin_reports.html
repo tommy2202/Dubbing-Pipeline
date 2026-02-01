@@ -52,7 +52,7 @@
           <a class="rounded bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs"
              :href="episodeUrl(it)" target="_blank" rel="noreferrer">Open episode</a>
           <a class="rounded bg-red-900/40 hover:bg-red-900/60 px-3 py-2 text-xs text-red-100"
-             :href="adminRemoveUrl(it)" @click.prevent="adminRemove(it)">Admin remove</a>
+             :href="adminRemoveUrl(it)" @click.prevent="adminRemove(it)">Quick remove</a>
         </div>
         <div class="mt-2 text-xs text-slate-500" x-show="it.notified">
           Notified via ntfy.
@@ -132,7 +132,8 @@
         }
       },
       async adminRemove(it) {
-        if (!confirm("Remove this library item from shared view?")) return;
+        if (!confirm("Quick remove this library item from shared view?")) return;
+        const deleteArtifacts = confirm("Also delete artifacts? This cannot be undone.");
         const key = this.libraryKey(it);
         if (!key) return;
         const csrf = document.getElementById("csrf")?.value || "";
@@ -140,10 +141,10 @@
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
           credentials: "include",
-          body: JSON.stringify({}),
+          body: JSON.stringify({ delete: deleteArtifacts }),
         });
         if (r.ok) {
-          window.showToast("Removed from shared library", "success");
+          window.showToast(deleteArtifacts ? "Removed and deleted" : "Removed from shared library", "success");
         } else {
           const d = await r.json().catch(() => ({}));
           window.showToast(d.detail || "Failed to remove", "error");
