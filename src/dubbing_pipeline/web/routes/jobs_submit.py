@@ -18,7 +18,7 @@ from dubbing_pipeline.queue.submit_helpers import submit_job_or_503
 from dubbing_pipeline.ops.storage import ensure_free_space
 from dubbing_pipeline.runtime import lifecycle
 from dubbing_pipeline.security.crypto import is_encrypted_path, materialize_decrypted
-from dubbing_pipeline.security import policy
+from dubbing_pipeline.security import policy, quotas
 from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.utils.ffmpeg_safe import FFmpegError
 from dubbing_pipeline.utils.log import request_id_var
@@ -757,6 +757,13 @@ async def create_jobs_batch(
                 job_id=None,
             )
             if pol is not None and not pol.ok:
+                if int(pol.status_code) == 429:
+                    quotas.raise_quota_exceeded(
+                        user=ident.user,
+                        action="jobs.batch",
+                        code="submission_policy_limit",
+                        detail=str(pol.detail),
+                    )
                 raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
             for it in body["items"]:
                 if not isinstance(it, dict):
@@ -792,6 +799,13 @@ async def create_jobs_batch(
                     job_id=None,
                 )
                 if pol2 is not None and not pol2.ok:
+                    if int(pol2.status_code) == 429:
+                        quotas.raise_quota_exceeded(
+                            user=ident.user,
+                            action="jobs.batch",
+                            code="submission_policy_limit",
+                            detail=str(pol2.detail),
+                        )
                     raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
                 mode = str(getattr(pol2, "effective_mode", None) or mode)
                 device = str(getattr(pol2, "effective_device", None) or device)
@@ -882,6 +896,13 @@ async def create_jobs_batch(
                 job_id=None,
             )
             if pol is not None and not pol.ok:
+                if int(pol.status_code) == 429:
+                    quotas.raise_quota_exceeded(
+                        user=ident.user,
+                        action="jobs.batch",
+                        code="submission_policy_limit",
+                        detail=str(pol.detail),
+                    )
                 raise HTTPException(status_code=int(pol.status_code), detail=str(pol.detail))
             preset_id = str(form.get("preset_id") or "").strip()
             project_id = str(form.get("project_id") or "").strip()
@@ -901,6 +922,13 @@ async def create_jobs_batch(
                 job_id=None,
             )
             if pol2 is not None and not pol2.ok:
+                if int(pol2.status_code) == 429:
+                    quotas.raise_quota_exceeded(
+                        user=ident.user,
+                        action="jobs.batch",
+                        code="submission_policy_limit",
+                        detail=str(pol2.detail),
+                    )
                 raise HTTPException(status_code=int(pol2.status_code), detail=str(pol2.detail))
             mode = str(getattr(pol2, "effective_mode", None) or mode)
             device = str(getattr(pol2, "effective_device", None) or device)
