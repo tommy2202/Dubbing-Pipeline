@@ -43,13 +43,9 @@ POST	/api/auth/logout	dubbing_pipeline.api.routes_auth	logout
 POST	/api/auth/qr/init	dubbing_pipeline.api.routes_auth	qr_init
 POST	/api/auth/qr/redeem	dubbing_pipeline.api.routes_auth	qr_redeem
 POST	/api/auth/refresh	dubbing_pipeline.api.routes_auth	refresh
-GET	/api/auth/register	dubbing_pipeline.api.routes_auth	register_disabled
-POST	/api/auth/register	dubbing_pipeline.api.routes_auth	register_disabled
 GET	/api/auth/sessions	dubbing_pipeline.api.routes_auth	list_sessions
 POST	/api/auth/sessions/revoke_all	dubbing_pipeline.api.routes_auth	revoke_all_sessions
 POST	/api/auth/sessions/{device_id}/revoke	dubbing_pipeline.api.routes_auth	revoke_session
-GET	/api/auth/signup	dubbing_pipeline.api.routes_auth	signup_disabled
-POST	/api/auth/signup	dubbing_pipeline.api.routes_auth	signup_disabled
 POST	/api/auth/totp/setup	dubbing_pipeline.api.routes_auth	totp_setup
 POST	/api/auth/totp/verify	dubbing_pipeline.api.routes_auth	totp_verify
 GET	/api/files	dubbing_pipeline.web.routes.uploads	list_server_files
@@ -155,13 +151,9 @@ POST	/auth/logout	dubbing_pipeline.api.routes_auth	logout
 POST	/auth/qr/init	dubbing_pipeline.api.routes_auth	qr_init
 POST	/auth/qr/redeem	dubbing_pipeline.api.routes_auth	qr_redeem
 POST	/auth/refresh	dubbing_pipeline.api.routes_auth	refresh
-GET	/auth/register	dubbing_pipeline.api.routes_auth	register_disabled
-POST	/auth/register	dubbing_pipeline.api.routes_auth	register_disabled
 GET	/auth/sessions	dubbing_pipeline.api.routes_auth	list_sessions
 POST	/auth/sessions/revoke_all	dubbing_pipeline.api.routes_auth	revoke_all_sessions
 POST	/auth/sessions/{device_id}/revoke	dubbing_pipeline.api.routes_auth	revoke_session
-GET	/auth/signup	dubbing_pipeline.api.routes_auth	signup_disabled
-POST	/auth/signup	dubbing_pipeline.api.routes_auth	signup_disabled
 POST	/auth/totp/setup	dubbing_pipeline.api.routes_auth	totp_setup
 POST	/auth/totp/verify	dubbing_pipeline.api.routes_auth	totp_verify
 GET	/docs	fastapi.applications	swagger_ui_html
@@ -229,7 +221,7 @@ Notes:
 
 | Route group | Auth required | Invite-only required | Remote access enforced | Object-level visibility | Quota enforcement | Admin-only | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/auth/*` (and `/auth/*` alias) | Partial | No | Yes (global) | No | No | Partial | Login/refresh/logout/qr redeem are public. Sessions + TOTP require auth; QR init/TOTP are admin-gated. |
+| `/api/auth/*` (and `/auth/*` alias) | Partial | No | Yes (global) | No | No | Partial | Login/refresh/logout/qr redeem are public. Sessions + TOTP require auth; QR init/TOTP are admin-gated. No signup/register routes are exposed. |
 | `/api/invites/redeem` | No | No | Yes (global) | No | No | No | Invite redemption is public; rate-limited. |
 | `/api/audit/*` | Yes | Yes | Yes (global) | No | No | No | Uses `current_identity` + invite-only policy deps. |
 | `/api/admin/*` (ops/admin API) | Yes | Yes | Yes (global) | No | No | Yes | Admin-only: queue, metrics, reports, glossaries, pronunciation, voice suggestions, invite mgmt, quota overrides. |
