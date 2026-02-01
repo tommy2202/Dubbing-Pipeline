@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import time
 import urllib.request
 from contextlib import suppress
@@ -288,6 +289,10 @@ def decide_remote_access(request: HTTPConnection) -> RemoteDecision:
         mode = "off"
 
     raw_peer = request.client.host if request.client else ""
+    if raw_peer == "testclient" and os.environ.get("TRUST_PROXY_HEADERS_FOR_TESTS") == "1":
+        test_peer = str(request.headers.get("x-test-peer-ip") or "").strip()
+        if test_peer:
+            raw_peer = test_peer
     raw_ip = _parse_ip(raw_peer) or ipaddress.ip_address("0.0.0.0")
     if raw_peer == "testclient":
         raw_ip = ipaddress.ip_address("127.0.0.1")

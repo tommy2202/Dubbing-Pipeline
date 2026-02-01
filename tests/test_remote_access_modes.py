@@ -16,6 +16,7 @@ def _configure_tailscale(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ACCESS_MODE", "tailscale")
     monkeypatch.setenv("TRUST_PROXY_HEADERS", "1")
     monkeypatch.setenv("TRUSTED_PROXY_SUBNETS", "127.0.0.1/8")
+    monkeypatch.setenv("TRUST_PROXY_HEADERS_FOR_TESTS", "1")
     get_settings.cache_clear()
 
 
@@ -26,6 +27,7 @@ def _configure_cloudflare(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("CLOUDFLARE_ACCESS_AUD", "example-aud")
     monkeypatch.setenv("TRUST_PROXY_HEADERS", "1")
     monkeypatch.setenv("TRUSTED_PROXY_SUBNETS", "127.0.0.1/8")
+    monkeypatch.setenv("TRUST_PROXY_HEADERS_FOR_TESTS", "1")
     get_settings.cache_clear()
 
 
