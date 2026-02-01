@@ -33,6 +33,7 @@ from dubbing_pipeline.web.routes.jobs_common import (
     _input_dir,
     _input_imports_dir,
     _input_uploads_dir,
+    _new_short_id,
     _sanitize_output_subdir,
     _sanitize_video_path,
     _validate_media_or_400,
@@ -186,6 +187,11 @@ async def create_job(
 
     upload_id = ""
     upload_stem = ""
+    skip_upload_quota = False
+    direct_upload_id = ""
+    direct_upload_bytes = 0
+    direct_upload_name = ""
+    direct_upload_path: Path | None = None
     import_src_srt_text: str | None = None
     import_tgt_srt_text: str | None = None
     import_transcript_json_text: str | None = None
@@ -230,6 +236,7 @@ async def create_job(
             urec = require_upload_access(store=store, ident=ident, upload_id=upload_id)
             if not bool(urec.get("completed")):
                 raise HTTPException(status_code=400, detail="upload_id not completed")
+            skip_upload_quota = True
             vp = str(urec.get("final_path") or "")
             up_root = _input_uploads_dir().resolve()
             video_path = Path(vp).resolve()
@@ -329,6 +336,7 @@ async def create_job(
             urec = require_upload_access(store=store, ident=ident, upload_id=upload_id)
             if not bool(urec.get("completed")):
                 raise HTTPException(status_code=400, detail="upload_id not completed")
+            skip_upload_quota = True
             up_root = _input_uploads_dir().resolve()
             video_path = Path(str(urec.get("final_path") or "")).resolve()
             try:
@@ -379,33 +387,79 @@ async def create_job(
                     dest.unlink(missing_ok=True)
                 raise
             video_path = dest
+            direct_upload_id = _new_short_id("up_direct_")
+            direct_upload_bytes = int(written)
+            direct_upload_name = str(name or dest.name)
+            direct_upload_path = dest
 
     assert video_path is not None
     jid = new_id()
+    storage_reservation: quotas.StorageReservation | None = None
     if store is not None:
         try:
             file_size = int(video_path.stat().st_size)
         except Exception:
             file_size = 0
-        await policy.require_quota_for_upload(
+        if not skip_upload_quota:
+            await policy.require_quota_for_upload(
+                request=request,
+                user=ident.user,
+                bytes=int(file_size),
+                action="jobs.submit",
+            )
+        if direct_upload_id and direct_upload_path is not None:
+            try:
+                store.put_upload(
+                    direct_upload_id,
+                    {
+                        "id": direct_upload_id,
+                        "owner_id": ident.user.id,
+                        "filename": direct_upload_name or direct_upload_path.name,
+                        "orig_stem": Path(direct_upload_name or direct_upload_path.name).stem,
+                        "total_bytes": int(direct_upload_bytes or file_size),
+                        "chunk_bytes": 0,
+                        "part_path": "",
+                        "final_path": str(direct_upload_path),
+                        "received": {},
+                        "received_bytes": int(direct_upload_bytes or file_size),
+                        "completed": True,
+                        "encrypted": bool(is_encrypted_path(direct_upload_path)),
+                        "created_at": now_utc(),
+                        "updated_at": now_utc(),
+                        "source": "direct_job",
+                    },
+                )
+                store.set_upload_storage_bytes(
+                    direct_upload_id,
+                    user_id=str(ident.user.id),
+                    bytes_count=int(direct_upload_bytes or file_size),
+                )
+            except Exception:
+                pass
+        storage_reservation = await policy.reserve_storage_bytes(
             request=request,
             user=ident.user,
-            bytes=int(file_size),
+            bytes_count=int(file_size),
             action="jobs.submit",
         )
     # Extension allowlist (defense-in-depth). Encrypted-at-rest inputs are allowed (validated via ffprobe after decrypt).
     if not is_encrypted_path(video_path) and video_path.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
         raise HTTPException(status_code=400, detail="Unsupported file type")
 
-    reservation = await policy.require_quota_for_submit(
-        request=request,
-        user=ident.user,
-        count=1,
-        requested_mode=mode,
-        requested_device=device,
-        job_id=jid,
-        action="jobs.submit",
-    )
+    try:
+        reservation = await policy.require_quota_for_submit(
+            request=request,
+            user=ident.user,
+            count=1,
+            requested_mode=mode,
+            requested_device=device,
+            job_id=jid,
+            action="jobs.submit",
+        )
+    except Exception:
+        if storage_reservation is not None:
+            await storage_reservation.release()
+        raise
     # Apply policy adjustments (GPU downgrade / mode downgrade).
     mode = str(reservation.effective_mode or mode)
     device = str(reservation.effective_device or device)
@@ -419,9 +473,13 @@ async def create_job(
         )
     except HTTPException:
         await reservation.release()
+        if storage_reservation is not None:
+            await storage_reservation.release()
         raise
     except FFmpegError as ex:
         await reservation.release()
+        if storage_reservation is not None:
+            await storage_reservation.release()
         raise HTTPException(
             status_code=400, detail=f"Invalid media file (ffprobe failed): {ex}"
         ) from ex
@@ -529,6 +587,8 @@ async def create_job(
         job_created = True
     except Exception:
         await reservation.release()
+        if storage_reservation is not None:
+            await storage_reservation.release()
         raise
     audit_event(
         "job.submit",
@@ -564,9 +624,13 @@ async def create_job(
     except Exception:
         if not job_created:
             await reservation.release()
+        if storage_reservation is not None:
+            await storage_reservation.release()
         raise
     jobs_queued.inc()
     pipeline_job_total.inc()
+    if storage_reservation is not None:
+        await storage_reservation.release()
     return {"id": jid}
 
 

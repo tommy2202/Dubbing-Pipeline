@@ -608,12 +608,37 @@ class QuotaEnforcer:
                 current=int(used_min + req_min),
             )
 
+    async def check_storage_bytes(self, *, bytes_count: int, action: str) -> QuotaDecision:
+        _ = action
+        snap = await self.snapshot()
+        if snap.max_storage_bytes <= 0 or self._store is None:
+            return QuotaDecision(status=QuotaStatus.PASS, reason="no_limit")
+        used = int(self._store.get_user_storage_bytes(str(self._user.id)) or 0)
+        pending = int(_LOCAL_PENDING_STORAGE.get(str(self._user.id), 0))
+        total = int(used + pending + int(bytes_count))
+        if total > int(snap.max_storage_bytes):
+            return QuotaDecision(
+                status=QuotaStatus.FAIL,
+                reason="storage_bytes_limit",
+                limit=int(snap.max_storage_bytes),
+                current=int(total),
+            )
+        return QuotaDecision(status=QuotaStatus.PASS, reason="ok")
+
     async def reserve_storage_bytes(self, *, bytes_count: int, action: str) -> StorageReservation:
         if bytes_count <= 0:
             return StorageReservation(
                 bytes_count=0, user_id=str(self._user.id), backend="none"
             )
-        await self.require_upload_bytes(total_bytes=int(bytes_count), action=action)
+        decision = await self.check_storage_bytes(bytes_count=int(bytes_count), action=action)
+        if decision.status == QuotaStatus.FAIL:
+            _raise_quota(
+                user=self._user,
+                action=action,
+                reason=decision.reason,
+                limit=decision.limit,
+                current=decision.current,
+            )
         async with _LOCAL_LOCK:
             _LOCAL_PENDING_STORAGE[str(self._user.id)] = int(
                 _LOCAL_PENDING_STORAGE.get(str(self._user.id), 0) + int(bytes_count)

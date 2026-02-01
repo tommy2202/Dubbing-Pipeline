@@ -16,6 +16,7 @@ from dubbing_pipeline.jobs.limits import get_limits
 from dubbing_pipeline.security import policy
 from dubbing_pipeline.security.policy_deps import secure_router
 from dubbing_pipeline.security.crypto import CryptoConfigError, encrypt_file, encryption_enabled_for
+from dubbing_pipeline.utils.log import logger
 from dubbing_pipeline.web.routes.jobs_common import (
     _ALLOWED_UPLOAD_EXTS,
     _ALLOWED_UPLOAD_MIME,
@@ -431,6 +432,20 @@ async def uploads_complete(
             )
         else:
             store.update_upload(upload_id, completed=True, updated_at=_now_iso())
+
+        # Storage accounting (best-effort, do not fail upload completion).
+        try:
+            size = int(final_path.stat().st_size) if final_path.exists() else 0
+            store.set_upload_storage_bytes(
+                upload_id, user_id=str(ident.user.id), bytes_count=int(size)
+            )
+        except Exception as ex:
+            logger.warning(
+                "upload_storage_update_failed",
+                upload_id=str(upload_id),
+                user_id=str(ident.user.id),
+                error=str(ex),
+            )
 
     audit_event(
         "upload.complete",
