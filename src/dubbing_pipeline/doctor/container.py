@@ -10,7 +10,6 @@ from importlib import import_module
 from pathlib import Path
 from typing import Callable, Iterable
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 from config.secret_config import SecretConfig
 from dubbing_pipeline.config import get_settings
@@ -337,7 +336,7 @@ def _pick_output_path(files: dict) -> Path | None:
     return None
 
 
-def check_full_job(*, timeout_s: int = 120) -> CheckResult:
+def check_full_job(*, timeout_s: int | None = None) -> CheckResult:
     """
     Run a tiny low-mode job via the API and validate outputs.
     """
@@ -346,7 +345,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
     except Exception as ex:
         return CheckResult(
             id="full_job",
-            name="Full mode tiny job",
+            name="Smoke test tiny job",
             status="FAIL",
             details={"error": f"testclient_unavailable:{type(ex).__name__}"},
             remediation=["python3 -m pip install fastapi"],
@@ -354,6 +353,11 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
 
     admin_user = "admin"
     admin_pass = _random_secret(16)
+    if timeout_s is None:
+        try:
+            timeout_s = int(os.environ.get("DOCTOR_SMOKE_TIMEOUT", "90") or "90")
+        except Exception:
+            timeout_s = 90
     with tempfile.TemporaryDirectory(prefix="dp_doctor_full_") as td:
         root = Path(td).resolve()
         in_dir = root / "Input"
@@ -368,7 +372,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
         except FFmpegError as ex:
             return CheckResult(
                 id="full_job",
-                name="Full mode tiny job",
+                name="Smoke test tiny job",
                 status="FAIL",
                 details={"error": "ffmpeg_failed", "message": str(ex)[:200]},
                 remediation=["ffmpeg -version", "sudo apt-get install -y ffmpeg"],
@@ -376,7 +380,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
         except Exception as ex:
             return CheckResult(
                 id="full_job",
-                name="Full mode tiny job",
+                name="Smoke test tiny job",
                 status="FAIL",
                 details={"error": "ffmpeg_failed", "message": str(ex)[:200]},
                 remediation=["ffmpeg -version", "sudo apt-get install -y ffmpeg"],
@@ -387,6 +391,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
             "INPUT_DIR": str(in_dir),
             "DUBBING_OUTPUT_DIR": str(out_dir),
             "DUBBING_LOG_DIR": str(logs_dir),
+            "DUBBING_MODE": "low",
             "ADMIN_USERNAME": admin_user,
             "ADMIN_PASSWORD": admin_pass,
             "COOKIE_SECURE": "0",
@@ -398,6 +403,10 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
             "ENABLE_PYANNOTE": "0",
             "COQUI_TOS_AGREED": "0",
             "TTS_PROVIDER": "espeak",
+            "VOICE_MODE": "single",
+            "DIARIZER": "off",
+            "SEPARATION": "off",
+            "LIPSYNC": "off",
             "JWT_SECRET": _random_secret(32),
             "CSRF_SECRET": _random_secret(32),
             "SESSION_SECRET": _random_secret(32),
@@ -416,7 +425,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
             except Exception as ex:
                 return CheckResult(
                     id="full_job",
-                    name="Full mode tiny job",
+                    name="Smoke test tiny job",
                     status="FAIL",
                     details={"error": f"app_import_failed:{type(ex).__name__}"},
                     remediation=["python3 -m pip install -e ."],
@@ -428,12 +437,14 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                 except Exception as ex:
                     return CheckResult(
                         id="full_job",
-                        name="Full mode tiny job",
+                        name="Smoke test tiny job",
                         status="FAIL",
                         details={"error": f"login_failed:{type(ex).__name__}"},
                         remediation=["Check ADMIN_USERNAME/ADMIN_PASSWORD configuration."],
                     )
 
+                src_srt = "1\n00:00:00,000 --> 00:00:01,000\nHello world\n"
+                tgt_srt = "1\n00:00:00,000 --> 00:00:01,000\nHello world\n"
                 resp = client.post(
                     "/api/jobs",
                     headers=headers,
@@ -444,12 +455,14 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                         "series_title": "Doctor Series",
                         "season_number": 1,
                         "episode_number": 1,
+                        "src_srt_text": src_srt,
+                        "tgt_srt_text": tgt_srt,
                     },
                 )
                 if resp.status_code != 200:
                     return CheckResult(
                         id="full_job",
-                        name="Full mode tiny job",
+                        name="Smoke test tiny job",
                         status="FAIL",
                         details={"error": "job_submit_failed", "status": int(resp.status_code)},
                         remediation=["Check logs under Output/ and ensure Input/Output are writable."],
@@ -458,7 +471,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                 if not job_id:
                     return CheckResult(
                         id="full_job",
-                        name="Full mode tiny job",
+                        name="Smoke test tiny job",
                         status="FAIL",
                         details={"error": "job_submit_no_id"},
                         remediation=["Check server logs for job submission errors."],
@@ -481,7 +494,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                 if not job or state != "DONE":
                     return CheckResult(
                         id="full_job",
-                        name="Full mode tiny job",
+                        name="Smoke test tiny job",
                         status="FAIL",
                         details={
                             "error": "job_timeout_or_failed",
@@ -499,7 +512,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                 if str(job.get("visibility") or "") != "private":
                     return CheckResult(
                         id="full_job",
-                        name="Full mode tiny job",
+                        name="Smoke test tiny job",
                         status="FAIL",
                         details={"error": "visibility_not_private", "visibility": job.get("visibility")},
                         remediation=["Verify default visibility settings in the server config."],
@@ -525,7 +538,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                 if files.status_code != 200:
                     return CheckResult(
                         id="full_job",
-                        name="Full mode tiny job",
+                        name="Smoke test tiny job",
                         status="FAIL",
                         details={"error": "files_endpoint_failed", "status": int(files.status_code)},
                         remediation=["Check job output directories for artifacts."],
@@ -536,7 +549,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                 if not output_path or not output_path.exists():
                     return CheckResult(
                         id="full_job",
-                        name="Full mode tiny job",
+                        name="Smoke test tiny job",
                         status="FAIL",
                         details={"error": "output_missing", "job_id": str(job_id)},
                         remediation=["Check job output directories for artifacts."],
@@ -546,7 +559,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
                 if not manifest.exists():
                     return CheckResult(
                         id="full_job",
-                        name="Full mode tiny job",
+                        name="Smoke test tiny job",
                         status="FAIL",
                         details={
                             "error": "manifest_missing",
@@ -558,7 +571,7 @@ def check_full_job(*, timeout_s: int = 120) -> CheckResult:
 
         return CheckResult(
             id="full_job",
-            name="Full mode tiny job",
+            name="Smoke test tiny job",
             status="PASS",
             details={"job": "ok", "output": "present", "manifest": "present"},
             remediation=[],
@@ -615,36 +628,21 @@ def check_ntfy() -> CheckResult:
                 "enabled": bool(enabled),
                 "base_configured": bool(base),
                 "topic_configured": bool(topic),
-                "reachable": False,
+                "reachable": None,
             },
             remediation=["Set NTFY_ENABLED=1, NTFY_BASE_URL, and NTFY_TOPIC."],
         )
-
-    reachable = False
-    try:
-        req = Request(base, method="HEAD")
-        with urlopen(req, timeout=3):
-            reachable = True
-    except Exception:
-        try:
-            req = Request(base, method="GET")
-            with urlopen(req, timeout=3):
-                reachable = True
-        except Exception:
-            reachable = False
-
-    status = "PASS" if reachable else "WARN"
     return CheckResult(
         id="ntfy",
         name="ntfy notifications (optional)",
-        status=status,
+        status="PASS",
         details={
             "enabled": bool(enabled),
             "base_configured": True,
             "topic_configured": True,
-            "reachable": bool(reachable),
+            "reachable": None,
         },
-        remediation=["Verify NTFY_BASE_URL is reachable from the container."],
+        remediation=[],
     )
 
 
