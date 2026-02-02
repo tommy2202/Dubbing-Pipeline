@@ -128,6 +128,7 @@ POST	/api/uploads/init	dubbing_pipeline.web.routes.uploads	uploads_init
 GET	/api/uploads/{upload_id}	dubbing_pipeline.web.routes.uploads	uploads_status
 POST	/api/uploads/{upload_id}/chunk	dubbing_pipeline.web.routes.uploads	uploads_chunk
 POST	/api/uploads/{upload_id}/complete	dubbing_pipeline.web.routes.uploads	uploads_complete
+GET	/api/uploads/{upload_id}/resume	dubbing_pipeline.web.routes.uploads	uploads_resume
 GET	/api/uploads/{upload_id}/status	dubbing_pipeline.web.routes.uploads	uploads_status_minimal
 POST	/api/voices/{profile_id}/accept_suggestion	dubbing_pipeline.web.routes.library	accept_voice_profile_suggestion
 POST	/api/voices/{profile_id}/consent	dubbing_pipeline.web.routes.library	update_voice_profile_consent
@@ -188,6 +189,7 @@ GET	/ui/projects	dubbing_pipeline.web.routes_ui	ui_projects
 GET	/ui/qr	dubbing_pipeline.web.routes_ui	ui_qr_redeem
 GET	/ui/settings	dubbing_pipeline.web.routes_ui	ui_settings
 GET	/ui/settings/notifications	dubbing_pipeline.web.routes_ui	ui_settings_notifications
+GET	/ui/setup	dubbing_pipeline.web.routes_ui	ui_setup
 GET	/ui/upload	dubbing_pipeline.web.routes_ui	ui_upload
 GET	/ui/voices/{series_slug}/{voice_id}	dubbing_pipeline.web.routes_ui	ui_voice_detail
 GET	/video/{job}	dubbing_pipeline.server	video

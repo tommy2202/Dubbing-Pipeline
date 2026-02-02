@@ -5,15 +5,7 @@ from pathlib import Path
 
 from dubbing_pipeline.config import get_settings
 from dubbing_pipeline.jobs.store import JobStore
-from dubbing_pipeline.ops.storage import job_storage_bytes
-
-
-def _safe_under_root(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root)
-        return True
-    except Exception:
-        return False
+from dubbing_pipeline.ops.storage import reconcile_storage_accounting
 
 
 def _input_uploads_dir(*, app_root: Path) -> Path:
@@ -52,49 +44,18 @@ def main() -> int:
     store = _resolve_store(app_root=app_root, state_dir=Path(args.state_dir).resolve() if args.state_dir else None)
     uploads_root = _input_uploads_dir(app_root=app_root or Path(get_settings().app_root).resolve())
 
-    job_entries: list[tuple[str, str, int]] = []
-    for job in store.list_all():
-        try:
-            uid = str(getattr(job, "owner_id", "") or "").strip()
-            if not uid:
-                continue
-            size = job_storage_bytes(job=job, output_root=output_root)
-            job_entries.append((str(job.id), uid, int(size)))
-        except Exception:
-            continue
-
-    upload_entries: list[tuple[str, str, int]] = []
-    for rec in store.list_uploads():
-        try:
-            if not bool(rec.get("completed")):
-                continue
-            uid = str(rec.get("owner_id") or "").strip()
-            upid = str(rec.get("id") or "").strip()
-            if not uid or not upid:
-                continue
-            final_path = Path(str(rec.get("final_path") or "")).resolve()
-            if not final_path.exists() or not _safe_under_root(final_path, uploads_root):
-                size = 0
-            else:
-                size = int(final_path.stat().st_size)
-            upload_entries.append((upid, uid, int(size)))
-        except Exception:
-            continue
-
-    totals: dict[str, int] = {}
-    for _job_id, uid, size in job_entries:
-        totals[uid] = int(totals.get(uid, 0)) + int(size)
-    for _upload_id, uid, size in upload_entries:
-        totals[uid] = int(totals.get(uid, 0)) + int(size)
+    totals = reconcile_storage_accounting(
+        store=store,
+        output_root=output_root,
+        uploads_root=uploads_root,
+        app_root=app_root,
+        dry_run=bool(args.dry_run),
+    )
 
     print(f"jobs={len(job_entries)} uploads={len(upload_entries)} users={len(totals)}")
     for uid, size in sorted(totals.items(), key=lambda it: it[1], reverse=True):
         print(f"{uid}\t{int(size)}")
 
-    if args.dry_run:
-        return 0
-
-    store.replace_storage_accounting(job_entries=job_entries, upload_entries=upload_entries)
     return 0
 
 

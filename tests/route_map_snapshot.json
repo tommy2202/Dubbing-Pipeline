@@ -521,6 +521,11 @@
   },
   {
     "method": "GET",
+    "name": "uploads_resume",
+    "path": "/api/uploads/{upload_id}/resume"
+  },
+  {
+    "method": "GET",
     "name": "uploads_status_minimal",
     "path": "/api/uploads/{upload_id}/status"
   },
@@ -773,6 +778,11 @@
     "method": "GET",
     "name": "ui_settings_notifications",
     "path": "/ui/settings/notifications"
+  },
+  {
+    "method": "GET",
+    "name": "ui_setup",
+    "path": "/ui/setup"
   },
   {
     "method": "GET",

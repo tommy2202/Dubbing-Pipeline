@@ -38,6 +38,7 @@ dubbing-web
 ```
 
 For the recommended Tailscale path, start at `docs/GOLDEN_PATH_TAILSCALE.md`.
+You can also use the in-product checklist at **/ui/setup** (see `docs/SETUP_WIZARD.md`).
 
 ## Fresh Machine Setup (GPU + Docker)
 Golden path for a clean GPU + Docker host. See also: `docs/SETUP_WIZARD.md`.

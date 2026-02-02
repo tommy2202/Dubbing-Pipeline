@@ -1,0 +1,68 @@
+{% extends "_base.html" %}
+
+{% block title %}Setup / Health • dubbing_pipeline{% endblock %}
+
+{% block content %}
+<div>
+  <h1 class="text-2xl font-semibold">Setup / Health</h1>
+  <p class="mt-1 text-sm text-slate-400">
+    Guided checklist powered by the doctor subsystem. This page never prints secrets or tokens.
+  </p>
+</div>
+
+{% for section in sections %}
+  <div class="mt-6">
+    <h2 class="text-lg font-semibold">{{ section.title }}</h2>
+    <div class="mt-3 space-y-3">
+      {% for item in section.items %}
+      <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div class="text-sm font-medium text-slate-200">{{ item.title }}</div>
+            <div class="mt-1 text-xs text-slate-500">{{ item.explanation }}</div>
+          </div>
+          <span class="rounded-full border px-3 py-1 text-xs font-semibold {{ item.status_class }}">
+            {{ item.status }}
+          </span>
+        </div>
+
+        {% if item.notes %}
+        <div class="mt-2 text-xs text-amber-200">
+          <div class="font-semibold text-amber-100">Notes</div>
+          <ul class="mt-1 list-disc pl-5">
+            {% for n in item.notes %}
+            <li>{{ n }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+
+        {% if item.status != "READY" %}
+        <div class="mt-3 text-xs text-slate-300">
+          <div class="font-semibold text-slate-200">Remediation</div>
+          {% if item.remediation %}
+          <ul class="mt-2 space-y-1">
+            {% for step in item.remediation %}
+            <li><code class="rounded bg-slate-950/50 px-2 py-1">{{ step }}</code></li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if item.docs_url %}
+          <div class="mt-2">
+            <a class="underline text-slate-300" href="{{ item.docs_url }}">Open setup docs</a>
+          </div>
+          {% endif %}
+        </div>
+        {% else %}
+        {% if item.docs_url %}
+        <div class="mt-2 text-xs text-slate-500">
+          <a class="underline" href="{{ item.docs_url }}">Docs</a>
+        </div>
+        {% endif %}
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endfor %}
+{% endblock %}
