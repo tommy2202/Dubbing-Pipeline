@@ -521,6 +521,11 @@
   },
   {
     "method": "GET",
+    "name": "uploads_resume",
+    "path": "/api/uploads/{upload_id}/resume"
+  },
+  {
+    "method": "GET",
     "name": "uploads_status_minimal",
     "path": "/api/uploads/{upload_id}/status"
   },

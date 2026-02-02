@@ -128,6 +128,7 @@ POST	/api/uploads/init	dubbing_pipeline.web.routes.uploads	uploads_init
 GET	/api/uploads/{upload_id}	dubbing_pipeline.web.routes.uploads	uploads_status
 POST	/api/uploads/{upload_id}/chunk	dubbing_pipeline.web.routes.uploads	uploads_chunk
 POST	/api/uploads/{upload_id}/complete	dubbing_pipeline.web.routes.uploads	uploads_complete
+GET	/api/uploads/{upload_id}/resume	dubbing_pipeline.web.routes.uploads	uploads_resume
 GET	/api/uploads/{upload_id}/status	dubbing_pipeline.web.routes.uploads	uploads_status_minimal
 POST	/api/voices/{profile_id}/accept_suggestion	dubbing_pipeline.web.routes.library	accept_voice_profile_suggestion
 POST	/api/voices/{profile_id}/consent	dubbing_pipeline.web.routes.library	update_voice_profile_consent

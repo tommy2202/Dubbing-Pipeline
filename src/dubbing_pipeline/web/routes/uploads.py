@@ -36,6 +36,33 @@ from dubbing_pipeline.web.routes.jobs_common import (
 
 router = secure_router()
 
+def _total_chunks(total_bytes: int, chunk_bytes: int) -> int:
+    if chunk_bytes <= 0:
+        return 0
+    return int((int(total_bytes) + int(chunk_bytes) - 1) // int(chunk_bytes))
+
+
+def _missing_chunks(total_bytes: int, chunk_bytes: int, received: dict[str, Any]) -> list[int]:
+    total_chunks = _total_chunks(total_bytes, chunk_bytes)
+    if total_chunks <= 0:
+        return []
+    missing: list[int] = []
+    for i in range(total_chunks):
+        if str(i) not in received:
+            missing.append(int(i))
+    return missing
+
+
+def _expected_chunk_size(*, idx: int, total_bytes: int, chunk_bytes: int) -> int:
+    total_chunks = _total_chunks(total_bytes, chunk_bytes)
+    if total_chunks <= 0:
+        return 0
+    if idx < 0 or idx >= total_chunks:
+        return 0
+    if idx < total_chunks - 1:
+        return int(chunk_bytes)
+    return max(0, int(total_bytes) - int(idx) * int(chunk_bytes))
+
 
 @router.post("/api/uploads/init")
 async def uploads_init(
@@ -79,19 +106,58 @@ async def uploads_init(
         total = 0
     if total <= 0:
         raise HTTPException(status_code=400, detail="total_bytes required")
-    await policy.require_quota_for_upload(
-        request=request,
-        user=ident.user,
-        bytes=int(total),
-        action="upload:init",
-    )
     mime = str(body.get("mime") or "").lower().strip()
     if mime and mime not in _ALLOWED_UPLOAD_MIME:
         raise HTTPException(status_code=400, detail=f"Unsupported upload content-type: {mime}")
 
     up_dir = _input_uploads_dir()
     up_dir.mkdir(parents=True, exist_ok=True)
+    requested_upload_id = str(body.get("upload_id") or "").strip()
     upload_id = _new_short_id("up_")
+    if requested_upload_id:
+        upload_id = requested_upload_id
+        rec_existing = store.get_upload(upload_id)
+        if rec_existing is None:
+            raise HTTPException(status_code=404, detail="upload_id not found")
+        try:
+            rec_existing = require_upload_access(store=store, ident=ident, upload=rec_existing)
+        except HTTPException:
+            raise
+        except Exception as ex:
+            raise HTTPException(status_code=403, detail="Forbidden") from ex
+        if int(rec_existing.get("total_bytes") or 0) != int(total):
+            raise HTTPException(status_code=409, detail="upload_id total_bytes mismatch")
+        if str(rec_existing.get("filename") or "") != str(filename):
+            raise HTTPException(status_code=409, detail="upload_id filename mismatch")
+        chunk_bytes_existing = int(rec_existing.get("chunk_bytes") or 0)
+        total_chunks = _total_chunks(total, chunk_bytes_existing)
+        received = rec_existing.get("received") if isinstance(rec_existing.get("received"), dict) else {}
+        missing = _missing_chunks(total, chunk_bytes_existing, received)
+        store.update_upload(upload_id, updated_at=_now_iso())
+        logger.info(
+            "upload_init_resume",
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            total_bytes=int(total),
+            chunk_bytes=int(chunk_bytes_existing),
+            missing_chunks=len(missing),
+            completed=bool(rec_existing.get("completed")),
+        )
+        return {
+            "upload_id": upload_id,
+            "chunk_bytes": int(chunk_bytes_existing),
+            "total_chunks": int(total_chunks),
+            "completed": bool(rec_existing.get("completed")),
+            "missing_chunks": missing,
+            "max_upload_mb": int(limits.max_upload_mb),
+            "max_upload_bytes": int((await policy.quota_snapshot(request=request, user=ident.user)).max_upload_bytes or 0),
+        }
+    await policy.require_quota_for_upload(
+        request=request,
+        user=ident.user,
+        bytes=int(total),
+        action="upload:init",
+    )
     part_path = (up_dir / f"{upload_id}.part").resolve()
     final_name = f"{upload_id}_{filename}"
     final_path = (up_dir / final_name).resolve()
@@ -104,6 +170,10 @@ async def uploads_init(
 
     chunk_bytes = int(get_settings().upload_chunk_bytes)
     chunk_bytes = max(256 * 1024, min(chunk_bytes, 20 * 1024 * 1024))
+    total_chunks = _total_chunks(total, chunk_bytes)
+    expected_sha = str(body.get("expected_sha256") or "").strip().lower()
+    if expected_sha and not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+        raise HTTPException(status_code=400, detail="Invalid expected_sha256")
     rec = {
         "id": upload_id,
         "owner_id": ident.user.id,
@@ -111,8 +181,11 @@ async def uploads_init(
         "orig_stem": Path(filename).stem,
         "total_bytes": int(total),
         "chunk_bytes": int(chunk_bytes),
+        "total_chunks": int(total_chunks),
         "part_path": str(part_path),
         "final_path": str(final_path),
+        "expected_sha256": expected_sha or "",
+        "final_sha256": "",
         "received": {},  # idx -> {offset,size,sha256}
         "received_bytes": 0,
         "completed": False,
@@ -121,6 +194,15 @@ async def uploads_init(
         "updated_at": _now_iso(),
     }
     store.put_upload(upload_id, rec)
+    logger.info(
+        "upload_init",
+        upload_id=str(upload_id),
+        user_id=str(ident.user.id),
+        total_bytes=int(total),
+        chunk_bytes=int(chunk_bytes),
+        total_chunks=int(total_chunks),
+        filename=str(filename),
+    )
     audit_event(
         "upload.init",
         request=request,
@@ -131,6 +213,7 @@ async def uploads_init(
     return {
         "upload_id": upload_id,
         "chunk_bytes": int(chunk_bytes),
+        "total_chunks": int(total_chunks),
         "max_upload_mb": int(limits.max_upload_mb),
         "max_upload_bytes": int(snapshot.max_upload_bytes or 0),
     }
@@ -165,7 +248,7 @@ async def uploads_status_minimal(
     chunk_bytes = int(rec.get("chunk_bytes") or 0)
     received = rec.get("received") if isinstance(rec.get("received"), dict) else {}
     chunks_received = int(len(received))
-    total_chunks = int((total_bytes + chunk_bytes - 1) // chunk_bytes) if chunk_bytes > 0 else 0
+    total_chunks = _total_chunks(total_bytes, chunk_bytes)
     next_expected = 0
     if total_chunks > 0:
         for i in range(total_chunks):
@@ -195,6 +278,35 @@ async def uploads_status_minimal(
         "total_bytes": int(total_bytes),
         "chunk_bytes": int(chunk_bytes),
         "total_chunks": int(total_chunks),
+    }
+
+
+@router.get("/api/uploads/{upload_id}/resume")
+async def uploads_resume(
+    request: Request, upload_id: str, ident: Identity = Depends(require_scope("read:job"))
+) -> dict[str, Any]:
+    """
+    Return missing chunks for a resumable upload.
+    """
+    store = _get_store(request)
+    rec = require_upload_access(store=store, ident=ident, upload_id=upload_id)
+    total_bytes = int(rec.get("total_bytes") or 0)
+    chunk_bytes = int(rec.get("chunk_bytes") or 0)
+    received = rec.get("received") if isinstance(rec.get("received"), dict) else {}
+    missing = _missing_chunks(total_bytes, chunk_bytes, received)
+    logger.info(
+        "upload_resume",
+        upload_id=str(upload_id),
+        user_id=str(ident.user.id),
+        missing_chunks=int(len(missing)),
+    )
+    return {
+        "upload_id": str(rec.get("id") or upload_id),
+        "total_bytes": int(total_bytes),
+        "chunk_bytes": int(chunk_bytes),
+        "total_chunks": int(_total_chunks(total_bytes, chunk_bytes)),
+        "missing_chunks": missing,
+        "completed": bool(rec.get("completed")),
     }
 
 
@@ -269,6 +381,36 @@ async def uploads_chunk(
     idx = int(index)
     if idx < 0:
         raise HTTPException(status_code=400, detail="index out of bounds")
+    chunk_bytes = int(rec.get("chunk_bytes") or 0)
+    total_chunks = _total_chunks(total, chunk_bytes)
+    if total_chunks <= 0:
+        raise HTTPException(status_code=400, detail="Invalid chunk size")
+    if idx >= total_chunks:
+        raise HTTPException(status_code=400, detail="index out of bounds")
+    expected_offset = int(idx) * int(chunk_bytes)
+    if int(offset) != int(expected_offset):
+        logger.warning(
+            "upload_chunk_offset_mismatch",
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            index=int(idx),
+            offset=int(offset),
+            expected_offset=int(expected_offset),
+        )
+        raise HTTPException(status_code=409, detail="chunk offset mismatch")
+    expected_size = _expected_chunk_size(idx=idx, total_bytes=total, chunk_bytes=chunk_bytes)
+    if expected_size <= 0:
+        raise HTTPException(status_code=400, detail="Invalid chunk size")
+    if int(len(body)) != int(expected_size):
+        logger.warning(
+            "upload_chunk_size_mismatch",
+            upload_id=str(upload_id),
+            user_id=str(ident.user.id),
+            index=int(idx),
+            size=int(len(body)),
+            expected_size=int(expected_size),
+        )
+        raise HTTPException(status_code=409, detail="chunk size mismatch")
 
     async with _upload_lock(upload_id):
         # reload inside lock
@@ -283,6 +425,7 @@ async def uploads_chunk(
             isinstance(prev, dict)
             and str(prev.get("sha256") or "") == sha
             and int(prev.get("size") or 0) == len(body)
+            and int(prev.get("offset") or 0) == int(offset)
         ):
             # already accepted
             return {
@@ -298,8 +441,7 @@ async def uploads_chunk(
             f.write(body)
 
         received[str(idx)] = {"offset": int(offset), "size": int(len(body)), "sha256": sha}
-        received_bytes = int(rec2.get("received_bytes") or 0)
-        received_bytes += int(len(body))
+        received_bytes = sum(int(v.get("size") or 0) for v in received.values() if isinstance(v, dict))
         store.update_upload(
             upload_id,
             received=received,
@@ -315,6 +457,14 @@ async def uploads_chunk(
             user_id=ident.user.id,
             meta={"upload_id": upload_id, "index": int(idx), "size": int(len(body))},
         )
+    logger.info(
+        "upload_chunk_received",
+        upload_id=str(upload_id),
+        user_id=str(ident.user.id),
+        index=int(idx),
+        size=int(len(body)),
+        received_bytes=int(received_bytes),
+    )
     return {"ok": True, "received_bytes": int(received_bytes)}
 
 
@@ -368,22 +518,54 @@ async def uploads_complete(
         if total <= 0 or not part_path.exists():
             raise HTTPException(status_code=400, detail="Upload missing data")
 
+        received = rec2.get("received") if isinstance(rec2.get("received"), dict) else {}
+        missing = _missing_chunks(total, int(rec2.get("chunk_bytes") or 0), received)
+        if missing:
+            logger.warning(
+                "upload_incomplete_missing_chunks",
+                upload_id=str(upload_id),
+                user_id=str(ident.user.id),
+                missing_chunks=int(len(missing)),
+            )
+            preview = ", ".join(str(i) for i in missing[:10])
+            raise HTTPException(
+                status_code=400,
+                detail=f"Upload incomplete (missing {len(missing)} chunks: {preview})",
+            )
+
         # Verify file size
         st = part_path.stat()
         if int(st.st_size) != int(total):
             raise HTTPException(status_code=400, detail="Upload incomplete (size mismatch)")
 
-        if final_sha:
-            # Stream hash (avoid loading into memory)
-            h = hashlib.sha256()
-            with part_path.open("rb") as f:
-                while True:
-                    buf = f.read(1024 * 1024)
-                    if not buf:
-                        break
-                    h.update(buf)
-            if h.hexdigest() != final_sha:
-                raise HTTPException(status_code=400, detail="Final checksum mismatch")
+        # Stream hash (avoid loading into memory)
+        h = hashlib.sha256()
+        with part_path.open("rb") as f:
+            while True:
+                buf = f.read(1024 * 1024)
+                if not buf:
+                    break
+                h.update(buf)
+        final_hex = h.hexdigest()
+        expected_sha = str(rec2.get("expected_sha256") or "").strip().lower()
+        if final_sha and final_hex != final_sha:
+            logger.warning(
+                "upload_final_checksum_mismatch",
+                upload_id=str(upload_id),
+                user_id=str(ident.user.id),
+                expected=str(final_sha),
+                actual=str(final_hex),
+            )
+            raise HTTPException(status_code=400, detail="Final checksum mismatch")
+        if expected_sha and final_hex != expected_sha:
+            logger.warning(
+                "upload_expected_checksum_mismatch",
+                upload_id=str(upload_id),
+                user_id=str(ident.user.id),
+                expected=str(expected_sha),
+                actual=str(final_hex),
+            )
+            raise HTTPException(status_code=400, detail="Final checksum mismatch")
 
         final_path.parent.mkdir(parents=True, exist_ok=True)
         part_path.replace(final_path)
@@ -428,10 +610,17 @@ async def uploads_complete(
                 completed=True,
                 final_path=str(final_path),
                 encrypted=True,
+                final_sha256=str(final_hex),
                 updated_at=_now_iso(),
             )
         else:
-            store.update_upload(upload_id, completed=True, updated_at=_now_iso())
+            store.update_upload(
+                upload_id,
+                completed=True,
+                final_path=str(final_path),
+                final_sha256=str(final_hex),
+                updated_at=_now_iso(),
+            )
 
         # Storage accounting (best-effort, do not fail upload completion).
         try:
@@ -453,7 +642,14 @@ async def uploads_complete(
         user_id=ident.user.id,
         meta={"upload_id": upload_id, "final_path": str(final_path.name)},
     )
-    return {"ok": True, "video_path": str(final_path)}
+    logger.info(
+        "upload_complete",
+        upload_id=str(upload_id),
+        user_id=str(ident.user.id),
+        final_path=str(final_path.name),
+        total_bytes=int(total),
+    )
+    return {"ok": True, "video_path": str(final_path), "final_sha256": str(final_hex)}
 
 
 @router.get("/api/files")
