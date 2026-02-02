@@ -11,11 +11,16 @@ from starlette.templating import Jinja2Templates
 from dubbing_pipeline.api.access import require_job_access, require_library_access
 from dubbing_pipeline.api.deps import current_identity
 from dubbing_pipeline.api.routes_settings import UserSettingsStore
+from dubbing_pipeline.api.routes_system import _can_import, _whisper_model_cached
 from dubbing_pipeline.api.security import issue_csrf_token
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.doctor import container as doctor_container
+from dubbing_pipeline.doctor import models as doctor_models
+from dubbing_pipeline.doctor import wizard as doctor_wizard
 from dubbing_pipeline.jobs.models import Job
 from dubbing_pipeline.library import queries
 from dubbing_pipeline.library.paths import get_job_output_root
+from dubbing_pipeline.utils.doctor_types import CheckResult
 from dubbing_pipeline.utils.io import read_json
 from dubbing_pipeline.ops import audit
 
@@ -78,6 +83,343 @@ def _render(request: Request, template: str, ctx: dict[str, Any]) -> HTMLRespons
     resp = templates.TemplateResponse(request, template, context)
     _with_csrf_cookie(resp, csrf)
     return resp
+
+
+def _dedupe_steps(steps: list[str]) -> list[str]:
+    out: list[str] = []
+    seen = set()
+    for step in steps:
+        s = str(step or "").strip()
+        if not s or s in seen:
+            continue
+        out.append(s)
+        seen.add(s)
+    return out
+
+
+def _normalize_enable_steps(steps: list[str]) -> list[str]:
+    out: list[str] = []
+    for step in steps:
+        raw = str(step or "").strip()
+        if not raw:
+            continue
+        if raw.lower().startswith("set ") and "=" in raw:
+            rest = raw[4:].strip().rstrip(".")
+            out.append(f"export {rest}")
+        else:
+            out.append(raw)
+    return out
+
+
+def _collect_steps(res: CheckResult) -> list[str]:
+    steps: list[str] = []
+    if isinstance(res.remediation, list):
+        steps.extend([str(s) for s in res.remediation])
+    details = res.details if isinstance(res.details, dict) else {}
+    enable_steps = details.get("enable_steps")
+    if isinstance(enable_steps, list):
+        steps.extend(_normalize_enable_steps(enable_steps))
+    install_steps = details.get("install_steps")
+    if isinstance(install_steps, dict):
+        if "linux" in install_steps and isinstance(install_steps["linux"], list):
+            steps.extend([str(s) for s in install_steps["linux"]])
+        else:
+            for v in install_steps.values():
+                if isinstance(v, list):
+                    steps.extend([str(s) for s in v])
+                    break
+    elif isinstance(install_steps, list):
+        steps.extend([str(s) for s in install_steps])
+    return _dedupe_steps(steps)
+
+
+def _status_class(status: str) -> str:
+    s = str(status).upper()
+    if s == "READY":
+        return "border-emerald-600 text-emerald-200 bg-emerald-950/30"
+    if s == "BROKEN":
+        return "border-red-700 text-red-200 bg-red-950/30"
+    return "border-amber-700 text-amber-200 bg-amber-950/30"
+
+
+def _aggregate_checks(
+    checks: list[CheckResult],
+    *,
+    match_fn,
+    agg_id: str,
+    name: str,
+) -> CheckResult:
+    selected = [c for c in checks if match_fn(c)]
+    if not selected:
+        return CheckResult(
+            id=agg_id,
+            name=name,
+            status="FAIL",
+            details={"error": "missing_checks"},
+            remediation=[],
+        )
+    statuses = {c.status for c in selected}
+    if "FAIL" in statuses:
+        status = "FAIL"
+    elif "WARN" in statuses:
+        status = "WARN"
+    else:
+        status = "PASS"
+    remediation: list[str] = []
+    for c in selected:
+        remediation.extend(_collect_steps(c))
+    return CheckResult(
+        id=agg_id,
+        name=name,
+        status=status,
+        details={"checks": [c.id for c in selected]},
+        remediation=_dedupe_steps(remediation),
+    )
+
+
+def _check_whisper_large_v3() -> CheckResult:
+    installed = bool(_can_import("whisper"))
+    cached = bool(_whisper_model_cached("large-v3"))
+    status = "PASS" if (installed and cached) else "WARN"
+    remediation: list[str] = []
+    if not installed:
+        remediation.append("python3 -m pip install openai-whisper")
+    if installed and not cached:
+        remediation.append("python3 -c \"import whisper; whisper.load_model('large-v3')\"")
+    return CheckResult(
+        id="whisper_large_v3",
+        name="Whisper large-v3 cached",
+        status=status,
+        details={"installed": bool(installed), "cached": bool(cached)},
+        remediation=remediation,
+    )
+
+
+def _build_setup_sections() -> list[dict[str, Any]]:
+    feature_checks = [fn() for fn in doctor_wizard.build_feature_import_checks()]
+    feature_by_id = {c.id: c for c in feature_checks}
+
+    low_model_checks = [fn() for fn in doctor_models.build_model_requirement_checks(mode="low")]
+    high_model_checks = [fn() for fn in doctor_models.build_model_requirement_checks(mode="high")]
+
+    asr_low = _aggregate_checks(
+        low_model_checks,
+        match_fn=lambda c: c.id == "whisper_pkg" or c.id.startswith("whisper_weights_"),
+        agg_id="asr_low",
+        name="ASR low-mode (Whisper)",
+    )
+    xtts = _aggregate_checks(
+        high_model_checks,
+        match_fn=lambda c: c.id in {"xtts_prereqs", "xtts_weights"},
+        agg_id="xtts_voice_cloning",
+        name="XTTS voice cloning",
+    )
+
+    tts = feature_by_id.get("tts_coqui", CheckResult(id="tts_coqui", name="TTS package", status="FAIL"))
+    tts_details = tts.details if isinstance(tts.details, dict) else {}
+    tts_enabled = bool(tts_details.get("enabled", True))
+    tts_installed = bool(tts_details.get("installed", False))
+
+    diarization = feature_by_id.get("diarization_pyannote") or feature_by_id.get("diarization_speechbrain")
+    demucs = feature_by_id.get("demucs_pkg")
+    wav2lip = feature_by_id.get("wav2lip")
+
+    core_items: list[dict[str, Any]] = []
+    optional_items: list[dict[str, Any]] = []
+
+    def add_item(
+        *,
+        target: list[dict[str, Any]],
+        title: str,
+        status: str,
+        explanation: str,
+        remediation: list[str],
+        docs_anchor: str,
+        notes: list[str] | None = None,
+    ) -> None:
+        target.append(
+            {
+                "title": title,
+                "status": status,
+                "status_class": _status_class(status),
+                "explanation": explanation,
+                "remediation": _dedupe_steps(remediation),
+                "docs_url": f"/docs/SETUP_WIZARD.md#{docs_anchor}" if docs_anchor else "",
+                "notes": [str(n) for n in (notes or []) if str(n).strip()],
+            }
+        )
+
+    ffmpeg = doctor_container.check_ffmpeg()
+    add_item(
+        target=core_items,
+        title="ffmpeg",
+        status="READY" if ffmpeg.status == "PASS" else "MISSING",
+        explanation="Enables audio/video extraction, muxing, and previews.",
+        remediation=_collect_steps(ffmpeg),
+        docs_anchor="core-ffmpeg",
+    )
+
+    add_item(
+        target=core_items,
+        title="ASR low-mode",
+        status="READY" if asr_low.status == "PASS" else "MISSING",
+        explanation="Enables transcription in low mode (ASR).",
+        remediation=_collect_steps(asr_low),
+        docs_anchor="core-asr-low",
+    )
+
+    tts_status = "READY" if (tts_installed and tts_enabled) else "MISSING"
+    add_item(
+        target=core_items,
+        title="Basic TTS",
+        status=tts_status,
+        explanation="Enables basic text-to-speech output.",
+        remediation=_collect_steps(tts),
+        docs_anchor="core-tts-basic",
+    )
+
+    writable_dirs = doctor_container.check_writable_dirs()
+    add_item(
+        target=core_items,
+        title="Storage dirs writable",
+        status="READY" if writable_dirs.status == "PASS" else "BROKEN",
+        explanation="Allows uploads and outputs to be written to disk.",
+        remediation=_collect_steps(writable_dirs),
+        docs_anchor="core-storage",
+    )
+
+    secrets = doctor_wizard.check_security_secrets()
+    add_item(
+        target=core_items,
+        title="Auth/CSRF configured",
+        status="READY" if secrets.status == "PASS" else "MISSING",
+        explanation="Enables secure sessions, CSRF protection, and API auth.",
+        remediation=_collect_steps(secrets),
+        docs_anchor="core-auth-csrf",
+    )
+
+    remote_access = doctor_wizard.check_remote_access_posture()
+    remote_notes = []
+    if isinstance(remote_access.details, dict):
+        warnings = remote_access.details.get("warnings") or []
+        if isinstance(warnings, list):
+            remote_notes = [str(w) for w in warnings if str(w).strip()]
+    add_item(
+        target=core_items,
+        title="Remote access mode ok",
+        status="READY" if remote_access.status == "PASS" else "MISSING",
+        explanation="Ensures remote access posture matches your chosen mode.",
+        remediation=_collect_steps(remote_access),
+        docs_anchor="core-remote-access",
+        notes=remote_notes,
+    )
+
+    gpu = doctor_container.check_torch_cuda(require_gpu=False)
+    add_item(
+        target=optional_items,
+        title="GPU acceleration",
+        status="READY" if gpu.status == "PASS" else "MISSING",
+        explanation="Faster transcription and TTS when CUDA is available.",
+        remediation=_collect_steps(gpu),
+        docs_anchor="opt-gpu",
+    )
+
+    whisper_large = _check_whisper_large_v3()
+    add_item(
+        target=optional_items,
+        title="Whisper large-v3",
+        status="READY" if whisper_large.status == "PASS" else "MISSING",
+        explanation="Higher-accuracy ASR model for best transcription quality.",
+        remediation=_collect_steps(whisper_large),
+        docs_anchor="opt-whisper-large-v3",
+    )
+
+    add_item(
+        target=optional_items,
+        title="XTTS voice cloning",
+        status="READY" if xtts.status == "PASS" else "MISSING",
+        explanation="Voice cloning for higher-fidelity TTS.",
+        remediation=_collect_steps(xtts),
+        docs_anchor="opt-xtts",
+    )
+
+    if diarization is not None:
+        diar_details = diarization.details if isinstance(diarization.details, dict) else {}
+        diar_installed = bool(diar_details.get("installed", False))
+        diar_status = "READY" if diar_installed else "MISSING"
+        add_item(
+            target=optional_items,
+            title="Diarization",
+            status=diar_status,
+            explanation="Speaker separation for multi-speaker content.",
+            remediation=_collect_steps(diarization),
+            docs_anchor="opt-diarization",
+        )
+
+    if demucs is not None:
+        demucs_details = demucs.details if isinstance(demucs.details, dict) else {}
+        demucs_installed = bool(demucs_details.get("installed", False))
+        demucs_status = "READY" if demucs_installed else "MISSING"
+        add_item(
+            target=optional_items,
+            title="Vocals separation",
+            status=demucs_status,
+            explanation="Music/voice separation for cleaner mixes.",
+            remediation=_collect_steps(demucs),
+            docs_anchor="opt-separation",
+        )
+
+    if wav2lip is not None:
+        wav_details = wav2lip.details if isinstance(wav2lip.details, dict) else {}
+        wav_available = bool(wav_details.get("available", False))
+        wav_status = "READY" if wav_available else "MISSING"
+        add_item(
+            target=optional_items,
+            title="Lipsync plugin (Wav2Lip)",
+            status=wav_status,
+            explanation="Optional lip-sync enhancement for video outputs.",
+            remediation=_collect_steps(wav2lip),
+            docs_anchor="opt-lipsync",
+        )
+
+    redis = doctor_wizard.check_queue_redis()
+    redis_details = redis.details if isinstance(redis.details, dict) else {}
+    redis_configured = bool(redis_details.get("configured", False))
+    redis_reachable = bool(redis_details.get("reachable", False))
+    if redis.status == "PASS" or (not redis_configured):
+        redis_status = "READY" if redis_reachable else "MISSING"
+    else:
+        redis_status = "BROKEN"
+    add_item(
+        target=optional_items,
+        title="Redis queue",
+        status=redis_status,
+        explanation="Shared queue backend for multi-worker deployments.",
+        remediation=_collect_steps(redis),
+        docs_anchor="opt-redis",
+    )
+
+    turn = doctor_container.check_turn()
+    turn_details = turn.details if isinstance(turn.details, dict) else {}
+    turn_configured = bool(turn_details.get("configured", False))
+    turn_ok = bool(turn_details.get("url_format_ok", False)) and bool(turn_details.get("creds_set", False))
+    if not turn_configured:
+        turn_status = "MISSING"
+    else:
+        turn_status = "READY" if turn_ok else "BROKEN"
+    add_item(
+        target=optional_items,
+        title="TURN/WebRTC relay",
+        status=turn_status,
+        explanation="Relay for WebRTC when direct peer connections fail.",
+        remediation=_collect_steps(turn),
+        docs_anchor="opt-turn",
+    )
+
+    return [
+        {"title": "Core Required", "items": core_items},
+        {"title": "Optional", "items": optional_items},
+    ]
 
 
 def _audit_ui_page_view(request: Request, *, user_id: str, page: str, meta: dict[str, Any] | None = None) -> None:
@@ -522,6 +864,23 @@ async def ui_settings(request: Request) -> HTMLResponse:
                     ),
                 },
             },
+        },
+    )
+
+
+@router.get("/setup")
+async def ui_setup(request: Request) -> HTMLResponse:
+    user = _current_user_optional(request)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=302)
+    sections = _build_setup_sections()
+    with suppress(Exception):
+        _audit_ui_page_view(request, user_id=str(user.id), page="setup")
+    return _render(
+        request,
+        "setup.html",
+        {
+            "sections": sections,
         },
     )
 

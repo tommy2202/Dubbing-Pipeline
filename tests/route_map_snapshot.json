@@ -781,6 +781,11 @@
   },
   {
     "method": "GET",
+    "name": "ui_setup",
+    "path": "/ui/setup"
+  },
+  {
+    "method": "GET",
     "name": "ui_upload",
     "path": "/ui/upload"
   },

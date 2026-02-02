@@ -189,6 +189,7 @@ GET	/ui/projects	dubbing_pipeline.web.routes_ui	ui_projects
 GET	/ui/qr	dubbing_pipeline.web.routes_ui	ui_qr_redeem
 GET	/ui/settings	dubbing_pipeline.web.routes_ui	ui_settings
 GET	/ui/settings/notifications	dubbing_pipeline.web.routes_ui	ui_settings_notifications
+GET	/ui/setup	dubbing_pipeline.web.routes_ui	ui_setup
 GET	/ui/upload	dubbing_pipeline.web.routes_ui	ui_upload
 GET	/ui/voices/{series_slug}/{voice_id}	dubbing_pipeline.web.routes_ui	ui_voice_detail
 GET	/video/{job}	dubbing_pipeline.server	video
