@@ -117,6 +117,12 @@
             Contrast
           </button>
 
+          {% if not (user and user.role and user.role.value == "admin") %}
+          <a class="rounded border border-slate-700 bg-slate-950/60 px-3 py-2 text-xs text-slate-200 hover:text-white"
+             href="/ui/login">Admin Login</a>
+          {% endif %}
+
+          {% if user %}
           <a
             class="text-slate-200 hover:text-white"
             href="#"
@@ -126,6 +132,7 @@
                 .finally(() => window.location='/ui/login');
             "
           >Logout</a>
+          {% endif %}
         </nav>
       </header>
 

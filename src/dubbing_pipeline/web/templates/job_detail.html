@@ -84,7 +84,10 @@
                    :disabled="visibilityUpdating" />
             <span>Share to library</span>
           </label>
-          <div class="mt-1 text-xs text-slate-500">Shared jobs are visible to other users.</div>
+          <div class="mt-1 text-xs text-slate-500">
+            Shared = visible to all invited users (all authenticated users). There are no per-user shares in this version.
+          </div>
+          <div class="mt-1 text-xs text-slate-500">Sharing does not require admin approval.</div>
         </div>
         <div class="mt-3" x-show="job && job.runtime && job.runtime.effective_settings" x-cloak>
           <div class="text-sm text-slate-300">Effective settings (summary)</div>

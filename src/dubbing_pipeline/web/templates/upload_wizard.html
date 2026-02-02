@@ -3,16 +3,10 @@
 {% block title %}Upload • dubbing_pipeline{% endblock %}
 
 {% block content %}
-<div class="flex items-start justify-between gap-4">
-  <div>
-    <h1 class="text-2xl font-semibold">Upload Wizard</h1>
-    <p class="mt-1 text-sm text-slate-400">3 steps: File → Settings → Voice. Supports batch mode.</p>
-  </div>
-</div>
-
 <div
   class="mt-6"
   x-data="{
+    uiMode: (function () { try { return localStorage.getItem('ui_mode') || 'simple'; } catch (e) { return 'simple'; } })(),
     step: 1,
     batch: false,
     files: [],
@@ -51,6 +45,62 @@
     uploadChunkTotal: 0,
     uploadResumeMsg: '',
     uploadRetryMsg: '',
+    lastJobId: (function () { try { return localStorage.getItem('last_job_id') || ''; } catch (e) { return ''; } })(),
+    jobState: '',
+    jobProgress: 0,
+    jobMessage: '',
+    jobOutputUrl: '',
+    jobDetailUrl: '',
+    jobError: '',
+    pollHandle: null,
+    setMode(mode) {
+      const v = (mode === 'advanced') ? 'advanced' : 'simple';
+      this.uiMode = v;
+      try { localStorage.setItem('ui_mode', v); } catch (e) {}
+    },
+    setLastJob(id) {
+      const v = String(id || '').trim();
+      this.lastJobId = v;
+      try {
+        if (v) { localStorage.setItem('last_job_id', v); } else { localStorage.removeItem('last_job_id'); }
+      } catch (e) {}
+      if (v) this.startJobPoll();
+    },
+    async startJobPoll() {
+      if (!this.lastJobId) return;
+      const self = this;
+      if (self.pollHandle) { clearInterval(self.pollHandle); self.pollHandle = null; }
+      async function fetchJob() {
+        try {
+          const r = await fetch('/api/jobs/' + encodeURIComponent(self.lastJobId), { credentials: 'include' });
+          if (!r.ok) {
+            const d = await r.json().catch(() => ({}));
+            self.jobError = d.detail || d.error || 'Unable to load job status.';
+            return;
+          }
+          const d = await r.json();
+          self.jobState = String(d.state || '');
+          self.jobProgress = Number(d.progress || 0);
+          self.jobMessage = String(d.message || '');
+          self.jobDetailUrl = '/ui/jobs/' + encodeURIComponent(self.lastJobId);
+          if (d.player_job) {
+            self.jobOutputUrl = '/video/' + encodeURIComponent(d.player_job);
+          } else {
+            self.jobOutputUrl = '';
+          }
+          if (['DONE', 'FAILED', 'CANCELED'].includes(self.jobState)) {
+            if (self.pollHandle) { clearInterval(self.pollHandle); self.pollHandle = null; }
+          }
+        } catch (e) {
+          self.jobError = 'Unable to load job status. Please check your connection and retry.';
+        }
+      }
+      await fetchJob();
+      self.pollHandle = setInterval(fetchJob, 5000);
+    },
+    init() {
+      if (this.lastJobId) this.startJobPoll();
+    },
     setFile(f) {
       this.file = f || null;
       this.fileName = f ? (f.name || '') : '';
@@ -89,6 +139,7 @@
     }
   }"
   @job-submit-error.window="error = ($event.detail && $event.detail.message) ? $event.detail.message : 'Job submit failed'"
+  @job-created.window="setLastJob(($event.detail && $event.detail.id) ? $event.detail.id : '')"
   @upload-state.window="
     const d = $event.detail || {};
     if (d.reset) {
@@ -122,7 +173,32 @@
     uploading = false;
   "
 >
-  <div class="mb-4 flex items-center gap-2 text-sm">
+  <div class="flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold">Upload</h1>
+      <p class="mt-1 text-sm text-slate-400" x-show="uiMode==='simple'">
+        Simple mode: upload and start a job in one screen.
+      </p>
+      <p class="mt-1 text-sm text-slate-400" x-show="uiMode==='advanced'">
+        Advanced mode: 3 steps — File → Settings → Voice. Supports batch mode.
+      </p>
+    </div>
+    <div class="flex items-center gap-2 text-xs">
+      <span class="text-slate-400">UI mode</span>
+      <div class="inline-flex rounded-lg border border-slate-800 bg-slate-950/60 p-1">
+        <button type="button"
+                class="rounded-md px-3 py-1"
+                :class="uiMode==='simple' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'"
+                @click="setMode('simple')">Simple</button>
+        <button type="button"
+                class="rounded-md px-3 py-1"
+                :class="uiMode==='advanced' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'"
+                @click="setMode('advanced')">Advanced</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="mb-4 flex items-center gap-2 text-sm" x-show="uiMode==='advanced'" x-cloak>
     <div class="flex items-center gap-2">
       <div :class="step===1 ? 'bg-indigo-600' : 'bg-slate-800'" class="h-6 w-6 rounded-full flex items-center justify-center text-xs">1</div>
       <div class="text-slate-300">File</div>
@@ -150,9 +226,10 @@
          x-show="error" x-cloak x-text="error"></div>
 
     <!-- Step 1 -->
-    <div x-show="step===1">
-      <div class="text-sm text-slate-300">Step 1 — Video file</div>
-      <div class="mt-2 flex items-center gap-2 text-sm text-slate-300">
+    <div x-show="step===1 || uiMode==='simple'">
+      <div class="text-sm text-slate-300" x-show="uiMode==='advanced'">Step 1 — Video file</div>
+      <div class="text-sm text-slate-300" x-show="uiMode==='simple'">Upload video (required)</div>
+      <div class="mt-2 flex items-center gap-2 text-sm text-slate-300" x-show="uiMode==='advanced'" x-cloak>
         <input id="batchMode" type="checkbox" class="h-5 w-5" x-model="batch" @change="setFiles([]); setFile(null)" />
         <label for="batchMode">Batch mode (multiple files)</label>
       </div>
@@ -242,6 +319,29 @@
           <div class="mt-2 text-xs text-red-200" x-show="uploadError" x-cloak x-text="uploadError"></div>
         </div>
 
+      <!-- Job progress (Simple mode) -->
+      <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/30 p-4"
+           x-show="uiMode==='simple' && lastJobId"
+           x-cloak>
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="text-sm text-slate-300">Job progress</div>
+            <div class="mt-1 text-xs text-slate-500"
+                 x-text="jobMessage || (jobState ? ('State: ' + jobState) : 'Loading status…')"></div>
+          </div>
+          <div class="text-xs text-slate-400" x-text="jobProgress ? (Math.min(100, Math.max(0, jobProgress * 100)).toFixed(1) + '%') : ''"></div>
+        </div>
+        <div class="mt-3 h-2 w-full rounded bg-slate-800">
+          <div class="h-2 rounded bg-emerald-500 transition-all"
+               :style="'width: ' + Math.min(100, Math.max(0, jobProgress * 100)) + '%'"></div>
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-300">
+          <a class="underline" x-show="jobDetailUrl" :href="jobDetailUrl">Open job detail</a>
+          <a class="underline" x-show="jobOutputUrl" :href="jobOutputUrl">Watch output</a>
+        </div>
+        <div class="mt-2 text-xs text-red-200" x-show="jobError" x-cloak x-text="jobError"></div>
+      </div>
+
         <!-- Server file picker fallback (reliable, no upload) -->
         <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
           <div class="text-sm text-slate-300">Or choose a server-local file (reliable)</div>
@@ -262,8 +362,9 @@
     </div>
 
     <!-- Step 2 -->
-    <div x-show="step===2" x-cloak>
-      <div class="text-sm text-slate-300">Step 2 — Settings</div>
+    <div x-show="step===2 || uiMode==='simple'" x-cloak>
+      <div class="text-sm text-slate-300" x-show="uiMode==='advanced'">Step 2 — Settings</div>
+      <div class="text-sm text-slate-300" x-show="uiMode==='simple'">Job details</div>
       <div class="mt-3 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
         <div class="text-sm text-slate-300">Library metadata (required)</div>
         <div class="mt-1 text-xs text-slate-500">Used for grouped browsing under <code>Library/</code>.</div>
@@ -296,14 +397,20 @@
       </div>
       <div class="mt-3 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
         <div class="text-sm text-slate-300">Visibility</div>
-        <div class="mt-2 text-xs text-slate-500">Shared jobs are visible to other users.</div>
+        <div class="mt-2 text-xs text-slate-500">
+          Shared = visible to all invited users (all authenticated users).
+          There are no per-user shares in this version.
+        </div>
+        <div class="mt-1 text-xs text-slate-500">
+          Sharing does not require admin approval.
+        </div>
         <input type="hidden" name="visibility" :value="share ? 'shared' : 'private'" />
         <label class="mt-3 inline-flex items-center gap-2 text-sm">
           <input type="checkbox" class="rounded border-slate-700 bg-slate-950" x-model="share" />
           <span>Share to library</span>
         </label>
       </div>
-      <div class="mt-3 grid gap-4 sm:grid-cols-2">
+      <div class="mt-3 grid gap-4 sm:grid-cols-2" x-show="uiMode==='advanced'" x-cloak>
         <div>
           <label class="block text-sm text-slate-300" for="presetSel">Preset (optional)</label>
           <select id="presetSel" name="preset_id" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
@@ -321,7 +428,7 @@
           <div class="mt-1 text-xs text-slate-500">Loaded from /api/projects.</div>
         </div>
       </div>
-      <div class="mt-4 grid gap-4 sm:grid-cols-2">
+      <div class="mt-4 grid gap-4 sm:grid-cols-2" x-show="uiMode==='advanced'" x-cloak>
         <div>
           <label class="block text-sm text-slate-300" for="profileSel">Project profile (optional)</label>
           <select id="profileSel" name="project" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
@@ -340,33 +447,40 @@
             <option value="medium">medium</option>
             <option value="low">low</option>
           </select>
+          <div class="mt-1 text-xs text-slate-500">Recommended: leave default (medium).</div>
         </div>
+      </div>
+      <div class="mt-4 grid gap-4 sm:grid-cols-2" x-show="uiMode==='advanced'" x-cloak>
         <div>
-          <label class="block text-sm text-slate-300" for="deviceSel">Device</label>
+          <label class="block text-sm text-slate-300" for="deviceSel" title="Recommended: leave default (auto).">Device</label>
           <select id="deviceSel" name="device" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                   x-model="device">
             <option value="auto">auto</option>
             <option value="cpu">cpu</option>
             <option value="cuda">cuda</option>
           </select>
+          <div class="mt-1 text-xs text-amber-200">Recommended: leave default (auto).</div>
         </div>
         <div>
-          <label class="block text-sm text-slate-300" for="srcLang">Source lang</label>
+          <label class="block text-sm text-slate-300" for="srcLang" title="Recommended: leave default unless you know the source language code.">Source lang</label>
           <input id="srcLang" name="src_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                  x-model="src_lang" placeholder="ja" />
+          <div class="mt-1 text-xs text-amber-200">Recommended: leave default unless you know the source language code.</div>
         </div>
         <div>
-          <label class="block text-sm text-slate-300" for="tgtLang">Target lang</label>
+          <label class="block text-sm text-slate-300" for="tgtLang" title="Recommended: leave default unless you need a specific target language.">Target lang</label>
           <input id="tgtLang" name="tgt_lang" class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                  x-model="tgt_lang" placeholder="en" />
+          <div class="mt-1 text-xs text-amber-200">Recommended: leave default unless you need a specific target language.</div>
         </div>
       </div>
 
-      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4" x-show="uiMode==='advanced'" x-cloak>
         <div class="text-sm text-slate-300">Retention</div>
         <div class="mt-2 text-xs text-slate-500">Controls how many intermediate artifacts are kept under Output/&lt;job&gt;.</div>
+        <div class="mt-1 text-xs text-amber-200">Recommended: leave default (full).</div>
         <div class="mt-3">
-          <label class="block text-sm text-slate-300" for="cachePolicySel">Cache policy</label>
+          <label class="block text-sm text-slate-300" for="cachePolicySel" title="Recommended: leave default (full).">Cache policy</label>
           <select id="cachePolicySel" name="cache_policy"
                   class="mt-1 w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-3 text-sm"
                   x-model="cache_policy">
@@ -377,8 +491,9 @@
         </div>
       </div>
 
-      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4" x-show="uiMode==='advanced'" x-cloak>
         <div class="text-sm text-slate-300">PG Mode (session-only)</div>
+        <div class="mt-1 text-xs text-amber-200">Recommended: leave default (off).</div>
         <div class="mt-3 flex flex-wrap items-center gap-4 text-sm text-slate-300">
           <label class="flex items-center gap-3" for="pgEnabled">
             <input
@@ -410,8 +525,9 @@
         </div>
       </div>
 
-      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4" x-show="uiMode==='advanced'" x-cloak>
         <div class="text-sm text-slate-300">Quality checks</div>
+        <div class="mt-1 text-xs text-amber-200">Recommended: leave default unless you need QA scoring.</div>
         <label class="mt-3 flex items-center gap-3 text-sm text-slate-300" for="qaEnabled">
           <input id="qaEnabled" type="checkbox" class="h-5 w-5" name="qa" value="1" />
           <span>Run QA scoring (writes Output/&lt;job&gt;/qa/*)</span>
@@ -421,8 +537,9 @@
         </div>
       </div>
 
-      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+      <div class="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-4" x-show="uiMode==='advanced'" x-cloak>
         <div class="text-sm text-slate-300">Import subtitles / transcript (optional)</div>
+        <div class="mt-1 text-xs text-amber-200">Recommended: leave default unless you have verified files.</div>
         <div class="mt-2 text-xs text-slate-500">
           If provided, the server can skip ASR and/or translation. (Small files only.)
         </div>
@@ -447,8 +564,9 @@
     </div>
 
     <!-- Step 3 -->
-    <div x-show="step===3" x-cloak>
+    <div x-show="uiMode==='advanced' && step===3" x-cloak>
       <div class="text-sm text-slate-300">Step 3 — Voice (XTTS)</div>
+      <div class="mt-1 text-xs text-amber-200">Recommended: leave default unless you need custom voices.</div>
       <div class="mt-4 grid gap-4 sm:grid-cols-2">
         <div>
           <label class="block text-sm text-slate-300" for="ttsLang">TTS language</label>
@@ -523,25 +641,27 @@
               class="rounded-lg bg-slate-800 hover:bg-slate-700 px-4 py-3 text-sm"
               :disabled="step===1"
               :class="step===1 ? 'opacity-50 cursor-not-allowed' : ''"
-              @click="step = Math.max(1, step-1); error=''">
+              @click="step = Math.max(1, step-1); error=''"
+              x-show="uiMode==='advanced'" x-cloak>
         Back
       </button>
 
       <div class="flex items-center gap-3">
         <button type="button"
                 class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-3 text-sm font-medium"
-                x-show="step<3"
                 @click="
                   error='';
                   if(step===1 && !file){ error='Please choose a video file.'; return; }
                   step = Math.min(3, step+1);
-                ">
+                "
+                x-cloak
+                x-show="uiMode==='advanced' && step<3">
           Next
         </button>
 
         <button
           type="submit"
-          x-show="step===3"
+          x-show="step===3 || uiMode==='simple'"
           x-cloak
           class="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-5 py-3 text-sm font-semibold"
           :disabled="uploading"
@@ -588,6 +708,22 @@
       } catch (e) {}
     }
 
+    function currentUiMode() {
+      try { return localStorage.getItem("ui_mode") || "simple"; } catch (e) { return "simple"; }
+    }
+
+    function handleJobCreated(jobId) {
+      const id = String(jobId || "").trim();
+      if (!id) return;
+      if (currentUiMode() === "simple") {
+        try { localStorage.setItem("last_job_id", id); } catch (e) {}
+        try { window.dispatchEvent(new CustomEvent("job-created", { detail: { id } })); } catch (e) {}
+        emitState({ status: "Job created. Tracking progress below." });
+        return;
+      }
+      window.location = "/ui/jobs/" + encodeURIComponent(id) + "?created=1";
+    }
+
     function sleep(ms) {
       return new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -599,13 +735,13 @@
     function friendlyStatus(status, detail) {
       const st = Number(status || 0);
       const raw = String(detail || "").replace(/[\r\n]+/g, " ").trim();
-      if (st === 413) return "Upload too large for server limits. Try a smaller file.";
+      if (st === 413) return "Upload too large for server limits. Try a smaller file or ask an admin to raise the upload size limit.";
       if (st === 415) return "Unsupported file type. Please upload MP4 or MKV.";
-      if (st === 403) return "Not authorized to upload. Please log in again.";
-      if (st === 429) return "Too many requests. Please wait a moment and retry.";
-      if (st >= 500) return "Server error during upload. Please retry in a moment.";
+      if (st === 403) return "Not authorized to upload. Please log in again and retry.";
+      if (st === 429) return "Too many requests. Wait a moment, then retry the upload.";
+      if (st >= 500) return "Server error during upload. Retry in a moment; if it persists, contact an admin.";
       if (raw && raw.length < 200 && !/[\\/]/.test(raw)) return raw;
-      return "Upload failed. Please retry.";
+      return "Upload failed. Check your connection and retry, or use the server-local file picker.";
     }
 
     function fileKey(file) {
@@ -921,9 +1057,9 @@
         });
         const jobData = await jobR.json().catch(() => ({}));
         if (!jobR.ok) {
-          const msg = (jobData && (jobData.detail || jobData.error))
-            ? (jobData.detail || jobData.error)
-            : ("Job submit failed (" + jobR.status + ")");
+        const msg = (jobData && (jobData.detail || jobData.error))
+          ? (jobData.detail || jobData.error)
+          : ("Job submit failed (" + jobR.status + "). Check required fields and retry.");
           emitError(msg);
           uploadInFlight = false;
           emitState({ uploading: false, status: "Upload complete. Fix the error above and retry." });
@@ -932,7 +1068,7 @@
         const jobId = jobData.id || jobData.job_id || null;
         if (jobId) {
           localRemove(key);
-          window.location = "/ui/jobs/" + encodeURIComponent(jobId) + "?created=1";
+          handleJobCreated(jobId);
         }
       } catch (e) {
         emitError(String(e || "Upload failed"));
@@ -947,13 +1083,15 @@
         if (!xhr) return;
         const data = JSON.parse(xhr.responseText || "{}");
         if (xhr.status !== 200) {
-          const msg = (data && (data.detail || data.error)) ? (data.detail || data.error) : ("Job submit failed (" + xhr.status + ")");
+        const msg = (data && (data.detail || data.error))
+          ? (data.detail || data.error)
+          : ("Job submit failed (" + xhr.status + "). Check required fields and retry.");
           window.dispatchEvent(new CustomEvent("job-submit-error", { detail: { message: msg } }));
           return;
         }
         const ids = data.ids || [];
         const jobId = data.id || data.job_id || (Array.isArray(ids) && ids.length ? ids[0] : null);
-        if (jobId) window.location = "/ui/jobs/" + encodeURIComponent(jobId) + "?created=1";
+        if (jobId) handleJobCreated(jobId);
       } catch (e) {
         // ignore
       }

@@ -543,9 +543,9 @@ async def ui_admin_queue(request: Request) -> HTMLResponse:
         return RedirectResponse(url="/ui/login", status_code=302)
     try:
         if not (user.role and user.role.value == "admin"):
-            return RedirectResponse(url="/ui/dashboard", status_code=302)
+            raise HTTPException(status_code=403, detail="Forbidden")
     except Exception:
-        return RedirectResponse(url="/ui/dashboard", status_code=302)
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     with suppress(Exception):
         _audit_ui_page_view(request, user_id=str(user.id), page="admin_queue")
     return _render(request, "admin_queue.html", {})
@@ -558,9 +558,9 @@ async def ui_admin_dashboard(request: Request) -> HTMLResponse:
         return RedirectResponse(url="/ui/login", status_code=302)
     try:
         if not (user.role and user.role.value == "admin"):
-            return RedirectResponse(url="/ui/dashboard", status_code=302)
+            raise HTTPException(status_code=403, detail="Forbidden")
     except Exception:
-        return RedirectResponse(url="/ui/dashboard", status_code=302)
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     with suppress(Exception):
         _audit_ui_page_view(request, user_id=str(user.id), page="admin_dashboard")
     return _render(request, "admin_dashboard.html", {})
@@ -573,9 +573,9 @@ async def ui_admin_reports(request: Request) -> HTMLResponse:
         return RedirectResponse(url="/ui/login", status_code=302)
     try:
         if not (user.role and user.role.value == "admin"):
-            return RedirectResponse(url="/ui/dashboard", status_code=302)
+            raise HTTPException(status_code=403, detail="Forbidden")
     except Exception:
-        return RedirectResponse(url="/ui/dashboard", status_code=302)
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     with suppress(Exception):
         _audit_ui_page_view(request, user_id=str(user.id), page="admin_reports")
     return _render(request, "admin_reports.html", {})
@@ -588,9 +588,9 @@ async def ui_admin_glossaries(request: Request) -> HTMLResponse:
         return RedirectResponse(url="/ui/login", status_code=302)
     try:
         if not (user.role and user.role.value == "admin"):
-            return RedirectResponse(url="/ui/dashboard", status_code=302)
+            raise HTTPException(status_code=403, detail="Forbidden")
     except Exception:
-        return RedirectResponse(url="/ui/dashboard", status_code=302)
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     with suppress(Exception):
         _audit_ui_page_view(request, user_id=str(user.id), page="admin_glossaries")
     return _render(request, "admin_glossaries.html", {})
@@ -603,9 +603,9 @@ async def ui_admin_pronunciation(request: Request) -> HTMLResponse:
         return RedirectResponse(url="/ui/login", status_code=302)
     try:
         if not (user.role and user.role.value == "admin"):
-            return RedirectResponse(url="/ui/dashboard", status_code=302)
+            raise HTTPException(status_code=403, detail="Forbidden")
     except Exception:
-        return RedirectResponse(url="/ui/dashboard", status_code=302)
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     with suppress(Exception):
         _audit_ui_page_view(request, user_id=str(user.id), page="admin_pronunciation")
     return _render(request, "admin_pronunciation.html", {})
@@ -618,9 +618,9 @@ async def ui_admin_voice_suggestions(request: Request) -> HTMLResponse:
         return RedirectResponse(url="/ui/login", status_code=302)
     try:
         if not (user.role and user.role.value == "admin"):
-            return RedirectResponse(url="/ui/dashboard", status_code=302)
+            raise HTTPException(status_code=403, detail="Forbidden")
     except Exception:
-        return RedirectResponse(url="/ui/dashboard", status_code=302)
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     with suppress(Exception):
         _audit_ui_page_view(request, user_id=str(user.id), page="admin_voice_suggestions")
     return _render(request, "admin_voice_suggestions.html", {})
@@ -633,9 +633,9 @@ async def ui_admin_invites(request: Request) -> HTMLResponse:
         return RedirectResponse(url="/ui/login", status_code=302)
     try:
         if not (user.role and user.role.value == "admin"):
-            return RedirectResponse(url="/ui/dashboard", status_code=302)
+            raise HTTPException(status_code=403, detail="Forbidden")
     except Exception:
-        return RedirectResponse(url="/ui/dashboard", status_code=302)
+        raise HTTPException(status_code=403, detail="Forbidden") from None
     with suppress(Exception):
         _audit_ui_page_view(request, user_id=str(user.id), page="admin_invites")
     return _render(request, "admin_invites.html", {})
