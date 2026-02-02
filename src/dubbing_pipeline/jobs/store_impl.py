@@ -2546,6 +2546,10 @@ class JobStore:
                         con.close()
         with suppress(Exception):
             self.delete_job_storage(str(id))
+        with suppress(Exception):
+            from dubbing_pipeline.library.registry import remove_manifest_entry
+
+            remove_manifest_entry(job_id=str(id))
 
     def append_log(self, id: str, text: str) -> None:
         job = self.get(id)

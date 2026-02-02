@@ -109,6 +109,10 @@ def write_manifest(
     # Atomic write to avoid partial manifests.
     atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     logger.info("library_manifest_written", job_id=str(job.id), path=str(path))
+    with suppress(Exception):
+        from dubbing_pipeline.library.registry import register_manifest
+
+        register_manifest(job=job, manifest_path=path)
     return path
 
 
@@ -126,5 +130,9 @@ def update_manifest_visibility(path: Path, visibility: str) -> bool:
         Path(path), json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     logger.info("library_manifest_visibility_updated", path=str(path), visibility=vis)
+    with suppress(Exception):
+        from dubbing_pipeline.library.registry import update_registry_from_manifest
+
+        update_registry_from_manifest(path, output_root=_output_root())
     return True
 
