@@ -11,6 +11,7 @@ from dubbing_pipeline.library.paths import get_job_output_root, get_library_root
 from dubbing_pipeline.jobs.models import Job
 
 from dubbing_pipeline.config import get_settings
+from dubbing_pipeline.jobs.store import JobStore
 from dubbing_pipeline.utils.log import logger
 
 
@@ -118,3 +119,115 @@ def job_storage_bytes(*, job: Job, output_root: Path | None = None) -> int:
             continue
         total += _dir_size_bytes(p, seen=seen)
     return int(total)
+
+
+def _input_uploads_dir(*, app_root: Path | None = None) -> Path:
+    s = get_settings()
+    if getattr(s, "input_uploads_dir", None):
+        return Path(str(s.input_uploads_dir)).resolve()
+    root = (Path(app_root) if app_root else Path(s.app_root)).resolve()
+    input_dir = Path(str(getattr(s, "input_dir", "") or (root / "Input"))).resolve()
+    return (input_dir / "uploads").resolve()
+
+
+def reconcile_storage_accounting(
+    *,
+    store: JobStore,
+    output_root: Path | None = None,
+    uploads_root: Path | None = None,
+    app_root: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, int]:
+    out_root = Path(output_root or get_settings().output_dir).resolve()
+    up_root = (
+        Path(uploads_root).resolve()
+        if uploads_root
+        else _input_uploads_dir(app_root=app_root)
+    )
+
+    job_entries: list[tuple[str, str, int]] = []
+    for job in store.list_all():
+        try:
+            uid = str(getattr(job, "owner_id", "") or "").strip()
+            if not uid:
+                continue
+            size = int(job_storage_bytes(job=job, output_root=out_root))
+            base_dir = get_job_output_root(job).resolve()
+            library_dir = get_library_root_for_job(job).resolve()
+            jobs_ptr = (out_root / "jobs" / str(job.id)).resolve()
+            if size == 0 and not (base_dir.exists() or library_dir.exists() or jobs_ptr.exists()):
+                logger.warning(
+                    "storage_reconcile_missing_job_artifacts",
+                    job_id=str(job.id),
+                    user_id=str(uid),
+                    base_dir=str(base_dir),
+                    library_dir=str(library_dir),
+                    jobs_ptr=str(jobs_ptr),
+                )
+            job_entries.append((str(job.id), uid, int(size)))
+        except Exception as ex:
+            logger.warning(
+                "storage_reconcile_job_failed",
+                job_id=str(getattr(job, "id", "")),
+                error=str(ex),
+            )
+            continue
+
+    upload_entries: list[tuple[str, str, int]] = []
+    for rec in store.list_uploads():
+        try:
+            if not bool(rec.get("completed")):
+                continue
+            uid = str(rec.get("owner_id") or "").strip()
+            upid = str(rec.get("id") or "").strip()
+            if not uid or not upid:
+                continue
+            raw_path = Path(str(rec.get("final_path") or ""))
+            size = 0
+            if not raw_path.exists() or not raw_path.is_file():
+                logger.warning(
+                    "storage_reconcile_upload_missing",
+                    upload_id=str(upid),
+                    user_id=str(uid),
+                    final_path=str(raw_path),
+                )
+            elif raw_path.is_symlink():
+                logger.warning(
+                    "storage_reconcile_upload_symlink",
+                    upload_id=str(upid),
+                    user_id=str(uid),
+                    final_path=str(raw_path),
+                )
+            else:
+                final_path = raw_path.resolve()
+                if not _safe_under_root(final_path, up_root):
+                    logger.warning(
+                        "storage_reconcile_upload_outside_root",
+                        upload_id=str(upid),
+                        user_id=str(uid),
+                        final_path=str(final_path),
+                        uploads_root=str(up_root),
+                    )
+                else:
+                    size = max(0, int(final_path.stat().st_size))
+            upload_entries.append((upid, uid, int(size)))
+        except Exception as ex:
+            logger.warning(
+                "storage_reconcile_upload_failed",
+                upload_id=str(rec.get("id") or ""),
+                error=str(ex),
+            )
+            continue
+
+    totals: dict[str, int] = {}
+    for _job_id, uid, size in job_entries:
+        totals[uid] = int(totals.get(uid, 0)) + int(size)
+    for _upload_id, uid, size in upload_entries:
+        totals[uid] = int(totals.get(uid, 0)) + int(size)
+
+    if not dry_run:
+        store.replace_storage_accounting(
+            job_entries=job_entries, upload_entries=upload_entries
+        )
+
+    return totals

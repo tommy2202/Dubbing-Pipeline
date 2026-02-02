@@ -1023,6 +1023,7 @@ class JobStore:
         with self._write_lock():
             con = self._conn()
             try:
+                con.execute("BEGIN IMMEDIATE;")
                 con.execute("DELETE FROM user_storage;")
                 con.execute("DELETE FROM job_storage;")
                 con.execute("DELETE FROM upload_storage;")
@@ -1059,6 +1060,9 @@ class JobStore:
                     )
                 con.commit()
             finally:
+                with suppress(Exception):
+                    if con.in_transaction:
+                        con.rollback()
                 con.close()
 
     # --- per-user quota overrides ---
